@@ -56,6 +56,11 @@ export const env = createEnv({
 
     // Optional
     GOOGLE_CONNECTOR_UID: requiredValue.default("google/open-instinct"),
+    // Linq can run either through Vercel Connect or directly. Direct mode is
+    // useful for Linq sandbox accounts, where the provider must call the Eve
+    // endpoint itself instead of forwarding through Connect.
+    LINQ_API_KEY: requiredValue.optional(),
+    LINQ_WEBHOOK_SECRET: requiredValue.optional(),
     LINQ_CONNECTOR: requiredValue.optional(),
     LINQ_PHONE_NUMBER: requiredValue
       .refine(
@@ -72,8 +77,21 @@ export const env = createEnv({
   emptyStringAsUndefined: true,
 });
 
-if (env.LINQ_PHONE_NUMBER !== undefined && env.LINQ_CONNECTOR === undefined) {
-  throw new Error("LINQ_PHONE_NUMBER requires LINQ_CONNECTOR.");
+if (
+  env.LINQ_PHONE_NUMBER !== undefined &&
+  env.LINQ_CONNECTOR === undefined &&
+  env.LINQ_API_KEY === undefined
+) {
+  throw new Error("LINQ_PHONE_NUMBER requires LINQ_CONNECTOR or LINQ_API_KEY.");
+}
+
+if (
+  (env.LINQ_API_KEY === undefined) !==
+  (env.LINQ_WEBHOOK_SECRET === undefined)
+) {
+  throw new Error(
+    "LINQ_API_KEY and LINQ_WEBHOOK_SECRET must be configured together."
+  );
 }
 const authHostname = new URL(env.BETTER_AUTH_URL).hostname;
 

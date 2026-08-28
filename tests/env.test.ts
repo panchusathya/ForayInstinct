@@ -16,6 +16,8 @@ describe("environment", () => {
       vi.stubEnv(name, value);
     }
     vi.stubEnv("LINQ_CONNECTOR", "");
+    vi.stubEnv("LINQ_API_KEY", "");
+    vi.stubEnv("LINQ_WEBHOOK_SECRET", "");
     vi.stubEnv("LINQ_PHONE_NUMBER", "");
   });
 
@@ -37,6 +39,8 @@ describe("environment", () => {
 
     expect(env.GOOGLE_CONNECTOR_UID).toBe("google/open-instinct");
     expect(env.LINQ_CONNECTOR).toBeUndefined();
+    expect(env.LINQ_API_KEY).toBeUndefined();
+    expect(env.LINQ_WEBHOOK_SECRET).toBeUndefined();
     expect(env.LINQ_PHONE_NUMBER).toBeUndefined();
   });
 
@@ -155,14 +159,14 @@ describe("environment", () => {
     expect(env.LINQ_PHONE_NUMBER).toBeUndefined();
   });
 
-  it("rejects a display phone number without a Linq connector", async () => {
+  it("rejects a display phone number without Linq credentials", async () => {
     const connector = "";
     const phoneNumber = "+12025550123";
     vi.stubEnv("LINQ_CONNECTOR", connector);
     vi.stubEnv("LINQ_PHONE_NUMBER", phoneNumber);
 
     await expect(import("../lib/env")).rejects.toThrow(
-      "LINQ_PHONE_NUMBER requires LINQ_CONNECTOR"
+      "LINQ_PHONE_NUMBER requires LINQ_CONNECTOR or LINQ_API_KEY"
     );
   });
 
@@ -172,6 +176,25 @@ describe("environment", () => {
 
     await expect(import("../lib/env")).rejects.toThrow(
       "Invalid environment variables"
+    );
+  });
+
+  it("accepts direct Linq credentials with a display phone number", async () => {
+    vi.stubEnv("LINQ_API_KEY", "linq-api-key");
+    vi.stubEnv("LINQ_WEBHOOK_SECRET", "linq-webhook-secret");
+    vi.stubEnv("LINQ_PHONE_NUMBER", "+12025550123");
+
+    const { env } = await import("../lib/env");
+
+    expect(env.LINQ_API_KEY).toBe("linq-api-key");
+    expect(env.LINQ_WEBHOOK_SECRET).toBe("linq-webhook-secret");
+  });
+
+  it("requires both direct Linq credentials", async () => {
+    vi.stubEnv("LINQ_API_KEY", "linq-api-key");
+
+    await expect(import("../lib/env")).rejects.toThrow(
+      "LINQ_API_KEY and LINQ_WEBHOOK_SECRET must be configured together"
     );
   });
 

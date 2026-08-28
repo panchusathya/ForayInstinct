@@ -47,15 +47,20 @@ any earlier conversation statement about holding back, batching, or delaying
 roles.
 `.trim();
 
-const credentials: LinqChannelCredentials = env.LINQ_CONNECTOR
-  ? connectLinqCredentials(env.LINQ_CONNECTOR)
-  : {
-      apiKey() {
-        throw new Error(
-          "LINQ_CONNECTOR is not configured for this deployment."
-        );
-      },
-    };
+const credentials: LinqChannelCredentials = env.LINQ_API_KEY
+  ? {
+      apiKey: env.LINQ_API_KEY,
+      signingSecret: env.LINQ_WEBHOOK_SECRET,
+    }
+  : env.LINQ_CONNECTOR
+    ? connectLinqCredentials(env.LINQ_CONNECTOR)
+    : {
+        apiKey() {
+          throw new Error(
+            "Configure LINQ_API_KEY and LINQ_WEBHOOK_SECRET or LINQ_CONNECTOR."
+          );
+        },
+      };
 
 export default linqChannel({
   credentials,
@@ -139,7 +144,7 @@ export default linqChannel({
       // decorations, so recipients see styled text instead of literal markers.
       await context.thread.post({ markdown: event.message });
       const caller =
-        session.session.auth.current ?? session.session.auth.initiator;
+        session.session.auth?.current ?? session.session.auth?.initiator;
       if (caller) {
         const scope = scopeFromPrincipal(caller);
         void recordConversationMessage({
