@@ -6,11 +6,13 @@
       "env": [
         "BETTER_AUTH_*",
         "DATABASE_URL",
+        "JUICEBOX_API_URL",
         "EVE_NEXT_*",
         "*_CONNECTOR_UID",
         "KERNEL_*",
         "LINQ_*",
         "NODE_ENV",
+        "OPENINSTINCT_SHARED_SECRET",
         "SECRET_ENCRYPTION_KEY",
         "VERCEL_ENV"
       ],
@@ -21,10 +23,13 @@
       "env": [
         "BETTER_AUTH_*",
         "DATABASE_URL",
+        "DATABASE_URL_UNPOOLED",
+        "JUICEBOX_API_URL",
         "*_CONNECTOR_UID",
         "KERNEL_*",
         "LINQ_*",
         "NODE_ENV",
+        "OPENINSTINCT_SHARED_SECRET",
         "SECRET_ENCRYPTION_KEY",
         "VERCEL",
         "VERCEL_ENV"
@@ -41,10 +46,12 @@
       "passThroughEnv": [
         "BETTER_AUTH_*",
         "DATABASE_URL",
+        "JUICEBOX_API_URL",
         "*_CONNECTOR_UID",
         "KERNEL_*",
         "LINQ_*",
         "NODE_ENV",
+        "OPENINSTINCT_SHARED_SECRET",
         "SECRET_ENCRYPTION_KEY",
         "VERCEL_ENV"
       ],
@@ -67,10 +74,12 @@
       "passThroughEnv": [
         "BETTER_AUTH_*",
         "DATABASE_URL",
+        "JUICEBOX_API_URL",
         "*_CONNECTOR_UID",
         "KERNEL_*",
         "LINQ_*",
         "NODE_ENV",
+        "OPENINSTINCT_SHARED_SECRET",
         "SECRET_ENCRYPTION_KEY",
         "VERCEL_ENV"
       ],

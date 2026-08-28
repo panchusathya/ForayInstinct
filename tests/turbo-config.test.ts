@@ -5,10 +5,12 @@ import { z } from "zod";
 const applicationEnvironment = [
   "BETTER_AUTH_*",
   "DATABASE_URL",
+  "JUICEBOX_API_URL",
   "*_CONNECTOR_UID",
   "KERNEL_*",
   "LINQ_*",
   "NODE_ENV",
+  "OPENINSTINCT_SHARED_SECRET",
   "SECRET_ENCRYPTION_KEY",
   "VERCEL_ENV",
 ];
@@ -39,10 +41,14 @@ describe("Turbo configuration", () => {
       applicationEnvironment.length + 1
     );
     expect(turbo.tasks["build:vercel"].env).toEqual(
-      expect.arrayContaining([...applicationEnvironment, "VERCEL"])
+      expect.arrayContaining([
+        ...applicationEnvironment,
+        "DATABASE_URL_UNPOOLED",
+        "VERCEL",
+      ])
     );
     expect(turbo.tasks["build:vercel"].env).toHaveLength(
-      applicationEnvironment.length + 1
+      applicationEnvironment.length + 2
     );
     expect(turbo.tasks["dev:app"].passThroughEnv).toEqual(
       applicationEnvironment
