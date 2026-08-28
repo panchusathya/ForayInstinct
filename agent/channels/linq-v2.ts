@@ -1,15 +1,15 @@
 /* oxlint-disable typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access -- Eve's Linq adapter exposes the thread through a transitive Chat SDK type; TypeScript still checks this contextual handler. */
 import { connectLinqCredentials } from "@vercel/connect/eve";
-import {
-  defaultLinqAuth,
-  linqChannel,
-  type LinqChannelCredentials,
-} from "eve/channels/linq";
+import { createLinqAdapter } from "@linqapp/chat-sdk-adapter";
+import { defaultLinqAuth } from "eve/channels/linq";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+import type { Message, Thread } from "chat";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
 import { accessScopeForUser, scopeFromPrincipal } from "@/lib/access-scope";
 import { env } from "@/lib/env";
+import { createPostgresState } from "@/lib/linq-state";
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
 import {
   linkCandidate,
@@ -48,28 +48,19 @@ any earlier conversation statement about holding back, batching, or delaying
 roles.
 `.trim();
 
-const credentials: LinqChannelCredentials = env.LINQ_API_KEY
-  ? {
-      apiKey: env.LINQ_API_KEY,
-      signingSecret: env.LINQ_WEBHOOK_SECRET,
-    }
-  : env.LINQ_CONNECTOR
-    ? connectLinqCredentials(env.LINQ_CONNECTOR)
-    : {
-        apiKey() {
-          throw new Error(
-            "Configure LINQ_API_KEY and LINQ_WEBHOOK_SECRET or LINQ_CONNECTOR."
-          );
-        },
-      };
-
-export default linqChannel({
+// oxlint-disable-next-line typescript/unbound-method -- external factory, not an instance method.
+const { bot, channel, send } = chatSdkChannel({
+  adapters: { linq: createLinqAdapter(linqAdapterConfig()) },
+  concurrency: "concurrent",
   // The channel id is intentionally versioned (the filename is `linq-v2`).
-  // Eve keys durable iMessage history by that id plus the Linq thread, so this
-  // starts a clean conversation after the production data reset. Keep the
-  // public route stable so the existing Linq webhook configuration still works.
-  route: "/eve/v1/linq",
-  credentials,
+  // Keep the public route stable so the existing Linq webhook configuration
+  // still works. Postgres state keeps a provider thread's continuation,
+  // worker checkpoint, dedupe records, and locks across Vercel instances.
+  routes: { linq: "/eve/v1/linq" },
+  state: createPostgresState(),
+  streaming: false,
+  turnPolicy: "steer",
+  userName: "Foray",
   events: {
     "action.result"(event, context) {
       const result = taskCancelResultSchema.safeParse(event.result);
@@ -150,7 +141,7 @@ export default linqChannel({
       // decorations, so recipients see styled text instead of literal markers.
       await context.thread.post({ markdown: event.message });
       const caller =
-        session.session.auth?.current ?? session.session.auth?.initiator;
+        session.session.auth.current ?? session.session.auth.initiator;
       if (caller) {
         const scope = scopeFromPrincipal(caller);
         void recordConversationMessage({
@@ -163,69 +154,109 @@ export default linqChannel({
       }
     },
   },
-  async onMessage(_context, message) {
-    if (message.author.isBot) return null;
-
-    const auth = defaultLinqAuth(message);
-    const authorUserName: unknown = message.author.userName;
-    const phoneNumber =
-      typeof authorUserName === "string"
-        ? normalizeAuthPhoneNumber(authorUserName)
-        : undefined;
-    const verifiedUserId = phoneNumber
-      ? await findVerifiedAuthUserIdByPhoneNumber(phoneNumber)
-      : undefined;
-    if (verifiedUserId && phoneNumber) {
-      try {
-        await linkCandidate({
-          userId: verifiedUserId,
-          identities: [{ kind: "phone", value: phoneNumber, verified: true }],
-        });
-      } catch {
-        // A missing or ambiguous CRM candidate must not block a normal text.
-      }
-    }
-    const principalId = verifiedUserId
-      ? `better-auth:${verifiedUserId}`
-      : auth.principalId;
-    const scope = accessScopeForUser(principalId);
-    const importedResumes = await importLinqResumes(message, scope);
-    const body = messageText(message);
-    if (body) {
-      void recordConversationMessage({
-        scope,
-        conversationId: `linq:${scope.userId}`,
-        channel: "linq",
-        direction: "inbound",
-        body,
-      }).catch(() => undefined);
-    }
-    return {
-      context: [
-        CURRENT_FORAY_POLICY,
-        ...(importedResumes.length
-          ? [
-              `The candidate attached a resume. It has been sent directly to their protected GoForay profile for parsing (${importedResumes.join(", ")}). Do not ask them to upload it again or expose the file contents.`,
-            ]
-          : []),
-      ],
-      auth: {
-        ...auth,
-        attributes: {
-          ...auth.attributes,
-          workspaceId: scope.workspaceId,
-        },
-        principalId,
-      },
-    };
-  },
 });
 
-function firstNonEmptyLine(message: string) {
-  return message
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .find(Boolean);
+bot.onDirectMessage(dispatchLinqMessage);
+bot.onNewMessage(/[\s\S]/u, dispatchLinqMessage);
+
+export default channel;
+
+function linqAdapterConfig(): Parameters<typeof createLinqAdapter>[0] {
+  const apiKey = env.LINQ_API_KEY;
+  const signingSecret = env.LINQ_WEBHOOK_SECRET;
+  if (apiKey && signingSecret) {
+    return {
+      credentials: () => ({
+        apiKey,
+        signingSecret,
+      }),
+    };
+  }
+  if (env.LINQ_CONNECTOR) {
+    const credentials = connectLinqCredentials(env.LINQ_CONNECTOR);
+    return {
+      credentials: async () => ({ apiKey: await credentials.apiKey() }),
+      webhookVerifier: credentials.webhookVerifier,
+    };
+  }
+  throw new Error(
+    "Configure LINQ_API_KEY and LINQ_WEBHOOK_SECRET or LINQ_CONNECTOR."
+  );
+}
+
+async function dispatchLinqMessage(thread: Thread, message: Message) {
+  if (message.author.isBot) return;
+
+  const inbound = await prepareInboundMessage(message);
+
+  try {
+    await bot.getAdapter("linq").markRead(thread.id, message.id);
+  } catch {
+    // Read receipts are optional and must not interrupt the candidate turn.
+  }
+
+  await send(
+    {
+      context: inbound.context,
+      message: message.text || "The candidate attached a file.",
+    },
+    { auth: inbound.auth, thread }
+  );
+}
+
+async function prepareInboundMessage(message: Message) {
+  const auth = defaultLinqAuth(message);
+  const authorUserName: unknown = message.author.userName;
+  const phoneNumber =
+    typeof authorUserName === "string"
+      ? normalizeAuthPhoneNumber(authorUserName)
+      : undefined;
+  const verifiedUserId = phoneNumber
+    ? await findVerifiedAuthUserIdByPhoneNumber(phoneNumber)
+    : undefined;
+  if (verifiedUserId && phoneNumber) {
+    try {
+      await linkCandidate({
+        userId: verifiedUserId,
+        identities: [{ kind: "phone", value: phoneNumber, verified: true }],
+      });
+    } catch {
+      // A missing or ambiguous CRM candidate must not block a normal text.
+    }
+  }
+  const principalId = verifiedUserId
+    ? `better-auth:${verifiedUserId}`
+    : auth.principalId;
+  const scope = accessScopeForUser(principalId);
+  const importedResumes = await importLinqResumes(message, scope);
+  const body = messageText(message);
+  if (body) {
+    void recordConversationMessage({
+      scope,
+      conversationId: `linq:${scope.userId}`,
+      channel: "linq",
+      direction: "inbound",
+      body,
+    }).catch(() => undefined);
+  }
+  return {
+    context: [
+      CURRENT_FORAY_POLICY,
+      ...(importedResumes.length
+        ? [
+            `The candidate attached a resume. It has been sent directly to their protected GoForay profile for parsing (${importedResumes.join(", ")}). Do not ask them to upload it again or expose the file contents.`,
+          ]
+        : []),
+    ],
+    auth: {
+      ...auth,
+      attributes: {
+        ...auth.attributes,
+        workspaceId: scope.workspaceId,
+      },
+      principalId,
+    },
+  };
 }
 
 function messageText(value: unknown) {
