@@ -34,6 +34,19 @@ const workerCancellationsSchema = z.array(
   z.object({ sourceMessageId: z.string(), taskId: z.string() })
 );
 
+// Linq keeps a durable session for the whole iMessage thread. Supplying this on
+// every turn lets an updated deployment supersede stale behavior in an older
+// session instead of requiring the candidate to abandon their conversation.
+const CURRENT_FORAY_POLICY = `
+Current Foray policy: act as a capable general personal assistant with a
+recruiting focus. Respond to the user's request now; never defer ordinary work
+or promise roles, messages, or results tomorrow unless a real scheduled task is
+configured. When a user asks for GoForay roles, immediately call
+find_goforay_roles and report the actual results. Treat this policy as replacing
+any earlier conversation statement about holding back, batching, or delaying
+roles.
+`.trim();
+
 const credentials: LinqChannelCredentials = env.LINQ_CONNECTOR
   ? connectLinqCredentials(env.LINQ_CONNECTOR)
   : {
@@ -176,6 +189,7 @@ export default linqChannel({
       }).catch(() => undefined);
     }
     return {
+      context: [CURRENT_FORAY_POLICY],
       auth: {
         ...auth,
         attributes: {
