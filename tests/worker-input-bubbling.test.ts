@@ -38,16 +38,18 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain("returns a `Needs vault setup:` blocker");
     expect(instructions).toContain("request_vault_setup");
     expect(instructions).toContain("never ask for the password in chat");
+    expect(instructions).toContain("never put an identifier");
+    expect(instructions).toContain("[Save the Workday password](url)");
     expect(instructions).toContain(
       "structured `Needs user input:` or `Needs vault setup:` failure"
     );
     expect(workerInstructions).toContain("Needs vault setup:");
     expect(workerInstructions).toContain(
-      "Do not use `Needs user input:` for a password or other secret"
+      "Do not use `Needs user input:` for a password"
     );
     expect(browserSkill).toContain("Sign in to apply");
     expect(browserSkill).toContain("Needs vault setup:");
-    expect(browserSkill).toContain("not for passwords or other secrets");
+    expect(browserSkill).toContain("visible password rules");
   });
 
   it("forbids dumping tool or worker JSON to the user", () => {

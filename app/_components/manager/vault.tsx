@@ -48,8 +48,10 @@ const categories = [
 ] as const;
 
 export function VaultManager({
+  initialIdentifier,
   initialSetup,
 }: {
+  readonly initialIdentifier?: string;
   readonly initialSetup?: Extract<ManagerSetupRequest, { target: "vault" }>;
 }) {
   const { busy, error, mutate, snapshot } = useManager();
@@ -76,6 +78,7 @@ export function VaultManager({
       {categories.map((category) => (
         <VaultCategory
           busy={busy}
+          initialIdentifier={initialIdentifier}
           initialSetup={
             initialSetup?.kind === category.kind ? initialSetup : undefined
           }
@@ -118,6 +121,7 @@ export function VaultManager({
 function VaultCategory({
   addLabel,
   busy,
+  initialIdentifier,
   initialSetup,
   items,
   kind,
@@ -127,6 +131,7 @@ function VaultCategory({
 }: {
   readonly addLabel: string;
   readonly busy: boolean;
+  readonly initialIdentifier?: string;
   readonly initialSetup?: Extract<ManagerSetupRequest, { target: "vault" }>;
   readonly items: ManagerSnapshot["vaultItems"];
   readonly kind: VaultCreateItemKind;
@@ -159,12 +164,15 @@ function VaultCategory({
       <VaultDialog
         addLabel={addLabel}
         busy={busy}
+        initialIdentifier={initialIdentifier}
         initialSetup={initialSetup}
         key={
           initialSetup
             ? `setup:${initialSetup.kind}:${initialSetup.label ?? ""}:${
-                initialSetup.kind === "login" ? initialSetup.identifierType : ""
-              }:${initialSetup.kind === "login" ? initialSetup.origin : ""}`
+                initialSetup.kind === "login"
+                  ? `${initialSetup.identifierType}:${initialSetup.origin}:${initialIdentifier ?? ""}`
+                  : ""
+              }`
             : "manual"
         }
         kind={kind}
@@ -210,12 +218,14 @@ function VaultItemRow({
 function VaultDialog({
   addLabel,
   busy,
+  initialIdentifier,
   initialSetup,
   kind,
   onSubmit,
 }: {
   readonly addLabel: string;
   readonly busy: boolean;
+  readonly initialIdentifier?: string;
   readonly initialSetup?: Extract<ManagerSetupRequest, { target: "vault" }>;
   readonly kind: VaultCreateItemKind;
   readonly onSubmit: (mutation: ManagerMutation) => Promise<boolean>;
@@ -245,13 +255,17 @@ function VaultDialog({
               : addLabel}
           </DialogTitle>
           <DialogDescription>
-            {kind === "login"
-              ? "Enter the credentials you use to sign in."
-              : "Sensitive values are encrypted before database storage and are never returned after saving."}
+            {initialSetup?.kind === "login" && initialIdentifier
+              ? `Type the password for ${initialIdentifier}. Everything else is already filled.`
+              : kind === "login"
+                ? "Enter the credentials you use to sign in."
+                : "Sensitive values are encrypted before database storage and are never returned after saving."}
           </DialogDescription>
         </DialogHeader>
         {renderVaultForm({
           busy,
+          initialIdentifier:
+            initialSetup?.kind === "login" ? initialIdentifier : undefined,
           initialIdentifierType:
             initialSetup?.kind === "login"
               ? initialSetup.identifierType
@@ -259,6 +273,10 @@ function VaultDialog({
           initialLabel: initialSetup?.label,
           initialOrigin:
             initialSetup?.kind === "login" ? initialSetup.origin : undefined,
+          initialPasswordHint:
+            initialSetup?.kind === "login"
+              ? initialSetup.passwordHint
+              : undefined,
           kind,
           onSaved,
           onSubmit,
@@ -270,17 +288,21 @@ function VaultDialog({
 
 function renderVaultForm({
   busy,
+  initialIdentifier,
   initialIdentifierType,
   initialLabel,
   initialOrigin,
+  initialPasswordHint,
   kind,
   onSaved,
   onSubmit,
 }: {
   readonly busy: boolean;
+  readonly initialIdentifier?: string;
   readonly initialIdentifierType?: "email" | "phone" | "username";
   readonly initialLabel?: string;
   readonly initialOrigin?: string;
+  readonly initialPasswordHint?: string;
   readonly kind: VaultCreateItemKind;
   readonly onSaved: () => void;
   readonly onSubmit: (mutation: ManagerMutation) => Promise<boolean>;
@@ -291,8 +313,10 @@ function renderVaultForm({
       return (
         <LoginVaultForm
           {...common}
+          initialIdentifier={initialIdentifier}
           initialIdentifierType={initialIdentifierType}
           initialOrigin={initialOrigin}
+          initialPasswordHint={initialPasswordHint}
         />
       );
     case "payment":

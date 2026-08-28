@@ -46,12 +46,23 @@ describe("self-hosted manager", () => {
       }).success
     ).toBe(false);
 
-    const url = new URL(
-      createManagerSetupUrl("https://assistant.example.com", {
+    expect(
+      managerSetupRequestSchema.safeParse({
         identifierType: "email",
         kind: "login",
         label: "Personal login",
         origin: "https://auth.uber.com",
+        target: "vault",
+      }).success
+    ).toBe(true);
+
+    const url = new URL(
+      createManagerSetupUrl("https://assistant.example.com", {
+        identifierType: "email",
+        kind: "login",
+        label: "Workday",
+        origin: "https://wd5.myworkday.com",
+        passwordHint: "8+ characters, uppercase, lowercase, special",
         target: "vault",
       })
     );
@@ -60,10 +71,44 @@ describe("self-hosted manager", () => {
     expect(Object.fromEntries(url.searchParams)).toEqual({
       identifier_type: "email",
       kind: "login",
-      label: "Personal login",
-      origin: "https://auth.uber.com",
+      label: "Workday",
+      origin: "https://wd5.myworkday.com",
+      password_hint: "8+ characters, uppercase, lowercase, special",
       setup: "vault",
     });
+    expect(
+      parseManagerSetupSearchParams(Object.fromEntries(url.searchParams))
+    ).toEqual({
+      data: {
+        identifierType: "email",
+        kind: "login",
+        label: "Workday",
+        origin: "https://wd5.myworkday.com",
+        passwordHint: "8+ characters, uppercase, lowercase, special",
+        target: "vault",
+      },
+      success: true,
+    });
+    expect(
+      managerSetupRequestSchema.safeParse({
+        identifierType: "email",
+        kind: "login",
+        label: "Workday",
+        origin: "https://wd5.myworkday.com",
+        secret: "must-not-enter-a-url",
+        target: "vault",
+      }).success
+    ).toBe(false);
+    expect(
+      managerSetupRequestSchema.safeParse({
+        identifier: "ada@example.com",
+        identifierType: "email",
+        kind: "login",
+        label: "Workday",
+        origin: "https://wd5.myworkday.com",
+        target: "vault",
+      }).success
+    ).toBe(false);
 
     const addressUrl = new URL(
       createManagerSetupUrl("https://assistant.example.com", {

@@ -79,6 +79,7 @@ const loginManagerSetupRequestSchema = z
     kind: z.literal("login"),
     label: z.string().trim().min(1).max(120),
     origin: loginOriginSchema,
+    passwordHint: z.string().trim().min(1).max(200).optional(),
     target: z.literal("vault"),
   })
   .strict();
@@ -112,6 +113,7 @@ export function parseManagerSetupSearchParams(
 ) {
   const identifierType = firstQueryValue(query.identifier_type);
   const origin = firstQueryValue(query.origin);
+  const passwordHint = firstQueryValue(query.password_hint);
   const input = {
     kind: firstQueryValue(query.kind),
     label: firstQueryValue(query.label),
@@ -121,7 +123,12 @@ export function parseManagerSetupSearchParams(
   return managerSetupRequestSchema.safeParse(
     identifierType === undefined && origin === undefined
       ? input
-      : { ...input, identifierType, origin }
+      : {
+          ...input,
+          identifierType,
+          origin,
+          ...(passwordHint ? { passwordHint } : {}),
+        }
   );
 }
 
@@ -136,6 +143,9 @@ export function createManagerSetupUrl(
   if (request.kind === "login") {
     url.searchParams.set("identifier_type", request.identifierType);
     url.searchParams.set("origin", request.origin);
+    if (request.passwordHint) {
+      url.searchParams.set("password_hint", request.passwordHint);
+    }
   }
   return url.toString();
 }
