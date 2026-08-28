@@ -47,9 +47,7 @@ describe("worker input bubbling", () => {
     );
     expect(browserSkill).toContain("Sign in to apply");
     expect(browserSkill).toContain("Needs vault setup:");
-    expect(browserSkill).toContain(
-      "not for passwords or other secrets"
-    );
+    expect(browserSkill).toContain("not for passwords or other secrets");
   });
 
   it("forbids dumping tool or worker JSON to the user", () => {
