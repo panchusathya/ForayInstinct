@@ -83,10 +83,11 @@ vercel deploy --prod
 
 The create command returns the connector UID. Run
 `vercel connect open <returned-connector-uid>`, copy the assigned line from the
-connector dashboard in E.164 format, and use it for `LINQ_PHONE_NUMBER`. Both
-`LINQ_CONNECTOR` and `LINQ_PHONE_NUMBER` must be configured together. Repeat the
-attachment and environment-variable steps for preview or development if those
-environments should use Linq too.
+connector dashboard in E.164 format, and use it for `LINQ_PHONE_NUMBER` when
+you want to display it in the app. The Vercel Connect attachment supplies
+`LINQ_CONNECTOR` to the deployment. Repeat the attachment and
+environment-variable steps for preview or development if those environments
+should use Linq too.
 
 Before signing in, use that connector dashboard to add each user's phone number
 under **Messaging Contacts**. Linq rejects OTP delivery and drops inbound texts

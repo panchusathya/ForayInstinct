@@ -145,15 +145,24 @@ describe("environment", () => {
     expect(env.LINQ_PHONE_NUMBER).toBe("+12025550123");
   });
 
-  it.each([
-    ["linq/open-instinct", ""],
-    ["", "+12025550123"],
-  ])("rejects partial Linq configuration", async (connector, phoneNumber) => {
+  it("accepts a connector without a display phone number", async () => {
+    vi.stubEnv("LINQ_CONNECTOR", "linq/open-instinct");
+    vi.stubEnv("LINQ_PHONE_NUMBER", "");
+
+    const { env } = await import("../lib/env");
+
+    expect(env.LINQ_CONNECTOR).toBe("linq/open-instinct");
+    expect(env.LINQ_PHONE_NUMBER).toBeUndefined();
+  });
+
+  it("rejects a display phone number without a Linq connector", async () => {
+    const connector = "";
+    const phoneNumber = "+12025550123";
     vi.stubEnv("LINQ_CONNECTOR", connector);
     vi.stubEnv("LINQ_PHONE_NUMBER", phoneNumber);
 
     await expect(import("../lib/env")).rejects.toThrow(
-      "LINQ_CONNECTOR and LINQ_PHONE_NUMBER must be configured together"
+      "LINQ_PHONE_NUMBER requires LINQ_CONNECTOR"
     );
   });
 

@@ -71,13 +71,8 @@ export const env = createEnv({
   emptyStringAsUndefined: true,
 });
 
-if (
-  (env.LINQ_CONNECTOR === undefined) !==
-  (env.LINQ_PHONE_NUMBER === undefined)
-) {
-  throw new Error(
-    "LINQ_CONNECTOR and LINQ_PHONE_NUMBER must be configured together."
-  );
+if (env.LINQ_PHONE_NUMBER !== undefined && env.LINQ_CONNECTOR === undefined) {
+  throw new Error("LINQ_PHONE_NUMBER requires LINQ_CONNECTOR.");
 }
 const authHostname = new URL(env.BETTER_AUTH_URL).hostname;
 
