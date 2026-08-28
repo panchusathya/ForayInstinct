@@ -435,10 +435,13 @@ export async function candidateDefaultResume(scope: AccessScope) {
       },
     }
   );
-  if (!response.ok)
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => undefined);
     throw new Error(
-      "The protected default resume is not ready. Wait for parsing to finish before retrying."
+      bridgeErrorResponseSchema.safeParse(payload).data?.detail ??
+        "The protected default resume is unavailable. Attach a PDF or DOCX to continue."
     );
+  }
   const disposition = response.headers.get("content-disposition") ?? "";
   return {
     bytes: await response.arrayBuffer(),
