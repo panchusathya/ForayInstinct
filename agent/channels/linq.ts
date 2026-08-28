@@ -8,7 +8,7 @@ import {
 import { z } from "zod";
 import { auth } from "@/auth";
 import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
-import { accessScopeForUser } from "@/lib/access-scope";
+import { accessScopeForUser, scopeFromPrincipal } from "@/lib/access-scope";
 import { env } from "@/lib/env";
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
 import { recordConversationMessage } from "@/lib/goforay/bridge";
@@ -122,6 +122,18 @@ export default linqChannel({
       // Eve's Linq adapter translates supported Markdown into native iMessage
       // decorations, so recipients see styled text instead of literal markers.
       await context.thread.post({ markdown: event.message });
+      const caller =
+        session.session.auth.current ?? session.session.auth.initiator;
+      if (caller) {
+        const scope = scopeFromPrincipal(caller);
+        void recordConversationMessage({
+          scope,
+          conversationId: `linq:${scope.userId}`,
+          channel: "linq",
+          direction: "outbound",
+          body: event.message,
+        }).catch(() => undefined);
+      }
     },
   },
   async onMessage(_context, message) {
