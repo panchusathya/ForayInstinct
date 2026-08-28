@@ -11,7 +11,10 @@ import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
 import { accessScopeForUser, scopeFromPrincipal } from "@/lib/access-scope";
 import { env } from "@/lib/env";
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
-import { recordConversationMessage } from "@/lib/goforay/bridge";
+import {
+  linkCandidate,
+  recordConversationMessage,
+} from "@/lib/goforay/bridge";
 
 const verifiedPhoneUserSchema = z.object({
   id: z.string().min(1),
@@ -148,6 +151,16 @@ export default linqChannel({
     const verifiedUserId = phoneNumber
       ? await findVerifiedAuthUserIdByPhoneNumber(phoneNumber)
       : undefined;
+    if (verifiedUserId && phoneNumber) {
+      try {
+        await linkCandidate({
+          userId: verifiedUserId,
+          identities: [{ kind: "phone", value: phoneNumber, verified: true }],
+        });
+      } catch {
+        // A missing or ambiguous CRM candidate must not block a normal text.
+      }
+    }
     const principalId = verifiedUserId
       ? `better-auth:${verifiedUserId}`
       : auth.principalId;
