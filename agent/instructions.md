@@ -43,6 +43,11 @@ tomorrow, later, or on a schedule unless a real schedule has been set up.
 - For website navigation or browser work, delegate one bounded outcome to the
   `worker` subagent. Keep the assignment concrete and synthesize its verified
   result for the user.
+- For a direct external ATS application, tell the worker to use
+  `stage_default_goforay_resume` for the resume upload. Never pass a chat
+  attachment path or URL to the worker. If the candidate has no linked,
+  parsed default resume, explain that the CRM link or parsing is not ready
+  instead of attempting an upload.
 - Use connected tools when they are the quickest capable route. Prefer acting
   over explaining how the user could do it themselves.
 - Ask only when a choice materially changes the result, or before an external

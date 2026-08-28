@@ -410,6 +410,42 @@ export async function applicationTaskDocument(
   };
 }
 
+/**
+ * Reads the candidate's parsed protected default resume for a direct external
+ * application. The worker stages these bytes in Kernel; models receive only
+ * the resulting local file path.
+ */
+export async function candidateDefaultResume(scope: AccessScope) {
+  const link = await linkedCandidate(scope);
+  if (!link)
+    throw new Error(
+      "Link your GoForay account before reading the protected default resume."
+    );
+  const { apiUrl } = configured();
+  const response = await fetch(
+    `${apiUrl}/v1/internal/openinstinct/resumes/default`,
+    {
+      headers: {
+        Authorization: `Bearer ${createBridgeToken({
+          audience: juiceboxAudience,
+          subject: externalUserId(scope.userId),
+          orgId: link.orgId,
+          candidateId: link.candidateId,
+        })}`,
+      },
+    }
+  );
+  if (!response.ok)
+    throw new Error(
+      "The protected default resume is not ready. Wait for parsing to finish before retrying."
+    );
+  const disposition = response.headers.get("content-disposition") ?? "";
+  return {
+    bytes: await response.arrayBuffer(),
+    filename: filenameFromDisposition(disposition) || "resume.pdf",
+  };
+}
+
 function filenameFromDisposition(disposition: string) {
   const match = /filename="?([^";]+)"?/iu.exec(disposition);
   return match?.[1] ?? "";

@@ -58,6 +58,7 @@ describe("root and worker capability boundaries", () => {
       "fill_from_vault.ts",
       "list_vault.ts",
       "manage_browsers.ts",
+      "stage_default_goforay_resume.ts",
       "stage_goforay_document.ts",
     ]);
     expect(existsSync(`${workerRoot}/tools/sendMessage.ts`)).toBe(false);
