@@ -53,7 +53,7 @@ export default defineTool({
             viewport: browserViewport(input),
             ...(env.KERNEL_PROXY_ID === undefined
               ? {}
-              : { proxy_id: env.KERNEL_PROXY_ID }),
+              : { proxy: { id: env.KERNEL_PROXY_ID } }),
           },
           { signal }
         );

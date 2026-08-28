@@ -115,7 +115,7 @@ describe("Kernel browser contract", () => {
         stealth: true,
         timeout_seconds: 900,
         viewport: undefined,
-        proxy_id: "proxy-us-residential",
+        proxy: { id: "proxy-us-residential" },
       },
       { signal: undefined }
     );
