@@ -83,6 +83,36 @@ Before planning or changing product UI:
 - Do not mirror schemas, database rows, router inputs or outputs, SDK payloads,
   library exports, or function results with parallel interfaces.
 
+## Cursor Cloud specific instructions
+
+The Cloud Agent VM has no Docker, so the repo's `pnpm dev` supervisor (which
+starts PostgreSQL via `compose.yaml`) does not work here. `.cursor/` sets up an
+equivalent environment instead:
+
+- `.cursor/install.sh` installs Node 24, pnpm, and a native PostgreSQL 16
+  server, installs dependencies, and writes a git-ignored local `.env`.
+- `.cursor/start.sh` starts the Postgres cluster and ensures the `open_instinct`
+  database exists.
+- The `dev` terminal runs `pnpm db:migrate` then `pnpm dev:app` (the
+  externally-managed-database path) on http://localhost:3000.
+
+To run the app in a Cloud Agent, use the native-Postgres path — do not invoke
+`pnpm dev`:
+
+```sh
+bash .cursor/start.sh        # ensure Postgres is up (idempotent)
+export PATH="/usr/bin:$PATH" # resolve Node 24 / pnpm
+pnpm db:migrate && pnpm dev:app
+```
+
+`lib/env.ts` supplies local defaults for Better Auth, secret encryption, and AI
+Gateway in development. `DATABASE_URL` points at the native server; the local
+`.env` sets `KERNEL_API_KEY` to a placeholder so the app boots. Real browser
+execution and model inference need genuine `KERNEL_API_KEY` and
+`AI_GATEWAY_API_KEY` values supplied as secrets. `pnpm build` requires real
+production secrets (no dev defaults), so use the dev server — not a production
+build — to test locally before deploying.
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know
