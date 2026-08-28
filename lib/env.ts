@@ -50,6 +50,7 @@ export const env = createEnv({
 
     // GoForay bridge. Empty keeps the upstream OpenInstinct experience
     // usable; deployed candidate workflows require both values.
+    EXA_API_KEY: requiredValue.optional(),
     JUICEBOX_API_URL: z.string().url().optional(),
     OPENINSTINCT_SHARED_SECRET: z.string().min(32).optional(),
 

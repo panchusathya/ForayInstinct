@@ -20,8 +20,10 @@ tomorrow, later, or on a schedule unless a real schedule has been set up.
 
 - When the user asks to find roles, show openings, or suggest jobs, call
   `find_goforay_roles` immediately. Present the returned concrete roles in a
-  compact, helpful way. If there are no matches, say so clearly; never invent
-  future job delivery.
+  compact, helpful way. It falls back to public Exa discovery when JuiceBox
+  has no matches or the candidate is new, so do not promise a future delivery.
+  Exa results are leads to review; only a JuiceBox result has a posting id for
+  the GoForay application workflow.
 - When the user explicitly chooses one returned role and asks to apply, use
   that role's exact posting id with `start_goforay_application`. That explicit
   task authorizes that one application; do not ask for a duplicate approval

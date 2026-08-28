@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db, goforayConversations, goforayLinks } from "@/db";
 import { env } from "@/lib/env";
 import type { AccessScope } from "@/lib/access-scope";
+import { searchExaRoles, type ExaRoleCard } from "./exa";
 
 const issuer = "goforay-openinstinct";
 const juiceboxAudience = "juicebox";
@@ -183,6 +184,17 @@ export async function linkCandidate({
   );
   const payload = identityLinkResponseSchema.parse(await response.json());
   if (!response.ok || !payload.org_id || !payload.candidate_id) {
+    // A recruiter may deliberately reset a candidate in JuiceBox. Drop the
+    // local pointer when the service confirms that the old identity no longer
+    // maps to a candidate, so the next text starts with no stale CRM context.
+    if (
+      response.status === 409 &&
+      payload.detail === "No candidate matches this verified identity"
+    ) {
+      await db
+        .delete(goforayLinks)
+        .where(eq(goforayLinks.userId, authUserId(userId)));
+    }
     throw new Error(payload.detail ?? "Unable to link this GoForay account.");
   }
   await db
@@ -279,6 +291,28 @@ export async function goforayJobFeed(
   return jobFeedSchema.parse(
     await juiceboxRequest(scope, `/v1/internal/openinstinct/job-feed?${params}`)
   );
+}
+
+/**
+ * Prefer roles already curated in JuiceBox, then discover public openings for
+ * a new or unmatched candidate. Exa cards deliberately have no posting id:
+ * they are leads to review, not invented CRM applications.
+ */
+export async function findGoforayRoles(
+  scope: AccessScope,
+  input: { query?: string; location?: string; limit?: number } = {}
+): Promise<{ cards: (z.infer<typeof jobFeedSchema>["cards"][number] | ExaRoleCard)[]; source: "juicebox" | "exa" }> {
+  const limit = input.limit ?? 5;
+  try {
+    const feed = await goforayJobFeed(scope, { ...input, limit });
+    if (feed.cards.length) return { ...feed, source: "juicebox" };
+  } catch {
+    // A new candidate has no JuiceBox link yet; public discovery can still help.
+  }
+  return {
+    cards: await searchExaRoles({ ...input, limit }),
+    source: "exa",
+  };
 }
 
 export async function applicationTask(scope: AccessScope, taskId: string) {

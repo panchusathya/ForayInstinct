@@ -4,7 +4,7 @@ import { scopeFromPrincipal } from "@/lib/access-scope";
 import {
   applicationTask,
   createApplicationTask,
-  goforayJobFeed,
+  findGoforayRoles,
   reportApplicationTask,
 } from "@/lib/goforay/bridge";
 
@@ -21,14 +21,14 @@ export default defineDynamic({
       return {
         find_goforay_roles: defineTool({
           description:
-            "Immediately retrieve the linked candidate's current, actionable JuiceBox job matches. Call this whenever they ask to find roles, show openings, or suggest jobs. Do not promise a future delivery. The returned cards include the exact posting_id needed only if the candidate later explicitly asks to apply to that role.",
+            "Immediately find roles whenever the user asks to find roles, show openings, or suggest jobs. This first returns actionable JuiceBox matches. If none exist or the candidate is new, it searches Exa for live public openings and returns those in the same conversation. Never promise a future delivery. Only JuiceBox cards contain a posting_id and can be started through the GoForay application task.",
           inputSchema: z.object({
             query: z.string().max(120).optional(),
             location: z.string().max(120).optional(),
             limit: z.number().int().min(1).max(10).default(5),
           }),
           execute: ({ query, location, limit }) =>
-            goforayJobFeed(scope, { query, location, limit }),
+            findGoforayRoles(scope, { query, location, limit }),
         }),
         start_goforay_application: defineTool({
           description:
