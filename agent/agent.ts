@@ -1,20 +1,13 @@
-import { defineAgent, defineDynamic } from "eve";
-import { scopeFromPrincipal } from "@/lib/access-scope";
-import { getModelSettings } from "@/lib/model-config";
+import { defineAgent } from "eve";
+import { chatGatewayModel } from "@/lib/model-config";
 
 export default defineAgent({
   experimental: {
     tasks: true,
   },
-  model: defineDynamic({
-    events: {
-      "step.started": async (_event, ctx) => {
-        const caller = ctx.session.auth.current ?? ctx.session.auth.initiator;
-        if (!caller) throw new Error("An authenticated user is required.");
-        return (await getModelSettings(scopeFromPrincipal(caller))).modelId;
-      },
-    },
-  }),
+  // Keep the chat model session-scoped. A static gateway selection preserves
+  // prompt caching and cannot be replaced by a stale workspace DB setting.
+  model: chatGatewayModel,
   reasoning: "low",
   compaction: {
     thresholdPercent: 0.7,

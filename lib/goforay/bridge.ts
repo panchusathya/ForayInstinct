@@ -32,6 +32,11 @@ const identityLinkResponseSchema = z.object({
 });
 
 const bridgeErrorResponseSchema = z.object({ detail: z.string().optional() });
+const resumeUploadSchema = z.object({
+  filename: z.string(),
+  id: z.string(),
+  status: z.string(),
+});
 
 const bridgeTaskSchema = z.object({
   application_id: z.string(),
@@ -274,6 +279,36 @@ export async function createApplicationTask(
   );
 }
 
+/** Uploads a candidate-owned resume without making its bytes model-visible. */
+export async function uploadCandidateResume(scope: AccessScope, file: File) {
+  const link = await linkedCandidate(scope);
+  if (!link)
+    throw new Error("Link your GoForay account before uploading a resume.");
+  const { apiUrl } = configured();
+  const form = new FormData();
+  form.set("file", file, file.name || "resume");
+  const response = await fetch(`${apiUrl}/v1/internal/openinstinct/resumes`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${createBridgeToken({
+        audience: juiceboxAudience,
+        subject: externalUserId(scope.userId),
+        orgId: link.orgId,
+        candidateId: link.candidateId,
+      })}`,
+    },
+    body: form,
+  });
+  const payload: unknown = await response.json();
+  if (!response.ok) {
+    throw new Error(
+      bridgeErrorResponseSchema.safeParse(payload).data?.detail ??
+        "Unable to upload the resume."
+    );
+  }
+  return resumeUploadSchema.parse(payload);
+}
+
 /** Reads the linked candidate's current JuiceBox matches without creating an application. */
 export async function goforayJobFeed(
   scope: AccessScope,
@@ -301,7 +336,10 @@ export async function goforayJobFeed(
 export async function findGoforayRoles(
   scope: AccessScope,
   input: { query?: string; location?: string; limit?: number } = {}
-): Promise<{ cards: (z.infer<typeof jobFeedSchema>["cards"][number] | ExaRoleCard)[]; source: "juicebox" | "exa" }> {
+): Promise<{
+  cards: (z.infer<typeof jobFeedSchema>["cards"][number] | ExaRoleCard)[];
+  source: "juicebox" | "exa";
+}> {
   const limit = input.limit ?? 5;
   try {
     const feed = await goforayJobFeed(scope, { ...input, limit });
@@ -362,12 +400,19 @@ export async function applicationTaskDocument(
   );
   if (!response.ok)
     throw new Error("Unable to read the prepared application document.");
+  const disposition = response.headers.get("content-disposition") ?? "";
   return {
     bytes: await response.arrayBuffer(),
     contentType:
       response.headers.get("content-type") ?? "application/octet-stream",
-    disposition: response.headers.get("content-disposition") ?? "",
+    disposition,
+    filename: filenameFromDisposition(disposition),
   };
+}
+
+function filenameFromDisposition(disposition: string) {
+  const match = /filename="?([^";]+)"?/iu.exec(disposition);
+  return match?.[1] ?? "";
 }
 
 export async function reportApplicationTask(

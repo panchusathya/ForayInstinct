@@ -97,10 +97,6 @@ export const managerSetupRequestSchema = z.union([
 ]);
 
 export const managerMutationSchema = z.discriminatedUnion("action", [
-  z.object({
-    action: z.literal("model.select"),
-    modelId: z.string().trim().min(1).max(300),
-  }),
   z.object({ action: z.literal("vault.create"), input: vaultItemInputSchema }),
   z.object({ action: z.literal("vault.delete"), id: z.string().min(1) }),
 ]);

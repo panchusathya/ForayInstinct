@@ -12,6 +12,21 @@ function toolFiles(directory: string) {
 }
 
 describe("root and worker capability boundaries", () => {
+  it("pins chat and browser work to the paid GoForay gateway models", () => {
+    const rootAgent = readFileSync("agent/agent.ts", "utf8");
+    const workerAgent = readFileSync(`${workerRoot}/agent.ts`, "utf8");
+    const models = readFileSync("lib/model-config.ts", "utf8");
+
+    expect(models).toContain('chatGatewayModel = "openai/gpt-5.6-luna-fast"');
+    expect(models).toContain(
+      'browserGatewayModel = "openai/gpt-5.6-terra-fast"'
+    );
+    expect(rootAgent).toContain("model: chatGatewayModel");
+    expect(workerAgent).toContain("model: browserGatewayModel");
+    expect(rootAgent).not.toContain("defineDynamic(");
+    expect(workerAgent).not.toContain("defineDynamic(");
+  });
+
   it("keeps root coordination separate from browser execution", () => {
     expect(toolFiles(rootTools)).toEqual([
       "agent.ts",
@@ -43,6 +58,7 @@ describe("root and worker capability boundaries", () => {
       "fill_from_vault.ts",
       "list_vault.ts",
       "manage_browsers.ts",
+      "stage_goforay_document.ts",
     ]);
     expect(existsSync(`${workerRoot}/tools/sendMessage.ts`)).toBe(false);
     expect(existsSync(`${workerRoot}/tools/request_vault_setup.ts`)).toBe(

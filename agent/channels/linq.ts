@@ -14,6 +14,7 @@ import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delive
 import {
   linkCandidate,
   recordConversationMessage,
+  uploadCandidateResume,
 } from "@/lib/goforay/bridge";
 
 const verifiedPhoneUserSchema = z.object({
@@ -183,6 +184,7 @@ export default linqChannel({
       ? `better-auth:${verifiedUserId}`
       : auth.principalId;
     const scope = accessScopeForUser(principalId);
+    const importedResumes = await importLinqResumes(message, scope);
     const body = messageText(message);
     if (body) {
       void recordConversationMessage({
@@ -194,7 +196,14 @@ export default linqChannel({
       }).catch(() => undefined);
     }
     return {
-      context: [CURRENT_FORAY_POLICY],
+      context: [
+        CURRENT_FORAY_POLICY,
+        ...(importedResumes.length
+          ? [
+              `The candidate attached a resume. It has been sent directly to their protected GoForay profile for parsing (${importedResumes.join(", ")}). Do not ask them to upload it again or expose the file contents.`,
+            ]
+          : []),
+      ],
       auth: {
         ...auth,
         attributes: {
@@ -233,6 +242,71 @@ function messageText(value: unknown) {
     if (typeof text === "string") return text.trim();
   }
   return "";
+}
+
+const linqAttachmentSchema = z.object({
+  attachments: z
+    .array(
+      z.object({
+        mimeType: z.string().optional(),
+        name: z.string().optional(),
+        url: z.string().url(),
+      })
+    )
+    .optional(),
+});
+
+async function importLinqResumes(
+  message: unknown,
+  scope: ReturnType<typeof accessScopeForUser>
+) {
+  const parsed = linqAttachmentSchema.safeParse(message);
+  if (!parsed.success) return [];
+
+  const uploaded: string[] = [];
+  for (const attachment of parsed.data.attachments ?? []) {
+    const filename = attachment.name ?? filenameFromUrl(attachment.url);
+    const mimeType = attachment.mimeType ?? "";
+    if (!isResumeAttachment(filename, mimeType)) continue;
+
+    try {
+      // The URL comes from Linq's authenticated inbound adapter. Forward the
+      // original bytes directly to JuiceBox, which enforces magic-byte checks
+      // and queues parsing in candidate-document storage.
+      const response = await fetch(attachment.url);
+      if (!response.ok) continue;
+      const bytes = await response.arrayBuffer();
+      const file = new File([bytes], filename, {
+        type: mimeType || response.headers.get("content-type") || "",
+      });
+      const result = await uploadCandidateResume(scope, file);
+      uploaded.push(result.filename);
+    } catch {
+      // A malformed or expired attachment cannot interrupt the conversation.
+      // The model still sees the normal attachment marker and can ask once for
+      // a fresh PDF/DOCX if the candidate meant to provide a resume.
+    }
+  }
+  return uploaded;
+}
+
+function isResumeAttachment(filename: string, mimeType: string) {
+  return (
+    mimeType === "application/pdf" ||
+    mimeType ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    /\.(pdf|docx)$/iu.test(filename)
+  );
+}
+
+function filenameFromUrl(url: string) {
+  try {
+    return decodeURIComponent(
+      new URL(url).pathname.split("/").at(-1) || "resume"
+    );
+  } catch {
+    return "resume";
+  }
 }
 
 async function findVerifiedAuthUserIdByPhoneNumber(phoneNumber: string) {

@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { ensureScope } from "@/db/services/scope";
-import { selectGatewayModel } from "@/db/services/settings";
 import {
   createVaultItem as insertVaultItem,
   deleteVaultItem,
 } from "@/db/services/vault";
 import type { AccessScope } from "../../access-scope";
 import { getGoogleWorkspaceConnection } from "../../google-workspace/server";
-import { getModelSettings } from "../../model-config";
 import type { ManagerMutation } from "..";
 import { parsePaymentCardSecret, paymentCardBrand } from "../payment-card";
 import { loginAccountHint, parseLoginVaultPayload } from "../vault-payload";
@@ -15,16 +13,15 @@ import { deleteSecret, secretStoreStatus, writeSecret } from "./secret-store";
 import { readManagerVaultItems } from "./vault";
 
 export async function readManagerSnapshot(scope: AccessScope) {
-  const [googleWorkspace, vaultRows, modelSettings] = await Promise.all([
+  const [googleWorkspace, vaultRows] = await Promise.all([
     getGoogleWorkspaceConnection(scope),
     readManagerVaultItems(scope),
-    getModelSettings(scope),
   ]);
 
   return {
     browser: { available: true },
     googleWorkspace,
-    runtime: { inference: modelSettings.modelId },
+    runtime: { inference: "openai/gpt-5.6-luna-fast" },
     secretStore: secretStoreStatus(),
     vaultItems: vaultRows,
   };
@@ -37,9 +34,6 @@ export async function applyManagerMutation(
   await ensureScope(scope);
 
   switch (mutation.action) {
-    case "model.select":
-      await selectGatewayModel(scope, mutation.modelId);
-      break;
     case "vault.create":
       await createVaultItem(scope, mutation.input);
       break;

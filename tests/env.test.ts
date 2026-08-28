@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const requiredEnvironment = {
   BETTER_AUTH_SECRET: "test-auth-secret",
   BETTER_AUTH_URL: "https://example.com",
+  AI_GATEWAY_API_KEY: "test-ai-gateway-key",
   DATABASE_URL: "postgresql://user:password@example.com/database",
   KERNEL_API_KEY: "test-kernel-key",
   SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
@@ -109,6 +110,7 @@ describe("environment", () => {
   });
 
   it.each([
+    ["AI_GATEWAY_API_KEY", "Invalid environment variables"],
     ["BETTER_AUTH_SECRET", "Invalid environment variables"],
     ["BETTER_AUTH_URL", "Invalid environment variables"],
     ["DATABASE_URL", "Invalid environment variables"],

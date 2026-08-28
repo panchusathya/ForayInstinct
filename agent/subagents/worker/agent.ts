@@ -1,20 +1,13 @@
-import { defineAgent, defineDynamic } from "eve";
-import { scopeFromPrincipal } from "@/lib/access-scope";
-import { getModelSettings } from "@/lib/model-config";
+import { defineAgent } from "eve";
 import { taskCompletionSchema } from "@/lib/task-completion";
+import { browserGatewayModel } from "@/lib/model-config";
 
 export default defineAgent({
   description:
     "Execute one bounded browser assignment for the root coordinator, including secure vault autofill, transaction preparation, human-takeover handoff, cleanup, and a concise verified result. Every initial and resumed call must include the task-completion outputSchema required by the root instructions.",
-  model: defineDynamic({
-    events: {
-      "step.started": async (_event, ctx) => {
-        const caller = ctx.session.auth.current ?? ctx.session.auth.initiator;
-        if (!caller) throw new Error("An authenticated user is required.");
-        return (await getModelSettings(scopeFromPrincipal(caller))).modelId;
-      },
-    },
-  }),
+  // Browser work benefits from the stronger tool-use model, while normal chat
+  // stays on Luna Fast.
+  model: browserGatewayModel,
   reasoning: "low",
   outputSchema: taskCompletionSchema,
   compaction: {

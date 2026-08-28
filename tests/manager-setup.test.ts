@@ -97,13 +97,13 @@ describe("self-hosted manager", () => {
     ).toBe(false);
   });
 
-  it("accepts a selected gateway model", () => {
+  it("rejects legacy per-workspace gateway model overrides", () => {
     expect(
       managerMutationSchema.safeParse({
         action: "model.select",
         modelId: "anthropic/claude-sonnet-4.5",
       }).success
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("does not expose removed runtime mutations", () => {

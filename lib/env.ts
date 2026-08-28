@@ -33,6 +33,13 @@ export const env = createEnv({
     // Required
     DATABASE_URL: databaseUrlSchema,
     KERNEL_API_KEY: requiredValue,
+    // Vercel's automatic free allowance is deliberately not enough for the
+    // candidate agent. A named paid Gateway key makes the routing and billing
+    // relationship explicit instead of silently falling back to a free model.
+    AI_GATEWAY_API_KEY: requiredValueWithLocalDefault(
+      requiredValue,
+      "openinstinct-local-ai-gateway-key"
+    ),
 
     // Required with local defaults
     BETTER_AUTH_SECRET: requiredValueWithLocalDefault(

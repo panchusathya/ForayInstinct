@@ -4,6 +4,7 @@ import { z } from "zod";
 
 const applicationEnvironment = [
   "BETTER_AUTH_*",
+  "AI_GATEWAY_API_KEY",
   "DATABASE_URL",
   "JUICEBOX_API_URL",
   "*_CONNECTOR_UID",

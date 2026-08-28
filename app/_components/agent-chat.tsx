@@ -200,16 +200,38 @@ export function AgentChat({
       pendingChatTitle.current = title;
     }
 
+    const resumeFiles = message.files.filter(isResumeFile);
+    const otherFiles = message.files.filter((file) => !isResumeFile(file));
+    let resumeNotice = "";
+    if (resumeFiles.length) {
+      try {
+        const uploads = await Promise.all(resumeFiles.map(uploadResume));
+        resumeNotice = `Resume upload accepted (${uploads.map((upload) => upload.filename).join(", ")}). It is being parsed in your GoForay profile; do not ask the candidate to upload it again.`;
+      } catch (error) {
+        setCancellationError(toErrorMessage(error));
+        return;
+      }
+    }
+
+    if (otherFiles.length === 0) {
+      await agent.send(
+        [text, resumeNotice].filter(Boolean).join("\n\n"),
+        options
+      );
+      return;
+    }
+
     if (message.files.length === 0) {
       await agent.send(text, options);
       return;
     }
 
     const parts: UserContent = [];
-    if (text.length > 0) {
-      parts.push({ text, type: "text" });
+    const prompt = [text, resumeNotice].filter(Boolean).join("\n\n");
+    if (prompt.length > 0) {
+      parts.push({ text: prompt, type: "text" });
     }
-    for (const file of message.files) {
+    for (const file of otherFiles) {
       parts.push({
         data: file.url,
         filename: file.filename,
@@ -313,6 +335,55 @@ export function AgentChat({
       />
     </div>
   );
+}
+
+function isResumeFile(file: PromptInputMessage["files"][number]) {
+  return (
+    file.mediaType === "application/pdf" ||
+    file.mediaType ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    /\.(pdf|docx)$/iu.test(file.filename ?? "")
+  );
+}
+
+async function uploadResume(file: PromptInputMessage["files"][number]) {
+  const response = await fetch("/api/goforay/resume", {
+    body: await resumeFormData(file),
+    method: "POST",
+  });
+  const payload: unknown = await response.json();
+  if (!response.ok) {
+    const message =
+      typeof payload === "object" &&
+      payload !== null &&
+      "error" in payload &&
+      typeof payload.error === "string"
+        ? payload.error
+        : "Unable to upload the resume.";
+    throw new Error(message);
+  }
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    !("filename" in payload) ||
+    typeof payload.filename !== "string"
+  ) {
+    throw new Error("The resume upload returned an invalid response.");
+  }
+  return { filename: payload.filename };
+}
+
+async function resumeFormData(file: PromptInputMessage["files"][number]) {
+  const response = await fetch(file.url);
+  if (!response.ok) throw new Error("Unable to read the selected resume.");
+  const form = new FormData();
+  form.set(
+    "file",
+    new File([await response.blob()], file.filename ?? "resume", {
+      type: file.mediaType,
+    })
+  );
+  return form;
 }
 
 export function messagesForTraceView(
@@ -419,6 +490,13 @@ function PendingThinking() {
 
 function toErrorMessage(error: unknown): string {
   if (!(error instanceof Error)) return "Unable to complete the request.";
+  if (
+    /GatewayRateLimitError|rate[ -]?limit|upstream AI gateway|gateway.*(?:5\d\d|unavailable|timeout)/iu.test(
+      error.message
+    )
+  ) {
+    return "Foray is reconnecting to its AI service. Your conversation and any active application task are saved; please try again shortly.";
+  }
   if (/<!doctype html|<html[\s>]/i.test(error.message)) {
     return "The agent runtime is unavailable. Try again in a moment.";
   }

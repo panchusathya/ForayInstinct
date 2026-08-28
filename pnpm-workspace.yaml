@@ -1,3 +1,6 @@
+packages:
+  - "."
+
 minimumReleaseAgeStrict: true
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
