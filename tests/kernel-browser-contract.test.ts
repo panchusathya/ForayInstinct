@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   >(),
   createBrowserSession:
     vi.fn<(_scope: unknown, _record: unknown) => Promise<void>>(),
+  kernelProxyId: undefined as string | undefined,
   requireWorkerScope: vi.fn<(_context: unknown) => Promise<unknown>>(),
 }));
 
@@ -34,8 +35,17 @@ vi.mock("@/lib/kernel", () => ({
   kernel: { browsers: { create: mocks.createBrowser } },
 }));
 
+vi.mock("@/lib/env", () => ({
+  env: {
+    get KERNEL_PROXY_ID() {
+      return mocks.kernelProxyId;
+    },
+  },
+}));
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.kernelProxyId = undefined;
   mocks.requireWorkerScope.mockResolvedValue({
     userId: "user-1",
     workspaceId: "workspace-1",
@@ -87,6 +97,25 @@ describe("Kernel browser contract", () => {
         stealth: true,
         timeout_seconds: 900,
         viewport: undefined,
+      },
+      { signal: undefined }
+    );
+  });
+
+  it("attaches KERNEL_PROXY_ID while keeping stealth", async () => {
+    mocks.kernelProxyId = "proxy-us-residential";
+    const execute = manageBrowsers.execute;
+
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; create only reads abortSignal after the mocked authorization boundary.
+    await execute({ action: "create" }, {} as never);
+
+    expect(mocks.createBrowser).toHaveBeenCalledExactlyOnceWith(
+      {
+        start_url: undefined,
+        stealth: true,
+        timeout_seconds: 900,
+        viewport: undefined,
+        proxy_id: "proxy-us-residential",
       },
       { signal: undefined }
     );

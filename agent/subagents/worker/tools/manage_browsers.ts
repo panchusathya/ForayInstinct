@@ -10,6 +10,7 @@ import {
   deleteBrowserSession,
   listBrowserSessions,
 } from "@/db/services/browsers";
+import { env } from "@/lib/env";
 import { kernel } from "@/lib/kernel";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
@@ -50,6 +51,9 @@ export default defineTool({
             timeout_seconds:
               input.timeout_seconds ?? browserTimeoutFloorSeconds,
             viewport: browserViewport(input),
+            ...(env.KERNEL_PROXY_ID === undefined
+              ? {}
+              : { proxy_id: env.KERNEL_PROXY_ID }),
           },
           { signal }
         );
