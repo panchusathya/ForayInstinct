@@ -49,6 +49,19 @@ const bridgeTaskSchema = z.object({
   status: z.string(),
 });
 
+const jobFeedSchema = z.object({
+  cards: z.array(
+    z.object({
+      company: z.string(),
+      location: z.string(),
+      posting_id: z.string(),
+      reasons: z.array(z.string()),
+      title: z.string(),
+      url: z.string(),
+    })
+  ),
+});
+
 function authUserId(userId: string) {
   return userId.replace(/^better-auth:/u, "");
 }
@@ -246,6 +259,25 @@ export async function createApplicationTask(
         }),
       }
     )
+  );
+}
+
+/** Reads the linked candidate's current JuiceBox matches without creating an application. */
+export async function goforayJobFeed(
+  scope: AccessScope,
+  {
+    query = "",
+    location = "",
+    limit = 5,
+  }: { query?: string; location?: string; limit?: number } = {}
+) {
+  const params = new URLSearchParams({
+    q: query,
+    location,
+    limit: String(limit),
+  });
+  return jobFeedSchema.parse(
+    await juiceboxRequest(scope, `/v1/internal/openinstinct/job-feed?${params}`)
   );
 }
 

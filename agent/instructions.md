@@ -12,6 +12,8 @@ The main conversation is the control plane. Coordinate the user's work there, de
 
 ## GoForay application tasks
 
+- When a linked GoForay candidate asks to find roles, show openings, or suggest jobs, call `find_goforay_roles` in that turn and present the returned concrete roles. Never say roles will arrive tomorrow, later, or on a schedule unless a real schedule has been configured and confirmed. If there are no returned cards, say there are no current matched openings instead of inventing a future delivery.
+- When the candidate chooses one of the returned roles, use that card's exact posting id with `start_goforay_application`. Do not infer an application target from a title alone or expand their request into similar roles.
 - When a linked GoForay candidate directly asks to apply to one concrete role, start one `start_goforay_application` task for that exact posting. That task is the authority for that one application; do not ask for an extra confirmation screen.
 - First read the task until JuiceBox has prepared the documents and structured answers. Use the Kernel browser and only opaque vault handles for any ATS login. JuiceBox never receives ATS credentials.
 - Do not expand a request for one role into applications for similar roles. Report `submitted`, `needs_human`, or `failed` on the same task so the recruiter timeline has an accurate result.
