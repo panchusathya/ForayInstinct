@@ -2,13 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { accessScopeForUser, type AccessScope } from "@/lib/access-scope";
 
 const mocks = vi.hoisted(() => ({
+  claimSession: vi.fn(),
+  ensureScope: vi.fn(),
   isSessionOwned:
     vi.fn<(_scope: AccessScope, _sessionId: string) => Promise<boolean>>(),
 }));
 
 vi.mock("@/db/services/sessions", () => ({
+  claimSession: mocks.claimSession,
   isSessionOwned: mocks.isSessionOwned,
 }));
+vi.mock("@/db/services/scope", () => ({ ensureScope: mocks.ensureScope }));
 
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 
@@ -49,9 +53,29 @@ describe("worker access", () => {
 
     mocks.isSessionOwned
       .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(false);
     await expect(requireWorkerScope({ session })).rejects.toThrow(
       "does not own this worker session"
+    );
+  });
+
+  it("claims a just-created delegated worker after verifying its root", async () => {
+    const principal = principalFor("better-auth:alice");
+    mocks.isSessionOwned
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true);
+
+    await expect(
+      requireWorkerScope({
+        session: workerSession({ current: null, initiator: principal }),
+      })
+    ).resolves.toEqual(accessScopeForUser(principal.principalId));
+
+    expect(mocks.claimSession).toHaveBeenCalledWith(
+      accessScopeForUser(principal.principalId),
+      "worker-session"
     );
   });
 });
