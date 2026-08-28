@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { saveChat } from "@/db/services/chats";
 import type { ensureScope } from "@/db/services/scope";
 import type { claimSession } from "@/db/services/sessions";
+import type { recordConversationMessage } from "@/lib/goforay/bridge";
 
 const mocks = vi.hoisted(() => ({
   claimSession: vi.fn<typeof claimSession>(),
   ensureScope: vi.fn<typeof ensureScope>(),
+  recordConversationMessage: vi.fn<typeof recordConversationMessage>(),
   saveChat: vi.fn<typeof saveChat>(),
 }));
 
@@ -13,6 +15,9 @@ vi.mock("@/db/services/chats", () => ({ saveChat: mocks.saveChat }));
 vi.mock("@/db/services/scope", () => ({ ensureScope: mocks.ensureScope }));
 vi.mock("@/db/services/sessions", () => ({
   claimSession: mocks.claimSession,
+}));
+vi.mock("@/lib/goforay/bridge", () => ({
+  recordConversationMessage: mocks.recordConversationMessage,
 }));
 
 import sessionOwner from "../agent/hooks/session-owner";
@@ -56,5 +61,31 @@ describe("session ownership hook", () => {
     expect(mocks.saveChat).toHaveBeenCalledWith(scope, {
       sessionId: "session-1",
     });
+  });
+
+  it("does not mirror Linq messages into a web timeline", async () => {
+    const handler = sessionOwner.events?.["message.received"];
+    expect(handler).toBeDefined();
+    const linqContext = {
+      ...context,
+      session: {
+        ...context.session,
+        auth: {
+          initiator: {
+            ...context.session.auth.initiator,
+            authenticator: "linq-message",
+          },
+        },
+      },
+    };
+    const event = {
+      data: { message: "Hello from iMessage" },
+    } as Parameters<MessageReceivedHandler>[0];
+    const hookContext =
+      linqContext as unknown as Parameters<MessageReceivedHandler>[1];
+
+    await handler?.(event, hookContext);
+
+    expect(mocks.recordConversationMessage).not.toHaveBeenCalled();
   });
 });

@@ -40,10 +40,12 @@ async function recordWebMessage(
   direction: "inbound" | "outbound",
   body: string
 ) {
-  // Linq persists its own transport events below its channel adapter. Hooks
-  // are global, so keeping this to the web channel prevents double records.
-  if (ctx.channel.kind === "linq" || !body.trim()) return;
   const initiator = ctx.session.auth.initiator;
+  // Linq uses the shared Chat SDK channel, whose runtime kind is `chat-sdk`
+  // rather than `linq`. The auth projection is the durable discriminator.
+  // Linq records its own transport messages in the channel adapter, so the
+  // global hook must not mirror them into a second web conversation.
+  if (initiator?.authenticator === "linq-message" || !body.trim()) return;
   if (!initiator) return;
   try {
     const scope = scopeFromPrincipal(initiator);
