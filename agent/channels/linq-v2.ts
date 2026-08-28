@@ -64,6 +64,11 @@ const credentials: LinqChannelCredentials = env.LINQ_API_KEY
       };
 
 export default linqChannel({
+  // The channel id is intentionally versioned (the filename is `linq-v2`).
+  // Eve keys durable iMessage history by that id plus the Linq thread, so this
+  // starts a clean conversation after the production data reset. Keep the
+  // public route stable so the existing Linq webhook configuration still works.
+  route: "/eve/v1/linq",
   credentials,
   events: {
     "action.result"(event, context) {

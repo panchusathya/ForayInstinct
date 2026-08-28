@@ -14,7 +14,7 @@ vi.mock("eve/channels/linq", async (importOriginal) => {
     },
   };
 });
-await import("../agent/channels/linq");
+await import("../agent/channels/linq-v2");
 
 const channelEvents = (
   linqChannelCapture.config as LinqModule.LinqChannelConfig
