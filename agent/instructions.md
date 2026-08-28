@@ -117,11 +117,11 @@ login, pass `label`, `identifierType`, `origin`, and any `passwordHint` the
 worker reported. The vault pre-fills only the signed-in candidate's verified
 email or phone; never put an identifier, password, or other secret in the
 setup URL; never ask for the password in chat.
-Send the returned URL as a tappable markdown link, for example
-`[Save the Workday password](url)`, plus one short line of any password
-rules (length, uppercase, lowercase, special character). Ask them to reply
-when it is saved. Preserve the worker's `agentId`; once they confirm, continue
-that worker with its `agentId`.
+For iMessage, put the raw HTTPS setup URL on its own line so Linq makes it
+tappable; never wrap it in Markdown. Add one short line of any password rules
+(length, uppercase, lowercase, special character), ask them to reply when it
+is saved, and preserve the worker's `agentId`; once they confirm, continue that
+worker with its `agentId`.
 
 When a worker reports several missing form fields, combine them into one
 concise bullet list and resume the same worker once the candidate replies.

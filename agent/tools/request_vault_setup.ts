@@ -12,7 +12,7 @@ export default defineTool({
   execute(request) {
     return {
       message:
-        "Send this as a markdown link the candidate can tap. The form is pre-filled; they only type the password. Do not ask for the password in chat.",
+        "For iMessage, send this raw HTTPS URL on its own line so it is tappable; do not wrap it in Markdown. The form is pre-filled; the candidate only types the password. Do not ask for the password in chat.",
       url: createManagerSetupUrl(env.BETTER_AUTH_URL, request),
     };
   },

@@ -39,7 +39,7 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain("request_vault_setup");
     expect(instructions).toContain("never ask for the password in chat");
     expect(instructions).toContain("never put an identifier");
-    expect(instructions).toContain("[Save the Workday password](url)");
+    expect(instructions).toContain("raw HTTPS setup URL on its own line");
     expect(instructions).toContain(
       "structured `Needs user input:` or `Needs vault setup:` failure"
     );
