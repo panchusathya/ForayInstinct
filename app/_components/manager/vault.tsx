@@ -163,8 +163,10 @@ function VaultCategory({
         key={
           initialSetup
             ? `setup:${initialSetup.kind}:${initialSetup.label ?? ""}:${
-                initialSetup.kind === "login" ? initialSetup.identifierType : ""
-              }:${initialSetup.kind === "login" ? initialSetup.origin : ""}`
+                initialSetup.kind === "login"
+                  ? `${initialSetup.identifierType}:${initialSetup.origin}:${initialSetup.identifier ?? ""}`
+                  : ""
+              }`
             : "manual"
         }
         kind={kind}
@@ -245,13 +247,19 @@ function VaultDialog({
               : addLabel}
           </DialogTitle>
           <DialogDescription>
-            {kind === "login"
-              ? "Enter the credentials you use to sign in."
-              : "Sensitive values are encrypted before database storage and are never returned after saving."}
+            {initialSetup?.kind === "login" && initialSetup.identifier
+              ? `Type the password for ${initialSetup.identifier}. Everything else is already filled.`
+              : kind === "login"
+                ? "Enter the credentials you use to sign in."
+                : "Sensitive values are encrypted before database storage and are never returned after saving."}
           </DialogDescription>
         </DialogHeader>
         {renderVaultForm({
           busy,
+          initialIdentifier:
+            initialSetup?.kind === "login"
+              ? initialSetup.identifier
+              : undefined,
           initialIdentifierType:
             initialSetup?.kind === "login"
               ? initialSetup.identifierType
@@ -259,6 +267,10 @@ function VaultDialog({
           initialLabel: initialSetup?.label,
           initialOrigin:
             initialSetup?.kind === "login" ? initialSetup.origin : undefined,
+          initialPasswordHint:
+            initialSetup?.kind === "login"
+              ? initialSetup.passwordHint
+              : undefined,
           kind,
           onSaved,
           onSubmit,
@@ -270,17 +282,21 @@ function VaultDialog({
 
 function renderVaultForm({
   busy,
+  initialIdentifier,
   initialIdentifierType,
   initialLabel,
   initialOrigin,
+  initialPasswordHint,
   kind,
   onSaved,
   onSubmit,
 }: {
   readonly busy: boolean;
+  readonly initialIdentifier?: string;
   readonly initialIdentifierType?: "email" | "phone" | "username";
   readonly initialLabel?: string;
   readonly initialOrigin?: string;
+  readonly initialPasswordHint?: string;
   readonly kind: VaultCreateItemKind;
   readonly onSaved: () => void;
   readonly onSubmit: (mutation: ManagerMutation) => Promise<boolean>;
@@ -291,8 +307,10 @@ function renderVaultForm({
       return (
         <LoginVaultForm
           {...common}
+          initialIdentifier={initialIdentifier}
           initialIdentifierType={initialIdentifierType}
           initialOrigin={initialOrigin}
+          initialPasswordHint={initialPasswordHint}
         />
       );
     case "payment":

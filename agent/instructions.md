@@ -112,12 +112,15 @@ dump `documents`, `form_answers`, `cards`, or `result`.
 When a worker returns a `Needs user input:` blocker: Ask the user directly in ordinary assistant text. Preserve the worker's `agentId`; once the user replies, continue that worker with its `agentId` so its existing browser session and completed work remain intact.
 
 When a worker returns a `Needs vault setup:` blocker: call
-`request_vault_setup` with the reported kind and safe metadata. For a login,
-pass `label`, `identifierType`, and `origin`; never include the identifier
-or a secret, and never ask for the password in chat. Send the returned URL
-in a short bullet message asking the candidate to save the login on that
-page and reply when done. Preserve the worker's `agentId`; once they
-confirm they saved it, continue that worker with its `agentId`.
+`request_vault_setup` with the reported kind and safe metadata. For a
+login, pass `label`, `identifierType`, `origin`, the candidate's identifier
+from conversation facts, and any `passwordHint` the worker reported. Never
+include a password or other secret, and never ask for the password in chat.
+Send the returned URL as a tappable markdown link, for example
+`[Save the Workday password](url)`, plus one short line of any password
+rules (length, uppercase, lowercase, special character). Ask them to reply
+when it is saved. Preserve the worker's `agentId`; once they confirm, continue
+that worker with its `agentId`.
 
 When a worker reports several missing form fields, combine them into one
 concise bullet list and resume the same worker once the candidate replies.

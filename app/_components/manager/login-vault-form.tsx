@@ -57,28 +57,43 @@ const loginFormSchema = z
 
 export function LoginVaultForm({
   busy,
+  initialIdentifier = "",
   initialIdentifierType,
   initialLabel = "",
   initialOrigin = "",
+  initialPasswordHint,
   onSaved,
   onSubmit,
 }: {
   readonly busy: boolean;
+  readonly initialIdentifier?: string;
   readonly initialIdentifierType?: z.infer<typeof loginIdentifierTypeSchema>;
   readonly initialLabel?: string;
   readonly initialOrigin?: string;
+  readonly initialPasswordHint?: string;
   readonly onSaved: () => void;
   readonly onSubmit: (mutation: ManagerMutation) => Promise<boolean>;
 }) {
+  const requirePassword = initialIdentifier.length > 0;
   const [attempted, setAttempted] = useState(false);
   const [form, setForm] = useState<z.input<typeof loginFormSchema>>({
-    identifier: "",
+    identifier: initialIdentifier,
     identifierType: initialIdentifierType ?? "email",
     nickname: initialLabel,
     origin: initialOrigin,
     password: "",
   });
-  const result = loginFormSchema.safeParse(form);
+  const result = loginFormSchema
+    .superRefine((value, context) => {
+      if (requirePassword && !value.password.trim()) {
+        context.addIssue({
+          code: "custom",
+          message: "Enter the password.",
+          path: ["password"],
+        });
+      }
+    })
+    .safeParse(form);
   const errors =
     attempted && !result.success ? result.error.flatten().fieldErrors : {};
 
@@ -109,7 +124,10 @@ export function LoginVaultForm({
     if (saved) onSaved();
   };
 
-  const passwordOptional = form.identifierType !== "username";
+  const passwordOptional =
+    !requirePassword && form.identifierType !== "username";
+  const hideIdentifier = initialIdentifier.length > 0;
+  const hideOrigin = initialOrigin.length > 0;
 
   return (
     <form noValidate onSubmit={(event) => void submit(event)}>
@@ -126,70 +144,81 @@ export function LoginVaultForm({
             value={form.nickname}
           />
         )}
-        <VaultFormField
-          autoComplete="url"
-          error={errors.origin?.[0]}
-          id="vault-login-origin"
-          inputMode="url"
-          label="Website"
-          onChange={(origin) => setForm((current) => ({ ...current, origin }))}
-          placeholder="https://www.ubereats.com"
-          type="url"
-          value={form.origin}
-        />
-        <div
-          className={
-            initialIdentifierType
-              ? undefined
-              : "grid gap-3 sm:grid-cols-[0.8fr_1.4fr]"
-          }
-        >
-          {initialIdentifierType ? null : (
-            <Field>
-              <FieldLabel htmlFor="vault-login-identifier-type">
-                Sign in with
-              </FieldLabel>
-              <Select
-                onValueChange={(value) => {
-                  const identifierType = loginIdentifierTypeSchema.parse(value);
-                  setForm((current) => ({
-                    ...current,
-                    identifierType,
-                  }));
-                }}
-                value={form.identifierType}
-              >
-                <SelectTrigger
-                  className="w-full"
-                  id="vault-login-identifier-type"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="email">Email</SelectItem>
-                  <SelectItem value="phone">Phone</SelectItem>
-                  <SelectItem value="username">Username</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-          )}
+        {hideOrigin && hideIdentifier ? (
+          <p className="type-supporting-body text-muted-foreground">
+            {form.identifier}
+            {originHost(form.origin) ? ` · ${originHost(form.origin)}` : ""}
+          </p>
+        ) : null}
+        {hideOrigin ? null : (
           <VaultFormField
-            autoComplete="username"
-            error={errors.identifier?.[0]}
-            id="vault-login-identifier"
-            label={identifierLabel(form.identifierType)}
-            onChange={(identifier) =>
-              setForm((current) => ({ ...current, identifier }))
+            autoComplete="url"
+            error={errors.origin?.[0]}
+            id="vault-login-origin"
+            inputMode="url"
+            label="Website"
+            onChange={(origin) =>
+              setForm((current) => ({ ...current, origin }))
             }
-            placeholder={identifierPlaceholder(form.identifierType)}
-            value={form.identifier}
+            placeholder="https://www.ubereats.com"
+            type="url"
+            value={form.origin}
           />
-        </div>
+        )}
+        {hideIdentifier ? null : (
+          <div
+            className={
+              initialIdentifierType
+                ? undefined
+                : "grid gap-3 sm:grid-cols-[0.8fr_1.4fr]"
+            }
+          >
+            {initialIdentifierType ? null : (
+              <Field>
+                <FieldLabel htmlFor="vault-login-identifier-type">
+                  Sign in with
+                </FieldLabel>
+                <Select
+                  onValueChange={(value) => {
+                    const identifierType =
+                      loginIdentifierTypeSchema.parse(value);
+                    setForm((current) => ({
+                      ...current,
+                      identifierType,
+                    }));
+                  }}
+                  value={form.identifierType}
+                >
+                  <SelectTrigger
+                    className="w-full"
+                    id="vault-login-identifier-type"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="email">Email</SelectItem>
+                    <SelectItem value="phone">Phone</SelectItem>
+                    <SelectItem value="username">Username</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
+            <VaultFormField
+              autoComplete="username"
+              error={errors.identifier?.[0]}
+              id="vault-login-identifier"
+              label={identifierLabel(form.identifierType)}
+              onChange={(identifier) =>
+                setForm((current) => ({ ...current, identifier }))
+              }
+              placeholder={identifierPlaceholder(form.identifierType)}
+              value={form.identifier}
+            />
+          </div>
+        )}
         <VaultFormField
-          aria-describedby={
-            passwordOptional ? "vault-login-password-description" : undefined
-          }
-          autoComplete="new-password"
+          aria-describedby="vault-login-password-description"
+          autoComplete="current-password"
           error={errors.password?.[0]}
           id="vault-login-password"
           label={passwordOptional ? "Password (optional)" : "Password"}
@@ -199,14 +228,15 @@ export function LoginVaultForm({
           type="password"
           value={form.password}
         />
-        {passwordOptional ? (
-          <p
-            className="-mt-1 type-caption text-muted-foreground"
-            id="vault-login-password-description"
-          >
-            Leave blank if you sign in with a one-time code.
-          </p>
-        ) : null}
+        <p
+          className="-mt-1 type-caption text-muted-foreground"
+          id="vault-login-password-description"
+        >
+          {passwordOptional
+            ? "Leave blank if you sign in with a one-time code."
+            : (initialPasswordHint ??
+              "Use the site’s password rules (length, uppercase, lowercase, special character).")}
+        </p>
       </FieldGroup>
       <div className="mt-5 flex justify-end">
         <Button disabled={busy} type="submit">
@@ -238,6 +268,14 @@ function loginAuthentication(form: z.output<typeof loginFormSchema>) {
   if (form.identifierType === "email") return { type: "email_otp" as const };
   if (form.identifierType === "phone") return { type: "sms_otp" as const };
   throw new Error("Username logins require a password.");
+}
+
+function originHost(origin: string) {
+  try {
+    return new URL(origin.includes("://") ? origin : `https://${origin}`).host;
+  } catch {
+    return "";
+  }
 }
 
 function normalizeLoginOrigin(value: string) {

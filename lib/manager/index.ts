@@ -3,6 +3,7 @@ import { paymentCardSecretStringSchema } from "./payment-card";
 import {
   addressVaultPayloadStringSchema,
   contactVaultPayloadStringSchema,
+  loginIdentifierSchema,
   loginIdentifierTypeSchema,
   loginOriginSchema,
   loginVaultPayloadStringSchema,
@@ -75,13 +76,30 @@ const vaultItemInputSchema = z
 
 const loginManagerSetupRequestSchema = z
   .object({
+    identifier: z.string().trim().min(1).max(300).optional(),
     identifierType: loginIdentifierTypeSchema,
     kind: z.literal("login"),
     label: z.string().trim().min(1).max(120),
     origin: loginOriginSchema,
+    passwordHint: z.string().trim().min(1).max(200).optional(),
     target: z.literal("vault"),
   })
-  .strict();
+  .strict()
+  .superRefine((request, context) => {
+    if (request.identifier === undefined) return;
+    if (
+      !loginIdentifierSchema.safeParse({
+        type: request.identifierType,
+        value: request.identifier,
+      }).success
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Enter a valid sign-in identifier.",
+        path: ["identifier"],
+      });
+    }
+  });
 
 const nonLoginManagerSetupRequestSchema = z
   .object({
@@ -110,8 +128,10 @@ export type VaultCreateItemKind = z.infer<typeof vaultCreateItemKindSchema>;
 export function parseManagerSetupSearchParams(
   query: Record<string, string | readonly string[] | undefined>
 ) {
+  const identifier = firstQueryValue(query.identifier);
   const identifierType = firstQueryValue(query.identifier_type);
   const origin = firstQueryValue(query.origin);
+  const passwordHint = firstQueryValue(query.password_hint);
   const input = {
     kind: firstQueryValue(query.kind),
     label: firstQueryValue(query.label),
@@ -121,7 +141,13 @@ export function parseManagerSetupSearchParams(
   return managerSetupRequestSchema.safeParse(
     identifierType === undefined && origin === undefined
       ? input
-      : { ...input, identifierType, origin }
+      : {
+          ...input,
+          identifierType,
+          origin,
+          ...(identifier ? { identifier } : {}),
+          ...(passwordHint ? { passwordHint } : {}),
+        }
   );
 }
 
@@ -136,6 +162,12 @@ export function createManagerSetupUrl(
   if (request.kind === "login") {
     url.searchParams.set("identifier_type", request.identifierType);
     url.searchParams.set("origin", request.origin);
+    if (request.identifier) {
+      url.searchParams.set("identifier", request.identifier);
+    }
+    if (request.passwordHint) {
+      url.searchParams.set("password_hint", request.passwordHint);
+    }
   }
   return url.toString();
 }
