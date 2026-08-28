@@ -1,0 +1,13 @@
+{
+  "name": "OpenInstinct (local-vault-assistant)",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "dev",
+      "command": "cd \"$(git rev-parse --show-toplevel)\" && export PATH=\"/usr/bin:$PATH\" && pnpm db:migrate && pnpm dev:app",
+      "description": "Applies Drizzle migrations, then runs the Next.js dev server (Turbopack) on http://localhost:3000."
+    }
+  ],
+  "ports": [{ "name": "web", "port": 3000 }]
+}
