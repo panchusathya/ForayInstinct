@@ -113,23 +113,31 @@ describe("root and worker capability boundaries", () => {
     );
   });
 
-  it("requires structured completion for initial and resumed worker calls", () => {
+  it("requires structured completion without a parent-supplied outputSchema", () => {
     const rootInstructions = readFileSync("agent/instructions.md", "utf8");
     const workerConfig = readFileSync(`${workerRoot}/agent.ts`, "utf8");
+    const workerInstructions = readFileSync(
+      `${workerRoot}/instructions.md`,
+      "utf8"
+    );
 
     expect(rootInstructions).toContain(
+      "Do not pass `outputSchema` on `worker` calls"
+    );
+    expect(rootInstructions).toContain("do not retry the same handoff");
+    expect(rootInstructions).not.toContain(
       "Every initial or resumed `worker` call must set `outputSchema`"
     );
-    expect(rootInstructions).toContain('"required": ["status", "message"]');
-    expect(rootInstructions).toContain(
-      "including when passing an existing `agentId`"
-    );
-    expect(rootInstructions).toContain(
-      "calling Eve's native `final_output` tool exactly once"
-    );
+    expect(rootInstructions).not.toContain('"additionalProperties": false');
     expect(workerConfig).toContain("outputSchema: taskCompletionSchema");
     expect(workerConfig).toContain(
-      "Every initial and resumed call must include the task-completion outputSchema"
+      "The parent must not pass a per-call outputSchema"
+    );
+    expect(workerInstructions).toContain(
+      "Put every acknowledgement, question, approval request"
+    );
+    expect(workerInstructions).toContain(
+      "native `final_output` tool exactly once"
     );
   });
 });

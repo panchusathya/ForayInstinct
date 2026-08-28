@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { MessageStreamEvent } from "eve/client";
-import { taskCompletionSchema } from "../task-completion";
+import { parseTaskCompletion } from "../task-completion";
 
 const workerTaskNotificationPrefix = /^Background task (\S+) \(worker\) /u;
 const terminalTaskControlSchema = z.object({
@@ -249,19 +249,6 @@ function readBackgroundWorkerReceiptTaskId(event: MessageStreamEvent) {
   }
 
   return undefined;
-}
-
-function parseTaskCompletion(output: unknown) {
-  const direct = taskCompletionSchema.safeParse(output);
-  if (direct.success) return direct.data;
-  if (typeof output !== "string") return undefined;
-
-  try {
-    const parsed = taskCompletionSchema.safeParse(JSON.parse(output));
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function elapsedMs(start: string, end: string) {
