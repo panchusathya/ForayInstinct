@@ -48,6 +48,11 @@ export const env = createEnv({
       "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     ),
 
+    // GoForay bridge. Empty keeps the upstream OpenInstinct experience
+    // usable; deployed candidate workflows require both values.
+    JUICEBOX_API_URL: z.string().url().optional(),
+    OPENINSTINCT_SHARED_SECRET: z.string().min(32).optional(),
+
     // Optional
     GOOGLE_CONNECTOR_UID: requiredValue.default("google/open-instinct"),
     LINQ_CONNECTOR: requiredValue.optional(),

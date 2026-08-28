@@ -11,6 +11,7 @@ import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
 import { accessScopeForUser } from "@/lib/access-scope";
 import { env } from "@/lib/env";
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
+import { recordConversationMessage } from "@/lib/goforay/bridge";
 
 const verifiedPhoneUserSchema = z.object({
   id: z.string().min(1),
@@ -139,6 +140,16 @@ export default linqChannel({
       ? `better-auth:${verifiedUserId}`
       : auth.principalId;
     const scope = accessScopeForUser(principalId);
+    const body = messageText(message);
+    if (body) {
+      void recordConversationMessage({
+        scope,
+        conversationId: `linq:${scope.userId}`,
+        channel: "linq",
+        direction: "inbound",
+        body,
+      }).catch(() => undefined);
+    }
     return {
       auth: {
         ...auth,
@@ -151,6 +162,34 @@ export default linqChannel({
     };
   },
 });
+
+function firstNonEmptyLine(message: string) {
+  return message
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find(Boolean);
+}
+
+function messageText(value: unknown) {
+  const parsed = z
+    .object({
+      body: z.string().optional(),
+      content: z.string().optional(),
+      message: z.string().optional(),
+      text: z.string().optional(),
+    })
+    .safeParse(value);
+  if (!parsed.success) return "";
+  for (const text of [
+    parsed.data.text,
+    parsed.data.body,
+    parsed.data.content,
+    parsed.data.message,
+  ]) {
+    if (typeof text === "string") return text.trim();
+  }
+  return "";
+}
 
 async function findVerifiedAuthUserIdByPhoneNumber(phoneNumber: string) {
   const context = await auth.$context;

@@ -16,6 +16,7 @@ describe("root and worker capability boundaries", () => {
     expect(toolFiles(rootTools)).toEqual([
       "agent.ts",
       "ask_question.ts",
+      "goforay-applications.ts",
       "google_workspace_read.ts",
       "google_workspace_write.ts",
       "request_vault_setup.ts",

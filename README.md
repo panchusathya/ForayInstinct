@@ -40,6 +40,21 @@ DATABASE_URL_UNPOOLED=postgresql://user:password@host/database
 SECRET_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ```
 
+### GoForay candidate deployment
+
+Deploy this fork independently at `https://apply.goforay.io`, with its own
+Postgres database, Better Auth secret, Kernel key, and vault-encryption key.
+Set `JUICEBOX_API_URL=https://api.goforay.io` and the same
+`OPENINSTINCT_SHARED_SECRET` configured on JuiceBox. This shared secret signs
+short-lived service calls only; it is not an ATS credential and is never sent
+to a browser.
+
+Candidates link their Better Auth account to exactly one JuiceBox candidate by
+a verified email address or phone number. Linq webhooks remain attached to this
+deployment at `/eve/v1/linq`; Retell voice webhooks stay with JuiceBox. The
+recruiter workspace reads the resulting conversation timeline through the
+signed service route, rather than copying this database.
+
 The application database schema and versioned migrations live in `db/`. The
 Drizzle application store uses `DATABASE_URL` for runtime queries; its migration
 commands require the direct `DATABASE_URL_UNPOOLED` connection. Run
