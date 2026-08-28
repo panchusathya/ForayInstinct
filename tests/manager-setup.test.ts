@@ -58,7 +58,6 @@ describe("self-hosted manager", () => {
 
     const url = new URL(
       createManagerSetupUrl("https://assistant.example.com", {
-        identifier: "ada@example.com",
         identifierType: "email",
         kind: "login",
         label: "Workday",
@@ -70,7 +69,6 @@ describe("self-hosted manager", () => {
 
     expect(url.pathname).toBe("/vault");
     expect(Object.fromEntries(url.searchParams)).toEqual({
-      identifier: "ada@example.com",
       identifier_type: "email",
       kind: "login",
       label: "Workday",
@@ -82,7 +80,6 @@ describe("self-hosted manager", () => {
       parseManagerSetupSearchParams(Object.fromEntries(url.searchParams))
     ).toEqual({
       data: {
-        identifier: "ada@example.com",
         identifierType: "email",
         kind: "login",
         label: "Workday",
@@ -94,11 +91,11 @@ describe("self-hosted manager", () => {
     });
     expect(
       managerSetupRequestSchema.safeParse({
-        identifier: "not-an-email",
         identifierType: "email",
         kind: "login",
         label: "Workday",
         origin: "https://wd5.myworkday.com",
+        secret: "must-not-enter-a-url",
         target: "vault",
       }).success
     ).toBe(false);
@@ -109,7 +106,6 @@ describe("self-hosted manager", () => {
         kind: "login",
         label: "Workday",
         origin: "https://wd5.myworkday.com",
-        secret: "must-not-enter-a-url",
         target: "vault",
       }).success
     ).toBe(false);

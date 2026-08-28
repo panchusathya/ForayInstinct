@@ -38,7 +38,7 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain("returns a `Needs vault setup:` blocker");
     expect(instructions).toContain("request_vault_setup");
     expect(instructions).toContain("never ask for the password in chat");
-    expect(instructions).toContain("the candidate's identifier");
+    expect(instructions).toContain("never put an identifier");
     expect(instructions).toContain("[Save the Workday password](url)");
     expect(instructions).toContain(
       "structured `Needs user input:` or `Needs vault setup:` failure"

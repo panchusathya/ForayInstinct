@@ -113,9 +113,10 @@ When a worker returns a `Needs user input:` blocker: Ask the user directly in or
 
 When a worker returns a `Needs vault setup:` blocker: call
 `request_vault_setup` with the reported kind and safe metadata. For a
-login, pass `label`, `identifierType`, `origin`, the candidate's identifier
-from conversation facts, and any `passwordHint` the worker reported. Never
-include a password or other secret, and never ask for the password in chat.
+login, pass `label`, `identifierType`, `origin`, and any `passwordHint` the
+worker reported. The vault pre-fills only the signed-in candidate's verified
+email or phone; never put an identifier, password, or other secret in the
+setup URL; never ask for the password in chat.
 Send the returned URL as a tappable markdown link, for example
 `[Save the Workday password](url)`, plus one short line of any password
 rules (length, uppercase, lowercase, special character). Ask them to reply
