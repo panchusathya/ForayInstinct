@@ -16,6 +16,7 @@ describe("environment", () => {
     for (const [name, value] of Object.entries(requiredEnvironment)) {
       vi.stubEnv(name, value);
     }
+    vi.stubEnv("KERNEL_PROXY_ID", "");
     vi.stubEnv("LINQ_CONNECTOR", "");
     vi.stubEnv("LINQ_API_KEY", "");
     vi.stubEnv("LINQ_WEBHOOK_SECRET", "");
@@ -31,6 +32,15 @@ describe("environment", () => {
     const { env } = await import("../lib/env");
 
     expect(env).toMatchObject(requiredEnvironment);
+    expect(env.KERNEL_PROXY_ID).toBeUndefined();
+  });
+
+  it("accepts a configured Kernel proxy id", async () => {
+    vi.stubEnv("KERNEL_PROXY_ID", "proxy-us-residential");
+
+    const { env } = await import("../lib/env");
+
+    expect(env.KERNEL_PROXY_ID).toBe("proxy-us-residential");
   });
 
   it("provides the Google connector default without enabling Linq", async () => {

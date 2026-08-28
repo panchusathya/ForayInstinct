@@ -33,6 +33,10 @@ export const env = createEnv({
     // Required
     DATABASE_URL: databaseUrlSchema,
     KERNEL_API_KEY: requiredValue,
+    // Optional Kernel dashboard proxy. When set, worker browsers keep
+    // stealth (CAPTCHA solver) and replace Kernel's default shared ISP
+    // exit with this proxy.
+    KERNEL_PROXY_ID: requiredValue.optional(),
     // Vercel's automatic free allowance is deliberately not enough for the
     // candidate agent. A named paid Gateway key makes the routing and billing
     // relationship explicit instead of silently falling back to a free model.
