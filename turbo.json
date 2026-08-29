@@ -6,6 +6,7 @@
       "env": [
         "BETTER_AUTH_*",
         "AI_GATEWAY_API_KEY",
+        "AGENT_STATE_RESET_TOKEN",
         "DATABASE_URL",
         "JUICEBOX_API_URL",
         "EVE_NEXT_*",
@@ -24,6 +25,7 @@
       "env": [
         "BETTER_AUTH_*",
         "AI_GATEWAY_API_KEY",
+        "AGENT_STATE_RESET_TOKEN",
         "DATABASE_URL",
         "DATABASE_URL_UNPOOLED",
         "JUICEBOX_API_URL",
@@ -48,6 +50,7 @@
       "passThroughEnv": [
         "BETTER_AUTH_*",
         "AI_GATEWAY_API_KEY",
+        "AGENT_STATE_RESET_TOKEN",
         "DATABASE_URL",
         "JUICEBOX_API_URL",
         "*_CONNECTOR_UID",
@@ -77,6 +80,7 @@
       "passThroughEnv": [
         "BETTER_AUTH_*",
         "AI_GATEWAY_API_KEY",
+        "AGENT_STATE_RESET_TOKEN",
         "DATABASE_URL",
         "JUICEBOX_API_URL",
         "*_CONNECTOR_UID",
