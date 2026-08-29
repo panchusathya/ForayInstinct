@@ -110,6 +110,9 @@ describe("Kernel browser contract", () => {
       browser: {
         browser_live_view_url: "https://live.kernel.test/browser-1",
       },
+      next_actions: expect.arrayContaining([
+        expect.stringContaining("solve_captcha"),
+      ]),
     });
 
     expect(mocks.createBrowser).toHaveBeenCalledExactlyOnceWith(

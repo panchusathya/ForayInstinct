@@ -72,6 +72,7 @@ export default browserBenchmarkTasks.flatMap((task) =>
                 "computer_action",
                 "execute_playwright_code",
                 "manage_browsers",
+                "solve_captcha",
               ].includes(event.data.result.toolName)
           ),
           satisfies(
