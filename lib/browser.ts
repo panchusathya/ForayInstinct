@@ -24,6 +24,7 @@ const browserStateTtlMs = 2 * 60 * 60 * 1000;
 const browserFileKeyPrefix = "browser-file:";
 const browserMetaKeyPrefix = "browser-meta:";
 const browserStorageKeyPrefix = "browser-storage:";
+const durablePageWaitMs = 8_000;
 
 export const browserTimeoutFloorSeconds = 15 * 60;
 export const brightDataMaxSessionSeconds = 60 * 60;
@@ -111,7 +112,7 @@ export async function createRemoteBrowser(input: {
 }) {
   const sessionId = createSessionId();
   const timeoutSeconds = clampBrowserTimeoutSeconds(input.timeoutSeconds);
-  const handle = await connectRemoteBrowser(sessionId);
+  const handle = await connectRemoteBrowser(sessionId, { provision: true });
   try {
     await prepareSession(handle.page, sessionId);
     if (input.viewport) await handle.page.setViewportSize(input.viewport);
@@ -232,7 +233,10 @@ export async function forgetRemoteBrowser(sessionId: string) {
     );
 }
 
-async function connectRemoteBrowser(sessionId: string) {
+async function connectRemoteBrowser(
+  sessionId: string,
+  options?: { provision?: boolean }
+) {
   const browser = await chromium.connectOverCDP(browserCdpUrl(sessionId), {
     timeout: 60_000,
   });
@@ -240,8 +244,28 @@ async function connectRemoteBrowser(sessionId: string) {
     .contexts()
     .flatMap((context) => context.pages());
   const existing = pickExistingPage(leftoverPages);
-  if (existing) {
+  if (!options?.provision && existing) {
     return { browser, page: existing, sessionId };
+  }
+  if (options?.provision) {
+    try {
+      const page = await attachDurableDecodoPage(
+        browser,
+        sessionId,
+        leftoverPages
+      );
+      return { browser, page, sessionId };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        JSON.stringify({
+          error: message,
+          kind: "browser.decodo_attach_failed",
+          sessionId,
+        })
+      );
+      if (existing) return { browser, page: existing, sessionId };
+    }
   }
   const page =
     existing ?? (await browser.contexts().at(0)?.newPage()) ?? undefined;
@@ -345,6 +369,51 @@ async function touchRemoteBrowser(
   } finally {
     await releaseRemoteBrowser(handle.browser);
   }
+}
+
+async function attachDurableDecodoPage(
+  browser: Browser,
+  sessionId: string,
+  leftoverPages: Page[]
+) {
+  const proxy = decodoProxyForSession(sessionId);
+  const session = await browser.newBrowserCDPSession();
+  const created = asRecord(
+    await sendCdp(session, "Target.createBrowserContext", {
+      disposeOnDetach: false,
+      proxyServer: authenticatedProxyServer(proxy),
+    })
+  );
+  const browserContextId =
+    typeof created.browserContextId === "string"
+      ? created.browserContextId
+      : undefined;
+  if (typeof browserContextId !== "string") {
+    throw new Error("Bright Data did not create a durable proxy context.");
+  }
+  await sendCdp(session, "Target.createTarget", {
+    browserContextId,
+    url: "about:blank",
+  });
+  const page = await waitForNewPage(browser, leftoverPages);
+  await Promise.all(
+    leftoverPages.map((leftover) => leftover.close().catch(() => undefined))
+  );
+  return page;
+}
+
+async function waitForNewPage(browser: Browser, leftoverPages: Page[]) {
+  const previous = new Set(leftoverPages);
+  const deadline = Date.now() + durablePageWaitMs;
+  while (Date.now() < deadline) {
+    const found = browser
+      .contexts()
+      .flatMap((context) => context.pages())
+      .find((page) => !previous.has(page));
+    if (found) return found;
+    await sleep(100);
+  }
+  throw new Error("Durable proxy context did not open a page.");
 }
 
 async function materializeStagedFiles(sessionId: string) {
@@ -532,6 +601,17 @@ function isHttpUrl(value: string) {
   return value.startsWith("https://") || value.startsWith("http://");
 }
 
+function authenticatedProxyServer(proxy: {
+  password: string;
+  server: string;
+  username: string;
+}) {
+  const url = new URL(proxy.server);
+  url.username = proxy.username;
+  url.password = proxy.password;
+  return url.toString();
+}
+
 function brightDataCredentials(sessionId: string) {
   const auth = normalizeBrightDataBrowserAuth(env.BRIGHT_DATA_BROWSER_AUTH);
   const separator = auth.indexOf(":");
@@ -568,6 +648,12 @@ async function abortOrTimeout(
       },
       { once: true }
     );
+  });
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
   });
 }
 
