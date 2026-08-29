@@ -1,6 +1,5 @@
-import Kernel from "@onkernel/sdk";
 import { z } from "zod";
-import { env } from "../../env";
+import { browserCdpUrl } from "../../browser";
 import type { AutofillClaim } from "../vault-autofill-protocol";
 import {
   classifyNativeLoginControl,
@@ -462,10 +461,10 @@ async function withKernelPage<T>(
     readonly sessionId: readonly string[];
   }) => Promise<T>
 ) {
-  const browser = await new Kernel({
-    apiKey: env.KERNEL_API_KEY,
-  }).browsers.retrieve(browserSessionId, {}, { signal });
-  const connection = await CdpConnection.connect(browser.cdp_ws_url, signal);
+  const connection = await CdpConnection.connect(
+    browserCdpUrl(browserSessionId),
+    signal
+  );
 
   try {
     const { targetInfos } = targetListSchema.parse(
@@ -541,7 +540,7 @@ class CdpConnection {
       this.#onMessage(event);
     });
     socket.addEventListener("close", () => {
-      this.#rejectPending(new Error("The Kernel CDP connection closed."));
+      this.#rejectPending(new Error("The browser CDP connection closed."));
     });
     signal?.addEventListener(
       "abort",
@@ -566,7 +565,7 @@ class CdpConnection {
       };
       const onError = () => {
         cleanup();
-        reject(new Error("Could not connect to the Kernel browser over CDP."));
+        reject(new Error("Could not connect to the browser over CDP."));
       };
       const onAbort = () => {
         cleanup();

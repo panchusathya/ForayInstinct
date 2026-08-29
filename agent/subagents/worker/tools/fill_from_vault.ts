@@ -10,6 +10,7 @@ import {
   fillWithKernelNativeAutofill,
   nativeAutofillTokens,
 } from "@/lib/manager/server/kernel-native-autofill";
+import { withWorkerToolError } from "@/agent/lib/worker-tool-error";
 import { fillFromVaultRequestSchema } from "@/lib/manager/vault-autofill";
 
 const outputSchema = z.object({
@@ -27,59 +28,64 @@ export default defineTool({
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
 
-    await requireOwnedBrowserSession(scope, input.browserSessionId);
-    const item = await readVaultItem(scope, input.candidateId);
-    if (!item) throw new Error("The selected vault item was not found.");
-    if (
-      item.kind !== "address" &&
-      item.kind !== "login" &&
-      item.kind !== "payment"
-    ) {
-      throw new Error(
-        "Native browser autofill currently supports only logins, cards, and addresses."
-      );
-    }
+    return withWorkerToolError(
+      "fill_from_vault",
+      input.browserSessionId,
+      async () => {
+        await requireOwnedBrowserSession(scope, input.browserSessionId);
+        const item = await readVaultItem(scope, input.candidateId);
+        if (!item) throw new Error("The selected vault item was not found.");
+        if (
+          item.kind !== "address" &&
+          item.kind !== "login" &&
+          item.kind !== "payment"
+        ) {
+          throw new Error(
+            "Native browser autofill currently supports only logins, cards, and addresses."
+          );
+        }
+        const origin = await currentKernelPageOrigin({
+          browserSessionId: input.browserSessionId,
+          signal: context.abortSignal,
+        });
+        const surfaceKind =
+          item.kind === "payment"
+            ? "payment-card"
+            : item.kind === "login"
+              ? "credentials"
+              : "postal-address";
+        const tokens = nativeAutofillTokens[item.kind];
+        const surface = {
+          fields: tokens.map((token) => ({ score: 100, token })),
+          id: surfaceKind,
+          kind: surfaceKind,
+        };
 
-    const origin = await currentKernelPageOrigin({
-      browserSessionId: input.browserSessionId,
-      signal: context.abortSignal,
-    });
-    const surfaceKind =
-      item.kind === "payment"
-        ? "payment-card"
-        : item.kind === "login"
-          ? "credentials"
-          : "postal-address";
-    const tokens = nativeAutofillTokens[item.kind];
-    const surface = {
-      fields: tokens.map((token) => ({ score: 100, token })),
-      id: surfaceKind,
-      kind: surfaceKind,
-    };
+        const claims = await materializeAutofillClaims(
+          scope,
+          input.candidateId,
+          {
+            availableTokens: new Set(tokens),
+            origin,
+            surface,
+          },
+          vaultAutofillProvider
+        );
+        const result = await fillWithKernelNativeAutofill({
+          browserSessionId: input.browserSessionId,
+          claims,
+          expectedOrigin: origin,
+          kind: item.kind,
+          signal: context.abortSignal,
+        });
 
-    const claims = await materializeAutofillClaims(
-      scope,
-      input.candidateId,
-      {
-        availableTokens: new Set(tokens),
-        origin,
-        surface,
-      },
-      vaultAutofillProvider
+        return {
+          filledClaims: result.filledClaims,
+          kind: item.kind,
+          origin: result.origin,
+          success: true as const,
+        };
+      }
     );
-    const result = await fillWithKernelNativeAutofill({
-      browserSessionId: input.browserSessionId,
-      claims,
-      expectedOrigin: origin,
-      kind: item.kind,
-      signal: context.abortSignal,
-    });
-
-    return {
-      filledClaims: result.filledClaims,
-      kind: item.kind,
-      origin: result.origin,
-      success: true as const,
-    };
   },
 });

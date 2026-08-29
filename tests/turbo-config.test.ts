@@ -5,10 +5,11 @@ import { z } from "zod";
 const applicationEnvironment = [
   "BETTER_AUTH_*",
   "AI_GATEWAY_API_KEY",
+  "BRIGHT_DATA_BROWSER_AUTH",
   "DATABASE_URL",
+  "DECODO_PROXY_URL",
   "JUICEBOX_API_URL",
   "*_CONNECTOR_UID",
-  "KERNEL_*",
   "LINQ_*",
   "NODE_ENV",
   "OPENINSTINCT_SHARED_SECRET",

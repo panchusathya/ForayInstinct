@@ -1,8 +1,3 @@
-import type {
-  BrowserCreateResponse,
-  BrowserRetrieveResponse,
-  BrowserUpdateResponse,
-} from "@onkernel/sdk/resources/browsers";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import {
@@ -10,10 +5,15 @@ import {
   deleteBrowserSession,
   listBrowserSessions,
 } from "@/db/services/browsers";
-import { env } from "@/lib/env";
-import { kernel } from "@/lib/kernel";
+import {
+  createRemoteBrowser,
+  describeRemoteBrowser,
+  updateRemoteBrowserViewport,
+  type BrowserDescriptor,
+} from "@/lib/browser";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
+import { withWorkerToolError } from "@/agent/lib/worker-tool-error";
 
 const browserTimeoutFloorSeconds = 15 * 60;
 
@@ -40,94 +40,81 @@ export default defineTool({
   inputSchema,
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
-    const signal = context.abortSignal;
 
-    switch (input.action) {
-      case "create": {
-        const browser = await kernel.browsers.create(
-          {
-            start_url: input.start_url,
-            stealth: true,
-            timeout_seconds:
-              input.timeout_seconds ?? browserTimeoutFloorSeconds,
-            viewport: browserViewport(input),
-            ...(env.KERNEL_PROXY_ID === undefined
-              ? {}
-              : { proxy: { id: env.KERNEL_PROXY_ID } }),
-          },
-          { signal }
-        );
-        try {
-          await createBrowserSession(scope, {
-            createdAt: browser.created_at,
-            sessionId: browser.session_id,
-          });
-        } catch (error) {
-          await kernel.browsers
-            .deleteByID(browser.session_id, { signal })
-            .catch(() => undefined);
-          throw error;
+    return withWorkerToolError(
+      "manage_browsers",
+      input.session_id,
+      async () => {
+        switch (input.action) {
+          case "create": {
+            const viewport = browserViewport(input);
+            const browser = await createRemoteBrowser({
+              startUrl: input.start_url,
+              viewport,
+            });
+            await createBrowserSession(scope, {
+              createdAt: browser.created_at,
+              sessionId: browser.session_id,
+            });
+            return lifecycleResult(browser);
+          }
+          case "list": {
+            const records = await listBrowserSessions(scope);
+            const offset = input.offset ?? 0;
+            const limit = input.limit ?? 100;
+            const browsers = await Promise.all(
+              records.map(async ({ sessionId }) => {
+                try {
+                  return await describeRemoteBrowser(sessionId);
+                } catch {
+                  return input.status === "deleted"
+                    ? {
+                        browser_live_view_url: "",
+                        session_id: sessionId,
+                        status: "deleted" as const,
+                      }
+                    : null;
+                }
+              })
+            );
+            return {
+              has_more: false,
+              items: browsers
+                .filter((browser) => browser !== null)
+                .filter((browser) =>
+                  input.status === "deleted"
+                    ? browser.status === "deleted"
+                    : input.status === "active"
+                      ? browser.status === "active"
+                      : true
+                )
+                .slice(offset, offset + limit),
+              next_offset: null,
+            };
+          }
+          case "get": {
+            const sessionId = requireSessionId(input.session_id);
+            await requireOwnedBrowserSession(scope, sessionId);
+            return describeRemoteBrowser(sessionId);
+          }
+          case "update": {
+            const sessionId = requireSessionId(input.session_id);
+            await requireOwnedBrowserSession(scope, sessionId);
+            const viewport = browserViewport(input);
+            const browser = viewport
+              ? await updateRemoteBrowserViewport(sessionId, viewport)
+              : await describeRemoteBrowser(sessionId);
+            return lifecycleResult(browser);
+          }
+          case "delete": {
+            const sessionId = requireSessionId(input.session_id);
+            await requireOwnedBrowserSession(scope, sessionId);
+            await deleteBrowserSession(scope, sessionId);
+            return "Browser session deleted successfully";
+          }
         }
-        return lifecycleResult(browser);
       }
-      case "list": {
-        const records = await listBrowserSessions(scope);
-        const includeDeleted = input.status !== "active";
-        const browsers = await Promise.all(
-          records.map(async ({ sessionId }) => {
-            try {
-              const browser = await kernel.browsers.retrieve(
-                sessionId,
-                { include_deleted: includeDeleted },
-                { signal }
-              );
-              const value = browserDescriptor(browser);
-              if (input.status === "deleted" && value.status !== "deleted") {
-                return null;
-              }
-              if (input.status === "active" && value.status !== "active") {
-                return null;
-              }
-              return value;
-            } catch {
-              return null;
-            }
-          })
-        );
-        const offset = input.offset ?? 0;
-        const limit = input.limit ?? 100;
-        return {
-          has_more: false,
-          items: browsers
-            .filter((browser) => browser !== null)
-            .slice(offset, offset + limit),
-          next_offset: null,
-        };
-      }
-      case "get": {
-        const sessionId = requireSessionId(input.session_id);
-        await requireOwnedBrowserSession(scope, sessionId);
-        return browserDescriptor(
-          await kernel.browsers.retrieve(sessionId, {}, { signal })
-        );
-      }
-      case "update": {
-        const sessionId = requireSessionId(input.session_id);
-        await requireOwnedBrowserSession(scope, sessionId);
-        const viewport = browserViewport(input);
-        const browser = viewport
-          ? await kernel.browsers.update(sessionId, { viewport }, { signal })
-          : await kernel.browsers.retrieve(sessionId, {}, { signal });
-        return lifecycleResult(browser);
-      }
-      case "delete": {
-        const sessionId = requireSessionId(input.session_id);
-        await requireOwnedBrowserSession(scope, sessionId);
-        await kernel.browsers.deleteByID(sessionId, { signal });
-        await deleteBrowserSession(scope, sessionId);
-        return "Browser session deleted successfully";
-      }
-    }
+    );
   },
 });
 
@@ -146,28 +133,13 @@ function browserViewport(input: z.infer<typeof inputSchema>) {
   return { height, width };
 }
 
-type KernelBrowser =
-  | BrowserCreateResponse
-  | BrowserRetrieveResponse
-  | BrowserUpdateResponse;
-
-function browserDescriptor(browser: KernelBrowser) {
+function lifecycleResult(browser: BrowserDescriptor) {
   return {
-    browser_live_view_url: browser.browser_live_view_url,
-    session_id: browser.session_id,
-    status: browser.deleted_at ? "deleted" : "active",
-    viewport: browser.viewport ?? undefined,
-  };
-}
-
-function lifecycleResult(browser: KernelBrowser) {
-  const value = browserDescriptor(browser);
-  return {
-    browser: value,
+    browser,
     next_actions: [
-      `Use execute_playwright_code with session_id "${value.session_id}" for deterministic browser automation.`,
-      `Use computer_action with session_id "${value.session_id}" for visual browser control.`,
-      `Use manage_browsers with action "delete" and session_id "${value.session_id}" when finished.`,
+      `Use execute_playwright_code with session_id "${browser.session_id}" for deterministic browser automation.`,
+      `Use computer_action with session_id "${browser.session_id}" for visual browser control.`,
+      `Use manage_browsers with action "delete" and session_id "${browser.session_id}" when finished.`,
     ],
   };
 }

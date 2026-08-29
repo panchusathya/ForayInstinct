@@ -34,13 +34,14 @@ pnpm install --frozen-lockfile
 
 # --- Local development environment (git-ignored) --------------------------
 # lib/env.ts supplies local defaults for Better Auth / encryption / AI Gateway
-# in development, but DATABASE_URL and KERNEL_API_KEY have no defaults. The
-# placeholder Kernel key lets the app boot; real browser execution needs a
-# genuine key supplied as a secret.
+# in development, but DATABASE_URL, BRIGHT_DATA_BROWSER_AUTH, and
+# DECODO_PROXY_URL have no defaults. The placeholders let the app boot; real
+# browser execution needs genuine Bright Data and Decodo credentials.
 if [ ! -f .env ]; then
   cat > .env <<'ENV'
 DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/open_instinct
 DATABASE_URL_UNPOOLED=postgresql://postgres:postgres@127.0.0.1:5432/open_instinct
-KERNEL_API_KEY=local-dev-placeholder
+BRIGHT_DATA_BROWSER_AUTH=brd-customer-local-zone-browser:placeholder
+DECODO_PROXY_URL=http://user:pass@gate.decodo.com:7000
 ENV
 fi

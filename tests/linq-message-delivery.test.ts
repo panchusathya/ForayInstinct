@@ -1,24 +1,72 @@
 /* oxlint-disable typescript/no-unsafe-type-assertion -- Eve's Linq adapter exposes the handler context through a transitive Chat SDK `any`; the fixture supplies only the fields exercised here. */
-import type * as LinqModule from "eve/channels/linq";
 import { describe, expect, it, vi } from "vitest";
 import workerCancellationHook from "../agent/hooks/worker-cancellation-delivery";
 
-const linqChannelCapture = vi.hoisted(() => ({ config: undefined as unknown }));
-vi.mock("eve/channels/linq", async (importOriginal) => {
-  const original = await importOriginal<typeof LinqModule>();
-  return {
-    ...original,
-    linqChannel(config: unknown) {
-      linqChannelCapture.config = config;
-      return config;
-    },
-  };
-});
+const cancellationStore = vi.hoisted(() => new Map<string, string>());
+const chatSdkChannelCapture = vi.hoisted(() => ({
+  events: undefined as
+    | {
+        "action.result"?: (...args: never[]) => unknown;
+        "message.completed"?: (...args: never[]) => unknown;
+      }
+    | undefined,
+}));
+
+vi.mock("../agent/lib/worker-cancellation-delivery", () => ({
+  async recordWorkerCancellationTurn(
+    sessionId: string,
+    turnId: string,
+    message: string
+  ) {
+    const taskId = /^Background task (\S+) \(worker\) is cancelled\.$/u.exec(
+      message
+    )?.[1];
+    if (taskId) cancellationStore.set(`${sessionId}:${turnId}`, taskId);
+  },
+  async consumeWorkerCancellationTurn(sessionId: string, turnId: string) {
+    const key = `${sessionId}:${turnId}`;
+    const taskId = cancellationStore.get(key);
+    cancellationStore.delete(key);
+    return taskId;
+  },
+  async clearWorkerCancellationTurn(sessionId: string, turnId: string) {
+    cancellationStore.delete(`${sessionId}:${turnId}`);
+  },
+}));
+
+vi.mock("eve/channels/chat-sdk", () => ({
+  chatSdkChannel(config: { events: typeof chatSdkChannelCapture.events }) {
+    chatSdkChannelCapture.events = config.events;
+    return {
+      bot: {
+        getAdapter: () => ({
+          addReaction: async () => undefined,
+          markRead: async () => undefined,
+        }),
+        onDirectMessage() {
+          return undefined;
+        },
+        onNewMessage() {
+          return undefined;
+        },
+      },
+      channel: {},
+      send: async () => undefined,
+    };
+  },
+}));
+
+vi.mock("@linqapp/chat-sdk-adapter", () => ({
+  createLinqAdapter: () => ({}),
+}));
+
+vi.mock("@/lib/linq-state", () => ({
+  createPostgresState: () => ({}),
+}));
+
 await import("../agent/channels/linq-v2");
 
-const channelEvents = (
-  linqChannelCapture.config as LinqModule.LinqChannelConfig
-).events;
+const channelEvents = chatSdkChannelCapture.events;
 const trackWorkerCancellation = channelEvents?.["action.result"];
 const deliverCompletedMessage = channelEvents?.["message.completed"];
 if (!trackWorkerCancellation || !deliverCompletedMessage) {

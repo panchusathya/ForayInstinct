@@ -10,7 +10,7 @@ You stay in control of your passwords, credit cards and context.
 It's Open Source, self-hostable, and can use any model.
 One-click deploy to Vercel and get rolling.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FMerit-Systems%2Fopen-instinct&project-name=open-instinct&repository-name=open-instinct&products=%5B%7B%22type%22%3A%22integration%22%2C%22protocol%22%3A%22other%22%2C%22productSlug%22%3A%22kernel%22%2C%22integrationSlug%22%3A%22kernel%22%7D%2C%7B%22type%22%3A%22integration%22%2C%22protocol%22%3A%22storage%22%2C%22productSlug%22%3A%22neon%22%2C%22integrationSlug%22%3A%22neon%22%7D%5D)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FMerit-Systems%2Fopen-instinct&project-name=open-instinct&repository-name=open-instinct&products=%5B%7B%22type%22%3A%22integration%22%2C%22protocol%22%3A%22storage%22%2C%22productSlug%22%3A%22neon%22%2C%22integrationSlug%22%3A%22neon%22%7D%5D)
 
 <img src=".github/demo.png" alt="OpenInstinct booking movie tickets over iMessage — it walks Fandango to checkout and reports the theater, showtime, seat, and total" width="640">
 
@@ -26,8 +26,10 @@ reading the code!
 
 ## Deployment
 
-The deploy button provisions [Kernel](https://kernel.sh) for cloud browsers and
-[Neon](https://neon.tech) for Postgres. Vercel AI Gateway handles inference.
+The deploy button provisions [Neon](https://neon.tech) for Postgres. Add
+[Bright Data Browser API](https://docs.brightdata.com/scraping-automation/scraping-browser/configuration)
+credentials and a [Decodo](https://help.decodo.com/docs/residential-proxy-custom-sticky-sessions)
+residential proxy URL for hosted browsers. Vercel AI Gateway handles inference.
 [Linq](https://linq.app) is optional and requires the setup below before
 iMessage or production phone sign-in is available. Usage is billed to your
 Vercel account. Set the remaining auth variables on the deployment:
@@ -37,13 +39,16 @@ BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 BETTER_AUTH_URL=https://your-host
 DATABASE_URL=postgresql://user:password@host/database
 DATABASE_URL_UNPOOLED=postgresql://user:password@host/database
+BRIGHT_DATA_BROWSER_AUTH=brd-customer-YOUR_ID-zone-YOUR_ZONE:YOUR_PASSWORD
+DECODO_PROXY_URL=http://user:pass@gate.decodo.com:7000
 SECRET_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ```
 
 ### GoForay candidate deployment
 
 Deploy this fork independently at `https://apply.goforay.io`, with its own
-Postgres database, Better Auth secret, Kernel key, and vault-encryption key.
+Postgres database, Better Auth secret, Bright Data Browser API credentials,
+Decodo residential proxy URL, and vault-encryption key.
 Set `JUICEBOX_API_URL=https://api.goforay.io` and the same
 `OPENINSTINCT_SHARED_SECRET` configured on JuiceBox. This shared secret signs
 short-lived service calls only; it is not an ATS credential and is never sent
@@ -166,7 +171,7 @@ stops and removes the PostgreSQL container; its data remains in the
 `postgres-data` volume for the next run. Run `pnpm dev:app` when intentionally
 using an externally managed database instead.
 
-Local development otherwise uses the same vault, Kernel browser, and AI Gateway
+Local development otherwise uses the same vault, Bright Data browser, and AI Gateway
 path as the Vercel deployment. Better Auth and vault encryption use stable
 local-only defaults when their variables are unset; deployments still require
 explicit secrets.
@@ -178,6 +183,6 @@ explicit secrets.
 
 <div align="center">
 
-Built on [Vercel](https://vercel.com) · [Kernel](https://kernel.sh) · [Linq](https://linq.app) · [Neon](https://neon.tech)
+Built on [Vercel](https://vercel.com) · [Bright Data](https://brightdata.com) · [Decodo](https://decodo.com) · [Linq](https://linq.app) · [Neon](https://neon.tech)
 
 </div>

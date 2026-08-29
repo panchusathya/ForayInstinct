@@ -32,11 +32,22 @@ export const env = createEnv({
   server: {
     // Required
     DATABASE_URL: databaseUrlSchema,
-    KERNEL_API_KEY: requiredValue,
-    // Optional Kernel dashboard proxy. When set, worker browsers keep
-    // stealth (CAPTCHA solver) and replace Kernel's default shared ISP
-    // exit with this proxy.
-    KERNEL_PROXY_ID: requiredValue.optional(),
+    // Bright Data Browser API credentials (`customer-zone:password`). Worker
+    // browsers connect over CDP; `-session-<id>` is appended so later tool
+    // calls can resume the same hosted Chrome.
+    BRIGHT_DATA_BROWSER_AUTH: requiredValue.refine(
+      (value) => value.includes(":"),
+      "BRIGHT_DATA_BROWSER_AUTH must be `username:password`."
+    ),
+    // Decodo residential proxy URL. Traffic from the hosted browser uses this
+    // sticky residential exit instead of a shared ISP pool.
+    DECODO_PROXY_URL: z
+      .string()
+      .url()
+      .refine((value) => {
+        const url = new URL(value);
+        return url.username.length > 0 && url.password.length > 0;
+      }, "DECODO_PROXY_URL must include a username and password."),
     // Vercel's automatic free allowance is deliberately not enough for the
     // candidate agent. A named paid Gateway key makes the routing and billing
     // relationship explicit instead of silently falling back to a free model.

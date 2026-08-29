@@ -3,21 +3,17 @@ import { z } from "zod";
 import manageBrowsers from "../agent/subagents/worker/tools/manage_browsers";
 
 const mocks = vi.hoisted(() => ({
-  createBrowser: vi.fn<
-    (
-      _input: unknown,
-      _options: unknown
-    ) => Promise<{
+  createRemoteBrowser: vi.fn<
+    (_input: unknown) => Promise<{
       browser_live_view_url: string;
       created_at: string;
-      deleted_at: null;
       session_id: string;
-      viewport: null;
+      status: "active";
+      viewport?: { height: number; width: number };
     }>
   >(),
   createBrowserSession:
     vi.fn<(_scope: unknown, _record: unknown) => Promise<void>>(),
-  kernelProxyId: undefined as string | undefined,
   requireWorkerScope: vi.fn<(_context: unknown) => Promise<unknown>>(),
 }));
 
@@ -31,35 +27,25 @@ vi.mock("@/db/services/browsers", () => ({
   listBrowserSessions: vi.fn<() => Promise<never[]>>(),
 }));
 
-vi.mock("@/lib/kernel", () => ({
-  kernel: { browsers: { create: mocks.createBrowser } },
-}));
-
-vi.mock("@/lib/env", () => ({
-  env: {
-    get KERNEL_PROXY_ID() {
-      return mocks.kernelProxyId;
-    },
-  },
+vi.mock("@/lib/browser", () => ({
+  createRemoteBrowser: mocks.createRemoteBrowser,
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.kernelProxyId = undefined;
   mocks.requireWorkerScope.mockResolvedValue({
     userId: "user-1",
     workspaceId: "workspace-1",
   });
-  mocks.createBrowser.mockResolvedValue({
-    browser_live_view_url: "https://live.kernel.test/browser-1",
+  mocks.createRemoteBrowser.mockResolvedValue({
+    browser_live_view_url: "https://inspect.brightdata.test/browser-1",
     created_at: "2026-08-27T00:00:00.000Z",
-    deleted_at: null,
     session_id: "browser-1",
-    viewport: null,
+    status: "active",
   });
 });
 
-describe("Kernel browser contract", () => {
+describe("Bright Data browser contract", () => {
   it("keeps agent-created browsers alive for at least 15 minutes", () => {
     const inputSchema = manageBrowsers.inputSchema;
     if (!(inputSchema instanceof z.ZodType)) {
@@ -83,41 +69,30 @@ describe("Kernel browser contract", () => {
   it("returns the live-view URL for a created browser", async () => {
     const execute = manageBrowsers.execute;
 
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; create only reads abortSignal after the mocked authorization boundary.
     const result = await execute({ action: "create" }, {} as never);
     expect(result).toMatchObject({
       browser: {
-        browser_live_view_url: "https://live.kernel.test/browser-1",
+        browser_live_view_url: "https://inspect.brightdata.test/browser-1",
       },
     });
 
-    expect(mocks.createBrowser).toHaveBeenCalledExactlyOnceWith(
-      {
-        start_url: undefined,
-        stealth: true,
-        timeout_seconds: 900,
-        viewport: undefined,
-      },
-      { signal: undefined }
-    );
+    expect(mocks.createRemoteBrowser).toHaveBeenCalledExactlyOnceWith({
+      startUrl: undefined,
+      viewport: undefined,
+    });
   });
 
-  it("attaches KERNEL_PROXY_ID while keeping stealth", async () => {
-    mocks.kernelProxyId = "proxy-us-residential";
+  it("passes a viewport to Bright Data when both dimensions are set", async () => {
     const execute = manageBrowsers.execute;
 
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; create only reads abortSignal after the mocked authorization boundary.
-    await execute({ action: "create" }, {} as never);
-
-    expect(mocks.createBrowser).toHaveBeenCalledExactlyOnceWith(
-      {
-        start_url: undefined,
-        stealth: true,
-        timeout_seconds: 900,
-        viewport: undefined,
-        proxy: { id: "proxy-us-residential" },
-      },
-      { signal: undefined }
+    await execute(
+      { action: "create", viewport_height: 900, viewport_width: 1440 },
+      {} as never
     );
+
+    expect(mocks.createRemoteBrowser).toHaveBeenCalledExactlyOnceWith({
+      startUrl: undefined,
+      viewport: { height: 900, width: 1440 },
+    });
   });
 });

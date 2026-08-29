@@ -8,7 +8,6 @@ minimumReleaseAgeExclude:
   - "@ai-sdk/*"
   - ai
   - "@vercel/*"
-  - "@onkernel/*"
   - eve
   # These browser and rendering transitive releases are locked by the current Eve UI scaffold.
   - baseline-browser-mapping
