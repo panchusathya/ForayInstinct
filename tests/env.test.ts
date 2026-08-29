@@ -4,7 +4,6 @@ const requiredEnvironment = {
   BETTER_AUTH_SECRET: "test-auth-secret",
   BETTER_AUTH_URL: "https://example.com",
   AI_GATEWAY_API_KEY: "test-ai-gateway-key",
-  BRIGHT_DATA_BROWSER_AUTH: "brd-customer-test-zone-browser:test-password",
   DATABASE_URL: "postgresql://user:password@example.com/database",
   DECODO_PROXY_URL: "http://user:pass@gate.decodo.com:7000",
   SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
@@ -32,14 +31,6 @@ describe("environment", () => {
     const { env } = await import("../lib/env");
 
     expect(env).toMatchObject(requiredEnvironment);
-  });
-
-  it("rejects Bright Data credentials without a password separator", async () => {
-    vi.stubEnv("BRIGHT_DATA_BROWSER_AUTH", "missing-password");
-
-    await expect(import("../lib/env")).rejects.toThrow(
-      "Invalid environment variables"
-    );
   });
 
   it("rejects a Decodo URL without credentials", async () => {
@@ -103,7 +94,7 @@ describe("environment", () => {
     );
   });
 
-  it.each(["DATABASE_URL", "BRIGHT_DATA_BROWSER_AUTH", "DECODO_PROXY_URL"])(
+  it.each(["DATABASE_URL", "DECODO_PROXY_URL"])(
     "keeps %s required in local development",
     async (name) => {
       vi.stubEnv(name, "");
@@ -130,7 +121,6 @@ describe("environment", () => {
     ["AI_GATEWAY_API_KEY", "Invalid environment variables"],
     ["BETTER_AUTH_SECRET", "Invalid environment variables"],
     ["BETTER_AUTH_URL", "Invalid environment variables"],
-    ["BRIGHT_DATA_BROWSER_AUTH", "Invalid environment variables"],
     ["DATABASE_URL", "Invalid environment variables"],
     ["DECODO_PROXY_URL", "Invalid environment variables"],
     ["SECRET_ENCRYPTION_KEY", "Invalid environment variables"],

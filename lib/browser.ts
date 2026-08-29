@@ -1,12 +1,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import chromiumRuntime from "@sparticuz/chromium";
 import path from "node:path";
 import { and, eq, gt, isNull, like, or } from "drizzle-orm";
 import { customAlphabet } from "nanoid";
 import {
-  chromium,
+  chromium as playwrightChromium,
   type Browser,
   type BrowserContext,
-  type CDPSession,
   type Page,
 } from "playwright-core";
 import { transform } from "sucrase";
@@ -18,7 +18,6 @@ const createSessionId = customAlphabet(
   "abcdefghijklmnopqrstuvwxyz0123456789",
   21
 );
-const brightDataCdpHost = "brd.superproxy.io:9222";
 const playwrightTimeoutMs = 60_000;
 const browserStateTtlMs = 2 * 60 * 60 * 1000;
 const browserFileKeyPrefix = "browser-file:";
@@ -26,7 +25,7 @@ const browserMetaKeyPrefix = "browser-meta:";
 const browserStorageKeyPrefix = "browser-storage:";
 
 export const browserTimeoutFloorSeconds = 15 * 60;
-export const brightDataMaxSessionSeconds = 60 * 60;
+export const browserSessionMaxSeconds = 60 * 60;
 
 export interface BrowserDescriptor {
   browser_live_view_url: string;
@@ -39,27 +38,6 @@ export interface BrowserSessionHandle {
   browser: Browser;
   page: Page;
   sessionId: string;
-}
-
-export function browserCdpUrl(sessionId: string) {
-  const { password, username } = brightDataCredentials(sessionId);
-  return `wss://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${brightDataCdpHost}`;
-}
-
-/**
- * Accept the credential pair Bright Data documents as well as a copied CDP
- * endpoint. The latter is easy to paste into an environment variable, but the
- * connection builder owns the endpoint and must not treat it as part of the
- * password.
- */
-export function normalizeBrightDataBrowserAuth(value: string) {
-  const match = value
-    .trim()
-    .match(/^(?:wss:\/\/)?([^:]+):(.+?)@brd\.superproxy\.io(?::9222)?\/?$/i);
-
-  return match
-    ? `${decodeURIComponent(match[1]!)}:${decodeURIComponent(match[2]!)}`
-    : value;
 }
 
 export function decodoProxyForSession(sessionId: string) {
@@ -77,7 +55,7 @@ export function clampBrowserTimeoutSeconds(timeoutSeconds?: number) {
   const requested = timeoutSeconds ?? browserTimeoutFloorSeconds;
   return Math.min(
     Math.max(requested, browserTimeoutFloorSeconds),
-    brightDataMaxSessionSeconds
+    browserSessionMaxSeconds
   );
 }
 
@@ -88,8 +66,8 @@ export function browserKeepAliveUntil(
 ) {
   const createdMs = Date.parse(createdAt);
   const sessionEnd = Number.isNaN(createdMs)
-    ? nowMs + brightDataMaxSessionSeconds * 1000
-    : createdMs + brightDataMaxSessionSeconds * 1000;
+    ? nowMs + browserSessionMaxSeconds * 1000
+    : createdMs + browserSessionMaxSeconds * 1000;
   return new Date(
     Math.min(nowMs + timeoutSeconds * 1000, sessionEnd)
   ).toISOString();
@@ -113,7 +91,6 @@ export async function createRemoteBrowser(input: {
   const timeoutSeconds = clampBrowserTimeoutSeconds(input.timeoutSeconds);
   const handle = await connectRemoteBrowser(sessionId);
   try {
-    await prepareSession(handle.page, sessionId);
     if (input.viewport) await handle.page.setViewportSize(input.viewport);
     if (input.startUrl) {
       await handle.page.goto(input.startUrl, {
@@ -121,18 +98,16 @@ export async function createRemoteBrowser(input: {
         waitUntil: "domcontentloaded",
       });
     }
-    const liveView = await inspectLiveView(handle.page);
     const createdAt = new Date().toISOString();
     await saveBrowserMeta(sessionId, {
       createdAt,
       keepAliveUntil: browserKeepAliveUntil(createdAt, timeoutSeconds),
-      liveView,
       timeoutSeconds,
       viewport: input.viewport,
     });
     await snapshotSession(handle.page, sessionId);
     return {
-      browser_live_view_url: liveView,
+      browser_live_view_url: "",
       created_at: createdAt,
       session_id: sessionId,
       status: "active" as const,
@@ -153,19 +128,16 @@ export async function updateRemoteBrowserViewport(
 ) {
   const handle = await connectRemoteBrowser(sessionId);
   try {
-    await prepareSession(handle.page, sessionId);
     await restoreSessionIfNeeded(handle.page, sessionId);
     await handle.page.setViewportSize(viewport);
-    const liveView = await inspectLiveView(handle.page);
     await saveBrowserMeta(sessionId, {
-      liveView,
       viewport,
     });
     await persistTouchedSession(handle.page, sessionId, {
       extendKeepAlive: true,
     });
     return {
-      browser_live_view_url: liveView,
+      browser_live_view_url: "",
       session_id: sessionId,
       status: "active" as const,
       viewport,
@@ -193,33 +165,6 @@ export async function extendRemoteBrowserKeepAlive(
   });
 }
 
-export async function keepAliveActiveBrowsers() {
-  const rows = await db
-    .select({ key: chatStateValues.key, value: chatStateValues.value })
-    .from(chatStateValues)
-    .where(
-      and(like(chatStateValues.key, `${browserMetaKeyPrefix}%`), unexpired())
-    );
-  for (const row of rows) {
-    const sessionId = row.key.slice(browserMetaKeyPrefix.length);
-    if (sessionId.length === 0) continue;
-    const parsed = browserMetaSchema.safeParse(row.value);
-    if (!parsed.success || !shouldKeepAliveBrowser(parsed.data)) continue;
-    try {
-      await touchRemoteBrowser(sessionId, { extendKeepAlive: false });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(
-        JSON.stringify({
-          error: message,
-          kind: "browser.keepalive_failed",
-          sessionId,
-        })
-      );
-    }
-  }
-}
-
 export async function forgetRemoteBrowser(sessionId: string) {
   await db
     .delete(chatStateValues)
@@ -233,22 +178,14 @@ export async function forgetRemoteBrowser(sessionId: string) {
 }
 
 async function connectRemoteBrowser(sessionId: string) {
-  const browser = await chromium.connectOverCDP(browserCdpUrl(sessionId), {
-    timeout: 60_000,
+  const browser = await playwrightChromium.launch({
+    args: chromiumRuntime.args,
+    executablePath: await chromiumRuntime.executablePath(),
+    headless: true,
+    proxy: decodoProxyForSession(sessionId),
   });
-  const leftoverPages = browser
-    .contexts()
-    .flatMap((context) => context.pages());
-  const existing = pickExistingPage(leftoverPages);
-  if (existing) {
-    return { browser, page: existing, sessionId };
-  }
-  const page =
-    existing ?? (await browser.contexts().at(0)?.newPage()) ?? undefined;
-  if (!page) {
-    await releaseRemoteBrowser(browser);
-    throw new Error("Bright Data did not expose a browser page.");
-  }
+  const context = await browser.newContext();
+  const page = await context.newPage();
   return { browser, page, sessionId };
 }
 
@@ -260,7 +197,6 @@ export async function executePlaywrightCode(
   await materializeStagedFiles(sessionId);
   const handle = await connectRemoteBrowser(sessionId);
   try {
-    await prepareSession(handle.page, sessionId);
     await restoreSessionIfNeeded(handle.page, sessionId);
     const javascript = transform(code, {
       disableESTransforms: true,
@@ -291,7 +227,6 @@ export async function withRemotePage<T>(
   };
   signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    await prepareSession(handle.page, sessionId);
     await restoreSessionIfNeeded(handle.page, sessionId);
     const result = await operate(handle);
     await persistTouchedSession(handle.page, sessionId, {
@@ -327,17 +262,14 @@ async function touchRemoteBrowser(
 ) {
   const handle = await connectRemoteBrowser(sessionId);
   try {
-    await prepareSession(handle.page, sessionId);
     await restoreSessionIfNeeded(handle.page, sessionId);
-    const liveView = await inspectLiveView(handle.page);
     const viewport = handle.page.viewportSize() ?? undefined;
     await saveBrowserMeta(sessionId, {
-      liveView,
       viewport,
     });
     await persistTouchedSession(handle.page, sessionId, options);
     return {
-      browser_live_view_url: liveView,
+      browser_live_view_url: "",
       session_id: sessionId,
       status: "active" as const,
       viewport,
@@ -368,13 +300,6 @@ async function materializeStagedFiles(sessionId: string) {
   }
 }
 
-async function prepareSession(page: Page, sessionId: string) {
-  const session = await page.context().newCDPSession(page);
-  await sendCdp(session, "Proxy.useSession", { sessionId }).catch(
-    () => undefined
-  );
-}
-
 async function restoreSessionIfNeeded(page: Page, sessionId: string) {
   if (!isBlankPage(page)) return;
   const stored = await readBrowserStorage(sessionId);
@@ -384,6 +309,23 @@ async function restoreSessionIfNeeded(page: Page, sessionId: string) {
       .context()
       .addCookies(stored.cookies)
       .catch(() => undefined);
+  }
+  if (stored.origins.length > 0 || stored.sessionStorage) {
+    await page.context().addInitScript(
+      ({ origins, sessionStorage }) => {
+        const localStorage = origins.find(
+          (entry) => entry.origin === window.location.origin
+        )?.localStorage;
+        for (const { name, value } of localStorage ?? []) {
+          window.localStorage.setItem(name, value);
+        }
+        if (sessionStorage?.origin !== window.location.origin) return;
+        for (const [name, value] of sessionStorage.entries) {
+          window.sessionStorage.setItem(name, value);
+        }
+      },
+      { origins: stored.origins, sessionStorage: stored.sessionStorage }
+    );
   }
   if (stored.lastUrl && isHttpUrl(stored.lastUrl)) {
     await page
@@ -420,30 +362,22 @@ async function snapshotSession(page: Page, sessionId: string) {
     .context()
     .storageState()
     .catch(() => undefined);
+  const sessionStorage = await page
+    .evaluate(() => ({
+      entries: Object.entries(window.sessionStorage),
+      origin: window.location.origin,
+    }))
+    .catch(() => undefined);
   await upsertStateValue(
     `${browserStorageKeyPrefix}${sessionId}`,
     {
       cookies: state?.cookies ?? [],
       lastUrl: page.url(),
+      origins: state?.origins ?? [],
+      sessionStorage,
     },
     browserStateTtlMs
   );
-}
-
-async function inspectLiveView(page: Page) {
-  const session = await page.context().newCDPSession(page);
-  const frames = asRecord(await sendCdp(session, "Page.getFrameTree"));
-  const frameTree = asRecord(frames.frameTree);
-  const frame = asRecord(frameTree.frame);
-  /* oxlint-disable typescript/no-unsafe-assignment -- Bright Data Page.inspect is outside Playwright's CDP typings. */
-  const inspect = asRecord(
-    await sendCdp(session, "Page.inspect", { frameId: frame.id })
-  );
-  /* oxlint-enable typescript/no-unsafe-assignment */
-  if (typeof inspect.url !== "string" || inspect.url.length === 0) {
-    throw new Error("Bright Data did not return a live-view URL.");
-  }
-  return inspect.url;
 }
 
 async function saveBrowserMeta(
@@ -513,14 +447,9 @@ async function upsertStateValue(key: string, value: unknown, ttlMs?: number) {
 }
 
 async function releaseRemoteBrowser(browser: Browser) {
-  // Playwright's newContext() uses disposeOnDetach. This path never creates
-  // those contexts, so close() only drops the CDP websocket. The hosted
-  // Chrome, tabs, and cookies stay until Bright Data's idle or max lifetime.
+  // Each Vercel invocation launches an isolated Chromium process. Durable
+  // cookies and storage are already snapshotted in Neon before this closes.
   await browser.close().catch(() => undefined);
-}
-
-function pickExistingPage(pages: Page[]) {
-  return pages.find((page) => !isBlankPage(page)) ?? pages.at(-1);
 }
 
 function isBlankPage(page: Page) {
@@ -530,17 +459,6 @@ function isBlankPage(page: Page) {
 
 function isHttpUrl(value: string) {
   return value.startsWith("https://") || value.startsWith("http://");
-}
-
-function brightDataCredentials(sessionId: string) {
-  const auth = normalizeBrightDataBrowserAuth(env.BRIGHT_DATA_BROWSER_AUTH);
-  const separator = auth.indexOf(":");
-  const username = auth.slice(0, separator);
-  const password = auth.slice(separator + 1);
-  const sessionUsername = username.includes("-session-")
-    ? username
-    : `${username}-session-${sessionId}`;
-  return { password, username: sessionUsername };
 }
 
 function stickyDecodoUsername(username: string, sessionId: string) {
@@ -588,25 +506,6 @@ function compilePlaywrightScript(javascript: string): PlaywrightScript {
   return new AsyncFunction("browser", "page", "context", javascript);
 }
 
-async function sendCdp(
-  session: CDPSession,
-  method: string,
-  params?: object
-): Promise<unknown> {
-  // Bright Data custom CDP methods are not in Playwright's protocol types.
-  /* oxlint-disable typescript/no-unsafe-type-assertion */
-  const result: unknown = await Promise.resolve(
-    session.send(method as never, params as never)
-  );
-  return result;
-  /* oxlint-enable typescript/no-unsafe-type-assertion */
-}
-
-function asRecord(value: unknown) {
-  if (!value || typeof value !== "object") return {};
-  return Object.fromEntries(Object.entries(value));
-}
-
 function unexpired() {
   return or(
     isNull(chatStateValues.expiresAt),
@@ -646,7 +545,26 @@ const cookieSchema = z.object({
   value: z.string(),
 });
 
+const storageEntrySchema = z.object({
+  name: z.string(),
+  value: z.string(),
+});
+
+const sessionStorageSchema = z.object({
+  entries: z.array(z.tuple([z.string(), z.string()])),
+  origin: z.string(),
+});
+
 const browserStorageSchema = z.object({
   cookies: z.array(cookieSchema),
   lastUrl: z.string().optional(),
+  origins: z
+    .array(
+      z.object({
+        localStorage: z.array(storageEntrySchema),
+        origin: z.string(),
+      })
+    )
+    .default([]),
+  sessionStorage: sessionStorageSchema.optional(),
 });

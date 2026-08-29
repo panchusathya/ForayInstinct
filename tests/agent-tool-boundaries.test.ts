@@ -106,19 +106,11 @@ describe("root and worker capability boundaries", () => {
     expect(existsSync(`${workerRoot}/lib/browser-runtime.ts`)).toBe(false);
     expect(existsSync(`${workerRoot}/lib/owned-browser.ts`)).toBe(true);
 
-    expect(readFileSync("lib/browser.ts", "utf8")).toContain(
-      "chromium.connectOverCDP"
-    );
-    expect(readFileSync("lib/browser.ts", "utf8")).toContain(
-      "disposeOnDetach: false"
-    );
-    expect(readFileSync("lib/browser.ts", "utf8")).not.toContain(
-      "browser.newContext("
-    );
-    expect(existsSync("agent/schedules/browser-keepalive.ts")).toBe(true);
-    expect(
-      readFileSync("agent/schedules/browser-keepalive.ts", "utf8")
-    ).toContain('cron: "*/2 * * * *"');
+    const browserSource = readFileSync("lib/browser.ts", "utf8");
+    expect(browserSource).toContain("playwrightChromium.launch(");
+    expect(browserSource).toContain("decodoProxyForSession(sessionId)");
+    expect(browserSource).toContain("browser.newContext(");
+    expect(browserSource).not.toContain("connectOverCDP");
     for (const tool of [
       "computer_action",
       "execute_playwright_code",

@@ -2,11 +2,10 @@ import { defineAgent } from "eve";
 import { chatGatewayModel } from "@/lib/model-config";
 
 export default defineAgent({
-  // Playwright resolves its own package manifest at runtime. Keep the browser
-  // runtime packages external so Vercel traces their package files instead of
-  // inlining them into the Eve handler.
+  // Playwright and Chromium resolve package assets at runtime. Keep them
+  // external so Vercel traces the executable payload instead of inlining it.
   build: {
-    externalDependencies: ["playwright-core", "sucrase"],
+    externalDependencies: ["@sparticuz/chromium", "playwright-core", "sucrase"],
   },
   experimental: {
     tasks: true,
