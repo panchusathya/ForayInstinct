@@ -52,6 +52,21 @@ describe("worker input bubbling", () => {
     expect(browserSkill).toContain("visible password rules");
   });
 
+  it("submits a completed ATS login without inspecting injected credentials", () => {
+    const browserSkill = readFileSync(
+      "agent/subagents/worker/skills/browser-execution/SKILL.md",
+      "utf8"
+    );
+
+    expect(browserSkill).toContain(
+      "Immediately after a successful login fill, activate that pre-identified control once"
+    );
+    expect(browserSkill).toContain(
+      "After the final credential fill, always activate the observed sign-in control"
+    );
+    expect(browserSkill).toContain("do not inspect filled values");
+  });
+
   it("forbids dumping tool or worker JSON to the user", () => {
     const instructions = readFileSync("agent/instructions.md", "utf8");
     const applicationTools = readFileSync(
