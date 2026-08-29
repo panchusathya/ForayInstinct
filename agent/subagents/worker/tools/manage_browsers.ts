@@ -231,6 +231,7 @@ function logWorkdayRoute({
   workday: ReturnType<typeof normalizeWorkdayRouteResult>;
 }) {
   const detail = {
+    actions: workday.actions ?? [],
     browser_session_id: browser.session_id,
     execution_error: diagnosticErrorCode(response.error),
     execution_success: response.success,

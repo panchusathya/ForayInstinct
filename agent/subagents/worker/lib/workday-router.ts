@@ -8,6 +8,7 @@ export type WorkdayRouteState =
   | "route_incomplete";
 
 export interface WorkdayRouteResult {
+  actions?: string[];
   state: WorkdayRouteState;
   trace?: string[];
   url?: string;
@@ -34,6 +35,11 @@ export function workdayRouterCode(applicationUrl: string): string {
   return `
 const applicationUrl = ${JSON.stringify(applicationUrl)};
 const trace = [];
+const availableActions = async () => page.locator("a, button").evaluateAll((nodes) => nodes
+  .map((node) => (node.innerText || node.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim())
+  .filter((label) => /apply|continue|sign in|create account/i.test(label))
+  .slice(0, 12)
+).catch(() => []);
 const visible = async (locator) => locator.first().isVisible().catch(() => false);
 const click = async (step, locator) => {
   if (!(await visible(locator))) return false;
@@ -77,13 +83,14 @@ for (let attempt = 0; attempt < 4; attempt += 1) {
   if (await click("apply_manually:link", page.getByRole("link", { name: /^apply manually$/i }))) continue;
   if (await click("email_route:automation_id", page.locator('button[data-automation-id="SignInWithEmailButton"]'))) continue;
   if (await click("email_route:button", page.getByRole("button", { name: /^sign in with email(?: address)?$/i }))) continue;
+  if (await click("apply:adventure_button", page.locator('a[data-automation-id="adventureButton"], button[data-automation-id="adventureButton"]'))) continue;
   if (await click("apply:button", page.getByRole("button", { name: /^apply$/i }))) continue;
   if (await click("apply:link", page.getByRole("link", { name: /^apply$/i }))) continue;
   break;
 }
 
 const state = await currentState();
-return state ?? { state: "route_incomplete", trace, url: page.url() };
+return state ?? { actions: await availableActions(), state: "route_incomplete", trace, url: page.url() };
 `;
 }
 
@@ -99,6 +106,7 @@ export function normalizeWorkdayRouteResult(
 function isRouteResult(value: unknown): value is WorkdayRouteResult {
   if (!value || typeof value !== "object") return false;
   const candidate = value as {
+    actions?: unknown;
     state?: unknown;
     trace?: unknown;
     url?: unknown;
@@ -109,6 +117,9 @@ function isRouteResult(value: unknown): value is WorkdayRouteResult {
       candidate.state === "error_shell" ||
       candidate.state === "navigation_failed" ||
       candidate.state === "route_incomplete") &&
+    (candidate.actions === undefined ||
+      (Array.isArray(candidate.actions) &&
+        candidate.actions.every((entry) => typeof entry === "string"))) &&
     (candidate.url === undefined || typeof candidate.url === "string") &&
     (candidate.trace === undefined ||
       (Array.isArray(candidate.trace) &&

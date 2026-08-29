@@ -165,6 +165,9 @@ describe("Kernel browser contract", () => {
     expect(
       workdayRouterCode("https://tenant.myworkdayjobs.com/en-US/job/example")
     ).toContain("SignInWithEmailButton");
+    expect(
+      workdayRouterCode("https://tenant.myworkdayjobs.com/en-US/job/example")
+    ).toContain('a[data-automation-id="adventureButton"]');
     expect(result).toMatchObject({
       workday: { state: "email_login_ready" },
     });
