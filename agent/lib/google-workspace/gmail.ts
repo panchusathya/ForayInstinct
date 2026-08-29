@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { gmail, type gmail_v1 } from "@googleapis/gmail";
 import type { ToolContext } from "eve/tools";
 import { z } from "zod";
-import { withGoogleAuth } from "./client";
+import {
+  getGoogleAuthClient,
+  isMissingGoogleGrant,
+  withGoogleAuth,
+} from "./client";
+import { buildEmailOtpSearchQuery, extractEmailOtp } from "./email-otp";
 
 type GmailMessage = gmail_v1.Schema$Message;
 type GmailPart = gmail_v1.Schema$MessagePart;
@@ -80,6 +85,57 @@ export async function readGmailThread(ctx: ToolContext, threadId: string) {
       })),
     };
   });
+}
+
+export async function waitForEmailOtp(
+  ctx: ToolContext,
+  input: {
+    fromHint?: string;
+    subjectHint?: string;
+  },
+  options?: {
+    pollIntervalMs?: number;
+    sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+    timeoutMs?: number;
+  }
+) {
+  const timeoutMs = options?.timeoutMs ?? 75_000;
+  const pollIntervalMs = options?.pollIntervalMs ?? 3_000;
+  const sleep = options?.sleep ?? sleepWithAbort;
+  const query = buildEmailOtpSearchQuery(input);
+  const deadline = Date.now() + timeoutMs;
+
+  let client: ReturnType<typeof gmail>;
+  try {
+    const authClient = await getGoogleAuthClient(ctx);
+    client = gmail({ auth: authClient, version: "v1" });
+  } catch (error) {
+    if (isMissingGoogleGrant(error)) return missingGoogleGrantResult();
+    throw error;
+  }
+
+  while (true) {
+    try {
+      const found = await findEmailOtp(client, ctx.abortSignal, query);
+      if (found) return found;
+    } catch (error) {
+      if (isMissingGoogleGrant(error)) return missingGoogleGrantResult();
+      throw error;
+    }
+
+    if (Date.now() >= deadline) {
+      return {
+        message:
+          "No verification email arrived in time. Ask the candidate for the code and resume the worker.",
+        status: "timeout" as const,
+      };
+    }
+
+    await sleep(
+      Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())),
+      ctx.abortSignal
+    );
+  }
 }
 
 export async function updateGmail(
@@ -234,6 +290,79 @@ function withGmail<T>(
   execute: (client: ReturnType<typeof gmail>) => Promise<T>
 ) {
   return withGoogleAuth(ctx, (auth) => execute(gmail({ auth, version: "v1" })));
+}
+
+async function findEmailOtp(
+  client: ReturnType<typeof gmail>,
+  signal: AbortSignal,
+  query: string
+) {
+  const listed = await client.users.messages.list(
+    { maxResults: 5, q: query, userId: "me" },
+    { signal }
+  );
+  for (const item of listed.data.messages ?? []) {
+    if (!item.id) continue;
+    const { data } = await client.users.messages.get(
+      { format: "full", id: item.id, userId: "me" },
+      { signal }
+    );
+    const found = emailOtpFromMessage(data);
+    if (found) return found;
+  }
+  return null;
+}
+
+function emailOtpFromMessage(message: GmailMessage) {
+  const internalDate = Number(message.internalDate);
+  if (
+    Number.isFinite(internalDate) &&
+    Date.now() - internalDate > 15 * 60 * 1_000
+  ) {
+    return null;
+  }
+  const subject = header(message.payload, "Subject");
+  const code = extractEmailOtp(
+    `${subject ?? ""}\n${plainText(message.payload)}`
+  );
+  if (!code) return null;
+  return {
+    code,
+    from: header(message.payload, "From"),
+    receivedAt: header(message.payload, "Date"),
+    status: "found" as const,
+    subject,
+  };
+}
+
+function missingGoogleGrantResult() {
+  return {
+    message:
+      "Gmail is not connected. Ask the candidate for the email code and resume the worker.",
+    status: "disconnected" as const,
+  };
+}
+
+async function sleepWithAbort(ms: number, signal: AbortSignal) {
+  if (ms <= 0) return;
+  if (signal.aborted) throw abortError(signal);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError(signal));
+    };
+    signal.addEventListener("abort", onAbort);
+  });
+}
+
+function abortError(signal: AbortSignal) {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Aborted", "AbortError");
 }
 
 function decodeBase64Url(value: string) {

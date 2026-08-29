@@ -23,14 +23,18 @@ export const googleWorkspaceAuthOptions = {
 
 const googleWorkspaceAuth = connect(googleWorkspaceAuthOptions);
 
+export async function getGoogleAuthClient(ctx: ToolContext) {
+  const { token } = await ctx.getToken(googleWorkspaceAuth);
+  const authClient = new auth.OAuth2();
+  authClient.setCredentials({ access_token: token });
+  return authClient;
+}
+
 export async function withGoogleAuth<T>(
   ctx: ToolContext,
   execute: (authClient: InstanceType<typeof auth.OAuth2>) => Promise<T>
 ) {
-  const { token } = await ctx.getToken(googleWorkspaceAuth);
-  const authClient = new auth.OAuth2();
-  authClient.setCredentials({ access_token: token });
-
+  const authClient = await getGoogleAuthClient(ctx);
   try {
     return await execute(authClient);
   } catch (error) {
@@ -48,4 +52,14 @@ export function googleApiErrorStatus(error: unknown) {
     return;
   }
   return typeof response.status === "number" ? response.status : undefined;
+}
+
+export function isMissingGoogleGrant(error: unknown) {
+  if (googleApiErrorStatus(error) === 401) return true;
+  if (!error || typeof error !== "object" || !("name" in error)) return false;
+  return (
+    error.name === "NoValidTokenError" ||
+    error.name === "UserAuthorizationRequiredError" ||
+    error.name === "ConnectionAuthorizationRequiredError"
+  );
 }
