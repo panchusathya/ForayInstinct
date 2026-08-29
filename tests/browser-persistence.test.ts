@@ -84,13 +84,13 @@ describe("Bright Data session persistence", () => {
     touch.connectOverCDP.mockReset();
   });
 
-  it("keeps cookies and tabs in chat state instead of Playwright newContext", () => {
+  it("uses Bright Data's managed route instead of layering a second proxy", () => {
     const source = readFileSync("lib/browser.ts", "utf8");
     expect(source).toContain("browser-storage:");
     expect(source).toContain("keepAliveUntil");
-    expect(source).toContain("disposeOnDetach: false");
     expect(source).not.toContain("browser.newContext(");
-    expect(source).not.toContain("disposeOnDetach: true");
+    expect(source).not.toContain("Target.createBrowserContext");
+    expect(source).not.toContain("proxyServer:");
   });
 
   it("clamps keepalive to Bright Data's 60-minute session maximum", () => {
