@@ -8,7 +8,7 @@ const applicationEnvironment = [
   "DATABASE_URL",
   "JUICEBOX_API_URL",
   "*_CONNECTOR_UID",
-  "BRIGHT_DATA_BROWSER_AUTH",
+  "BROWSERBASE_API_KEY",
   "LINQ_*",
   "NODE_ENV",
   "OPENINSTINCT_SHARED_SECRET",

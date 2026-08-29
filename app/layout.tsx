@@ -11,7 +11,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(env.BETTER_AUTH_URL),
   title: "OpenInstinct",
   description:
-    "A self-hosted personal agent with private credentials and Bright Data browser execution.",
+    "A self-hosted personal agent with private credentials and Browserbase browser execution.",
 };
 
 export default async function RootLayout({
