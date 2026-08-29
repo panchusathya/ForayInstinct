@@ -47,6 +47,22 @@ export function browserCdpUrl(sessionId: string) {
   return `wss://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${brightDataCdpHost}`;
 }
 
+/**
+ * Accept the credential pair Bright Data documents as well as a copied CDP
+ * endpoint. The latter is easy to paste into an environment variable, but the
+ * connection builder owns the endpoint and must not treat it as part of the
+ * password.
+ */
+export function normalizeBrightDataBrowserAuth(value: string) {
+  const match = value
+    .trim()
+    .match(/^(?:wss:\/\/)?([^:]+):(.+?)@brd\.superproxy\.io(?::9222)?\/?$/i);
+
+  return match
+    ? `${decodeURIComponent(match[1]!)}:${decodeURIComponent(match[2]!)}`
+    : value;
+}
+
 export function decodoProxyForSession(sessionId: string) {
   const url = new URL(env.DECODO_PROXY_URL);
   const baseUser = decodeURIComponent(url.username);
@@ -597,9 +613,10 @@ function authenticatedProxyServer(proxy: {
 }
 
 function brightDataCredentials(sessionId: string) {
-  const separator = env.BRIGHT_DATA_BROWSER_AUTH.indexOf(":");
-  const username = env.BRIGHT_DATA_BROWSER_AUTH.slice(0, separator);
-  const password = env.BRIGHT_DATA_BROWSER_AUTH.slice(separator + 1);
+  const auth = normalizeBrightDataBrowserAuth(env.BRIGHT_DATA_BROWSER_AUTH);
+  const separator = auth.indexOf(":");
+  const username = auth.slice(0, separator);
+  const password = auth.slice(separator + 1);
   const sessionUsername = username.includes("-session-")
     ? username
     : `${username}-session-${sessionId}`;

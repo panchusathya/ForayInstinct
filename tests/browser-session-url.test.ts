@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { browserCdpUrl, decodoProxyForSession } from "../lib/browser";
+import {
+  browserCdpUrl,
+  decodoProxyForSession,
+  normalizeBrightDataBrowserAuth,
+} from "../lib/browser";
 
 describe("Bright Data and Decodo session URLs", () => {
   it("embeds the session id in the Bright Data CDP username", () => {
@@ -15,5 +19,13 @@ describe("Bright Data and Decodo session URLs", () => {
     expect(proxy.server).toBe("http://gate.decodo.com:7000");
     expect(proxy.username).toBe("user-session-abc123-sessionduration-30");
     expect(proxy.password).toBe("pass");
+  });
+
+  it("normalizes a copied Bright Data CDP endpoint to credentials", () => {
+    expect(
+      normalizeBrightDataBrowserAuth(
+        "wss://brd-customer-test-zone-browser:test-password@brd.superproxy.io:9222"
+      )
+    ).toBe("brd-customer-test-zone-browser:test-password");
   });
 });
