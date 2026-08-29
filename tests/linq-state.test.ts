@@ -7,7 +7,7 @@ describe("Postgres Linq state adapter", () => {
   it("is wired through chatSdkChannel rather than linqChannel", () => {
     const source = readFileSync("agent/channels/linq-v2.ts", "utf8");
     expect(source).toContain("chatSdkChannel(");
-    expect(source).toContain("createPostgresState()");
+    expect(source).toContain("createPostgresState(linqStateNamespace)");
     expect(source).not.toMatch(/linqChannel\(/u);
   });
 
@@ -57,6 +57,18 @@ describe("Postgres Linq state adapter", () => {
     await expect(adapter.get("thread:1")).resolves.toEqual({
       agentId: "ag_worker:1",
     });
+  });
+
+  it("namespaces durable keys when a reset epoch is supplied", async () => {
+    const sql = fakeSql([{ rowCount: 1, rows: [{}] }]);
+    const adapter = new PostgresStateAdapter(sql as never, "linq-v3");
+    await adapter.connect();
+    await adapter.subscribe("linq:dm:chat-1");
+
+    expect(sql.query).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO chat_state_subscriptions"),
+      ["linq-v3:linq:dm:chat-1"]
+    );
   });
 });
 

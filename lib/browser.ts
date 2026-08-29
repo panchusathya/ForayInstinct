@@ -19,7 +19,7 @@ const createSessionId = customAlphabet(
   21
 );
 const brightDataCdpHost = "brd.superproxy.io:9222";
-const playwrightTimeoutMs = 30_000;
+const playwrightTimeoutMs = 60_000;
 const browserStateTtlMs = 2 * 60 * 60 * 1000;
 const browserFileKeyPrefix = "browser-file:";
 const browserMetaKeyPrefix = "browser-meta:";
@@ -634,7 +634,7 @@ async function abortOrTimeout(
 ) {
   return new Promise<never>((_resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error("Playwright execution exceeded 30 seconds."));
+      reject(new Error("Playwright execution exceeded 60 seconds."));
     }, timeoutMs);
     signal?.addEventListener(
       "abort",

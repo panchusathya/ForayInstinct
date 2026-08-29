@@ -34,6 +34,9 @@ const cancelledWorkerTaskSchema = z.object({
 const workerCancellationsSchema = z.array(
   z.object({ sourceMessageId: z.string(), taskId: z.string() })
 );
+// Advancing this namespace starts Linq with clean durable state without
+// changing the public webhook route or retaining a failed worker checkpoint.
+const linqStateNamespace = "linq-v3";
 
 // Linq keeps a durable session for the whole iMessage thread. Supplying this on
 // every turn lets an updated deployment supersede stale behavior in an older
@@ -57,7 +60,7 @@ const { bot, channel, send } = chatSdkChannel({
   // still works. Postgres state keeps a provider thread's continuation,
   // worker checkpoint, dedupe records, and locks across Vercel instances.
   routes: { linq: "/eve/v1/linq" },
-  state: createPostgresState(),
+  state: createPostgresState(linqStateNamespace),
   streaming: false,
   turnPolicy: "steer",
   userName: "Foray",
