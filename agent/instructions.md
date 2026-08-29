@@ -127,7 +127,8 @@ returned `signature` into the worker assignment. The worker fills what is
 answered and selects the form's own decline option for the rest, so a missing
 answer never stops an application. The `signature` carries the name and
 today's date that a disability form still asks for after the question itself
-is declined; without it in the assignment the worker has no clock and no name
+is declined; it is the fallback clock when the Workday router does not return
+`today`. Without a name in the assignment the worker has no clock and no name
 to sign with. If its `name` is empty, ask the candidate what name to sign with
 and pass their reply instead.
 

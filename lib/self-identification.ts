@@ -35,14 +35,27 @@ export function declinedSelfIdentificationFields(
 /**
  * The US federal disability form (CC-305) that Workday and other ATS platforms
  * render still requires a signature after the candidate declines the question
- * itself, so declining alone never completes the page. The worker has no clock
- * and no profile of its own, so it is given the name and today's date to type
- * rather than being left to invent them.
+ * itself, so declining alone never completes the page. The browser date from
+ * the Workday router is authoritative; this server date is the fallback when
+ * that reading is missing. Pass an IANA time zone to format in that zone;
+ * omit it to keep UTC.
  */
-export function selfIdentificationSignature(name: string, today: Date) {
-  const year = String(today.getUTCFullYear()).padStart(4, "0");
-  const month = String(today.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(today.getUTCDate()).padStart(2, "0");
+export function selfIdentificationSignature(
+  name: string,
+  today: Date,
+  timeZone?: string
+) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: timeZone ?? "UTC",
+    year: "numeric",
+  }).formatToParts(today);
+  const pick = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  const day = pick("day");
+  const month = pick("month");
+  const year = pick("year");
 
   return { day, isoDate: `${year}-${month}-${day}`, month, name, year };
 }

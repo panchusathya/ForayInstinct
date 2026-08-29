@@ -81,6 +81,19 @@ describe("voluntary self-identification", () => {
     expect(
       selfIdentificationSignature(
         "Alex Rivera",
+        new Date("2026-08-29T02:30:00Z"),
+        "America/Los_Angeles"
+      )
+    ).toEqual({
+      day: "28",
+      isoDate: "2026-08-28",
+      month: "08",
+      name: "Alex Rivera",
+      year: "2026",
+    });
+    expect(
+      selfIdentificationSignature(
+        "Alex Rivera",
         new Date("2026-01-05T00:00:00Z")
       ).isoDate
     ).toBe("2026-01-05");
@@ -92,6 +105,8 @@ describe("voluntary self-identification", () => {
       expect(source).toContain("signature");
       expect(source).toMatch(/name and today's date/i);
       expect(source).toContain("`month`, `day`, and `year`");
+      expect(source).toContain("form already pre-filled");
+      expect(source).toContain("Workday router");
       expect(source).not.toMatch(/signature block is a takeover/i);
     }
   });

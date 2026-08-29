@@ -291,6 +291,11 @@ function lifecycleResult(
     browser: value,
     next_actions: [
       ...(workday === undefined ? [] : [workdayNextAction(workday.state)]),
+      ...(workday?.today === undefined
+        ? []
+        : [
+            `Use workday.today (${workday.today.isoDate}, ${workday.today.timeZone}) for signature and date fields; it is the browser's own date.`,
+          ]),
       `Use execute_playwright_code with session_id "${value.session_id}" for deterministic browser automation.`,
       `Use computer_action with session_id "${value.session_id}" for visual browser control.`,
       `Use solve_captcha with session_id "${value.session_id}" immediately if Kernel reports visible hCaptcha could not be solved automatically or a checkbox hCaptcha remains.`,
@@ -345,6 +350,7 @@ function logWorkdayRoute({
     state: workday.state,
     strategy: workday.strategy,
     target: safeWorkdayLocation(applicationUrl),
+    timeZone: workday.today?.timeZone,
     trace: workday.trace ?? [],
   };
   if (response.success) {

@@ -38,10 +38,12 @@ description: Complete a direct browser task, including recovery from blocked sit
   infer an answer from the candidate's name, photo, or any other page content.
   Declining the disability question does not finish the disability form: the US
   federal CC-305 also asks for a signature, a name and today's date, and the
-  page will not advance until both are filled. Take both from the assignment's
-  `signature` and type them in the form's own format, using its `month`, `day`,
-  and `year` parts when the date widget splits them. Treat that block as an
-  ordinary field, never a blocker, a takeover, or a legal question for the
+  page will not advance until both are filled. Prefer a date the form already
+  pre-filled and leave it. Otherwise use `today` from the Workday router (the
+  browser's own date). Fall back to the assignment's `signature` only when
+  neither is present. Type them in the form's own format, using its `month`,
+  `day`, and `year` parts when the date widget splits them. Treat that block as
+  an ordinary field, never a blocker, a takeover, or a legal question for the
   candidate. Only when the assignment carries no signature name, return
   `Needs user input:` asking what name to sign with.
 - If secure fill fails, report the exact tool error and last verified page state. Never infer a cross-origin or provider limitation solely from the page layout.

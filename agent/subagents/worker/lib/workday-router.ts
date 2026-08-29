@@ -16,11 +16,20 @@ export const workdayRouteStrategies = [
 
 export type WorkdayRouteStrategy = (typeof workdayRouteStrategies)[number];
 
+export interface WorkdayRouteToday {
+  day: string;
+  isoDate: string;
+  month: string;
+  timeZone: string;
+  year: string;
+}
+
 export interface WorkdayRouteResult {
   actions?: string[];
   attempt?: number;
   state: WorkdayRouteState;
   strategy?: WorkdayRouteStrategy;
+  today?: WorkdayRouteToday;
   trace?: string[];
   url?: string;
 }
@@ -152,25 +161,27 @@ const offTenantOutage = (value) => {
     return false;
   }
 };
+let today;
+const withToday = (state) => (today ? { ...state, today } : state);
 const currentState = async () => {
   const url = page.url();
-  if (url.startsWith("chrome-error://")) return { state: "navigation_failed", trace, url };
+  if (url.startsWith("chrome-error://")) return withToday({ state: "navigation_failed", trace, url });
   // A tenant outage redirects off the jobs host entirely. Matching the path
   // alone would flag a real posting, since Workday puts the job title in the
   // URL and plenty of them are maintenance roles.
-  if (offTenantOutage(url)) return { state: "error_shell", trace, url };
+  if (offTenantOutage(url)) return withToday({ state: "error_shell", trace, url });
   const body = await page.locator("body").innerText({ timeout: cap(3000) }).catch(() => "");
   if (/something went wrong|unexpected error|we're sorry|try again later|under maintenance|temporarily unavailable/i.test(body)) {
-    return { state: "error_shell", trace, url };
+    return withToday({ state: "error_shell", trace, url });
   }
   // Workday's create-account panel renders a password box too. Reporting it as
   // a login form sends vault autofill into a signup it can never complete.
   if (await signupOnly()) return null;
   if (await visible(page.locator('input[type="password"], input[data-automation-id="password"]'))) {
-    return { state: "email_login_ready", trace, url };
+    return withToday({ state: "email_login_ready", trace, url });
   }
   if (await visible(page.locator('[data-automation-id="applyFlowPage"], [data-automation-id="pageFooterNextButton"], [data-automation-id="progressBar"], [data-automation-id="bottom-navigation-next-button"], input[data-automation-id="legalNameSection_firstName"]'))) {
-    return { state: "wizard_ready", trace, url };
+    return withToday({ state: "wizard_ready", trace, url });
   }
   return null;
 };
@@ -186,6 +197,21 @@ if (strategy === "reload") {
 const hydrated = await page.locator("[data-automation-id]").first()
   .waitFor({ state: "visible", timeout: cap(10000) }).then(() => true).catch(() => false);
 trace.push(hydrated ? "hydration:ready" : "hydration:unconfirmed");
+today = await page.evaluate(() => {
+  const now = new Date();
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone,
+    year: "numeric",
+  }).formatToParts(now);
+  const pick = (type) => parts.find((part) => part.type === type)?.value ?? "";
+  const day = pick("day");
+  const month = pick("month");
+  const year = pick("year");
+  return { day, isoDate: year + "-" + month + "-" + day, month, timeZone, year };
+}).catch(() => undefined);
 
 // Cookie banners are optional and never determine whether routing succeeded.
 await click("cookie:accepted", page.getByRole("button", { name: /accept cookies|accept all/i })).catch(() => undefined);
@@ -242,7 +268,7 @@ while (clicks < ${JSON.stringify(maxRouteClicks)} && iterations < ${JSON.stringi
 }
 
 const state = await currentState();
-return state ?? { actions: await availableActions(), state: "route_incomplete", strategy, trace, url: page.url() };
+return withToday(state ?? { actions: await availableActions(), state: "route_incomplete", strategy, trace, url: page.url() });
 `;
 }
 
@@ -271,6 +297,18 @@ export function normalizeWorkdayRouteResult(
   return response.result;
 }
 
+function isToday(value: unknown): value is WorkdayRouteToday {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.day === "string" &&
+    typeof candidate.isoDate === "string" &&
+    typeof candidate.month === "string" &&
+    typeof candidate.timeZone === "string" &&
+    typeof candidate.year === "string"
+  );
+}
+
 function isRouteResult(value: unknown): value is WorkdayRouteResult {
   if (!value || typeof value !== "object") return false;
   const candidate = value as {
@@ -278,6 +316,7 @@ function isRouteResult(value: unknown): value is WorkdayRouteResult {
     attempt?: unknown;
     state?: unknown;
     strategy?: unknown;
+    today?: unknown;
     trace?: unknown;
     url?: unknown;
   };
@@ -296,6 +335,7 @@ function isRouteResult(value: unknown): value is WorkdayRouteResult {
       candidate.strategy === "direct" ||
       candidate.strategy === "reload" ||
       candidate.strategy === "autofill_path") &&
+    (candidate.today === undefined || isToday(candidate.today)) &&
     (candidate.url === undefined || typeof candidate.url === "string") &&
     (candidate.trace === undefined ||
       (Array.isArray(candidate.trace) &&

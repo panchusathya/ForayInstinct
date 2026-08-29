@@ -524,6 +524,21 @@ describe("Kernel browser contract", () => {
     expect(state).toMatchObject({ state: "email_login_ready" });
   });
 
+  it("attaches the browser's own date to every routed state", async () => {
+    const state = await routeAgainst({
+      url: jobUrl,
+      visible: ['input[type="password"]'],
+    });
+
+    expect(state).toMatchObject({
+      state: "email_login_ready",
+      today: {
+        isoDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        timeZone: expect.any(String),
+      },
+    });
+  });
+
   it("does not offer a create-account panel to vault autofill", async () => {
     // The signup panel renders a password box too; filling it can never
     // complete a sign-in.
