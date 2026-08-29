@@ -59,7 +59,7 @@ Run the validation the task requests. When it does not establish the behavior yo
 - The repository root owns the single Next.js application, Eve agent, and shared UI contract.
 - The workspace manager lives on `/` and the agent chat on `/chat`; browser execution belongs only to the declared worker's flat tool surface under `agent/subagents/worker/tools`.
 - Keep each worker browser tool's schema and implementation together. Share the Bright Data Browser API client through `lib/browser.ts` and keep only cross-tool ownership guards under `agent/subagents/worker/lib`; do not add a browser extension or root browser connection.
-- Validate runtime environment variables through `lib/env.ts`. `BRIGHT_DATA_BROWSER_AUTH` and `DECODO_PROXY_URL` are required by the worker browser tools.
+- Validate runtime environment variables through `lib/env.ts`. `BRIGHT_DATA_BROWSER_AUTH` is required by the worker browser tools.
 - Run `pnpm check` and `pnpm build` before handing off changes.
 
 ## Design system
@@ -107,9 +107,9 @@ pnpm db:migrate && pnpm dev:app
 
 `lib/env.ts` supplies local defaults for Better Auth, secret encryption, and AI
 Gateway in development. `DATABASE_URL` points at the native server; the local
-`.env` sets `BRIGHT_DATA_BROWSER_AUTH` and `DECODO_PROXY_URL` to placeholders so
+`.env` sets `BRIGHT_DATA_BROWSER_AUTH` to a placeholder so
 the app boots. Real browser execution and model inference need genuine
-`BRIGHT_DATA_BROWSER_AUTH`, `DECODO_PROXY_URL`, and
+`BRIGHT_DATA_BROWSER_AUTH` and
 `AI_GATEWAY_API_KEY` values supplied as secrets. `pnpm build` requires real
 production secrets (no dev defaults), so use the dev server — not a production
 build — to test locally before deploying.

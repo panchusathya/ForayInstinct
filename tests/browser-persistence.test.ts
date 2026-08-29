@@ -88,10 +88,12 @@ describe("Bright Data session persistence", () => {
     const source = readFileSync("lib/browser.ts", "utf8");
     expect(source).toContain("browser-storage:");
     expect(source).toContain("keepAliveUntil");
-    expect(source).toContain("disposeOnDetach: false");
+    expect(source).toContain('"Proxy.useSession"');
     expect(source).toContain("origins: state?.origins ?? []");
     expect(source).toContain("sessionStorage");
     expect(source).toContain("addInitScript");
+    expect(source).not.toContain("Target.createBrowserContext");
+    expect(source).not.toContain("DECODO_PROXY_URL");
     expect(source).not.toContain("browser.newContext(");
     expect(source).not.toContain("disposeOnDetach: true");
   });

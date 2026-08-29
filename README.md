@@ -28,8 +28,8 @@ reading the code!
 
 The deploy button provisions [Neon](https://neon.tech) for Postgres. Add
 [Bright Data Browser API](https://docs.brightdata.com/scraping-automation/scraping-browser/configuration)
-credentials and a [Decodo](https://help.decodo.com/docs/residential-proxy-custom-sticky-sessions)
-residential proxy URL for hosted browsers. Vercel AI Gateway handles inference.
+credentials for hosted browsers. Browser API supplies managed residential proxy
+routing, CAPTCHA solving, and fingerprint handling. Vercel AI Gateway handles inference.
 [Linq](https://linq.app) is optional and requires the setup below before
 iMessage or production phone sign-in is available. Usage is billed to your
 Vercel account. Set the remaining auth variables on the deployment:
@@ -40,7 +40,6 @@ BETTER_AUTH_URL=https://your-host
 DATABASE_URL=postgresql://user:password@host/database
 DATABASE_URL_UNPOOLED=postgresql://user:password@host/database
 BRIGHT_DATA_BROWSER_AUTH=brd-customer-YOUR_ID-zone-YOUR_ZONE:YOUR_PASSWORD
-DECODO_PROXY_URL=http://user:pass@gate.decodo.com:7000
 SECRET_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ```
 
@@ -48,7 +47,7 @@ SECRET_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 
 Deploy this fork independently at `https://apply.goforay.io`, with its own
 Postgres database, Better Auth secret, Bright Data Browser API credentials,
-Decodo residential proxy URL, and vault-encryption key.
+and vault-encryption key.
 Set `JUICEBOX_API_URL=https://api.goforay.io` and the same
 `OPENINSTINCT_SHARED_SECRET` configured on JuiceBox. This shared secret signs
 short-lived service calls only; it is not an ATS credential and is never sent
@@ -183,6 +182,6 @@ explicit secrets.
 
 <div align="center">
 
-Built on [Vercel](https://vercel.com) · [Bright Data](https://brightdata.com) · [Decodo](https://decodo.com) · [Linq](https://linq.app) · [Neon](https://neon.tech)
+Built on [Vercel](https://vercel.com) · [Bright Data](https://brightdata.com) · [Linq](https://linq.app) · [Neon](https://neon.tech)
 
 </div>
