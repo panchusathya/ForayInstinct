@@ -17,10 +17,13 @@ import { kernel } from "@/lib/kernel";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import {
+  isResolvedWorkdayRoute,
   isWorkdayApplicationUrl,
   normalizeWorkdayRouteResult,
   workdayRouterCode,
+  workdayRouteRank,
   workdayRouteStrategies,
+  workdayRouteTimeoutSec,
 } from "@/agent/subagents/worker/lib/workday-router";
 
 const browserTimeoutFloorSeconds = 15 * 60;
@@ -94,54 +97,71 @@ export default defineTool({
             browser_session_id: browser.session_id,
             target: safeWorkdayLocation(input.start_url),
           });
-          try {
-            for (const [index, strategy] of workdayRouteStrategies.entries()) {
+          for (const [index, strategy] of workdayRouteStrategies.entries()) {
+            const attempt = index + 1;
+            let candidate: ReturnType<typeof normalizeWorkdayRouteResult>;
+            try {
               const response = await kernel.browsers.playwright.execute(
                 browser.session_id,
                 {
                   code: workdayRouterCode(input.start_url, strategy),
-                  timeout_sec: 30,
+                  timeout_sec: workdayRouteTimeoutSec,
                 },
                 { signal }
               );
-              workday = {
+              candidate = {
                 ...normalizeWorkdayRouteResult(response),
-                attempt: index + 1,
+                attempt,
                 strategy,
               };
               await recordCheckpoint(scope, browser.session_id, {
                 action: strategy,
-                actions: workday.actions,
-                attempt: index + 1,
+                actions: candidate.actions,
+                attempt,
                 errorCode: diagnosticErrorCode(response.error),
-                page: safeWorkdayLocation(workday.url),
+                page: safeWorkdayLocation(candidate.url),
                 phase: "workday_router",
-                state: workday.state,
-                trace: workday.trace,
+                state: candidate.state,
+                trace: candidate.trace,
               });
               logWorkdayRoute({
                 applicationUrl: input.start_url,
                 browser,
                 response,
-                workday,
+                workday: candidate,
               });
-              if (workday.state !== "route_incomplete") break;
+            } catch (error) {
+              // A cancelled assignment must stop here; anything else is one
+              // strategy failing, which the remaining strategies can recover.
+              if (signal.aborted) throw error;
+              candidate = { attempt, state: "execution_failed", strategy };
+              await recordCheckpoint(scope, browser.session_id, {
+                action: strategy,
+                attempt,
+                errorCode: diagnosticErrorCode(error),
+                page: safeWorkdayLocation(input.start_url),
+                phase: "workday_router",
+                state: "execution_failed",
+              });
+              console.error("[workday-router] route request failed", {
+                attempt,
+                browser_session_id: browser.session_id,
+                error_code: diagnosticErrorCode(error),
+                strategy,
+                target: safeWorkdayLocation(input.start_url),
+              });
             }
-          } catch (error) {
-            await recordCheckpoint(scope, browser.session_id, {
-              action: workday?.strategy,
-              attempt: workday?.attempt,
-              errorCode: diagnosticErrorCode(error),
-              page: safeWorkdayLocation(input.start_url),
-              phase: "workday_router",
-              state: "execution_failed",
-            });
-            console.error("[workday-router] route request failed", {
-              browser_session_id: browser.session_id,
-              error_code: diagnosticErrorCode(error),
-              target: safeWorkdayLocation(input.start_url),
-            });
-            throw error;
+            // Keep the most informative read: a later timeout must not bury an
+            // earlier attempt that actually observed the page. Equally ranked
+            // results prefer the latest, which is where the browser now sits.
+            if (
+              workday === undefined ||
+              workdayRouteRank(candidate.state) >=
+                workdayRouteRank(workday.state)
+            ) {
+              workday = candidate;
+            }
+            if (isResolvedWorkdayRoute(candidate.state)) break;
           }
         }
         return lifecycleResult(browser, workday);
@@ -244,16 +264,7 @@ function lifecycleResult(
   return {
     browser: value,
     next_actions: [
-      ...(workday?.state === "email_login_ready"
-        ? [
-            "Workday is at its real email/password form. Use list_vault, focus that form, then use fill_from_vault; do not click a header Sign In control.",
-          ]
-        : []),
-      ...(workday?.state === "route_incomplete"
-        ? [
-            "Workday routing completed its direct, reload, and direct-autofill retries without finding a safe next control. Continue autonomously with one observed Playwright inspection/recovery; do not request human takeover unless a required answer, OTP, or personal verification is actually present.",
-          ]
-        : []),
+      ...(workday === undefined ? [] : [workdayNextAction(workday.state)]),
       `Use execute_playwright_code with session_id "${value.session_id}" for deterministic browser automation.`,
       `Use computer_action with session_id "${value.session_id}" for visual browser control.`,
       `Use solve_captcha with session_id "${value.session_id}" immediately if Kernel reports visible hCaptcha could not be solved automatically or a checkbox hCaptcha remains.`,
@@ -261,6 +272,30 @@ function lifecycleResult(
     ],
     ...(workday === undefined ? {} : { workday }),
   };
+}
+
+const workdayNextActions: Record<
+  NonNullable<ReturnType<typeof normalizeWorkdayRouteResult>>["state"],
+  string
+> = {
+  email_login_ready:
+    "Workday is at its real email/password form. Use list_vault, focus that form, then use fill_from_vault; do not click a header Sign In control.",
+  wizard_ready:
+    "Workday is already inside the application wizard. Continue filling the current step with execute_playwright_code; do not navigate back to the job posting or re-enter the account wall.",
+  route_incomplete:
+    "Workday routing completed its direct, reload, and direct-autofill retries without finding a safe next control. Continue autonomously with one observed Playwright inspection/recovery; do not request human takeover unless a required answer, OTP, or personal verification is actually present.",
+  error_shell:
+    "Workday returned an error or maintenance page, so the tenant is unavailable rather than misrouted. Reload once with execute_playwright_code; if it still shows the outage, report the outage and stop instead of retrying the application.",
+  navigation_failed:
+    "The job page never loaded. Retry the navigation once with execute_playwright_code before drawing any conclusion; report an unreachable posting only if that retry also fails.",
+  execution_failed:
+    "Routing could not run to completion, which says nothing about the page itself. Inspect the current page with execute_playwright_code and continue the application from whatever it shows.",
+};
+
+function workdayNextAction(
+  state: ReturnType<typeof normalizeWorkdayRouteResult>["state"]
+) {
+  return workdayNextActions[state];
 }
 
 function logWorkdayRoute({
