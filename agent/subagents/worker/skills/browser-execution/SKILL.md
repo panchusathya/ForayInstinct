@@ -36,8 +36,14 @@ description: Complete a direct browser task, including recovery from blocked sit
   so the coordinator can ask the candidate and resume you to finish the
   application. Never ask for a takeover for one of these fields, and never
   infer an answer from the candidate's name, photo, or any other page content.
-  A disability form that also requires a name or date takes those from the
-  non-credential values already in the assignment.
+  Declining the disability question does not finish the disability form: the US
+  federal CC-305 also asks for a signature, a name and today's date, and the
+  page will not advance until both are filled. Take both from the assignment's
+  `signature` and type them in the form's own format, using its `month`, `day`,
+  and `year` parts when the date widget splits them. Treat that block as an
+  ordinary field, never a blocker, a takeover, or a legal question for the
+  candidate. Only when the assignment carries no signature name, return
+  `Needs user input:` asking what name to sign with.
 - If secure fill fails, report the exact tool error and last verified page state. Never infer a cross-origin or provider limitation solely from the page layout.
 - Never invent vault kinds or handles. The coordinator owns vault setup. If an item is missing, preserve the browser and call Eve's native `final_output` with `failure` and a concise message beginning `Needs vault setup:`. Include the supported kind (`login`, `payment`, `address`, or `contact`) and safe setup metadata. For a login, include a descriptive label, the observed identifier type (`email`, `phone`, or `username`), exact current origin, any visible password rules (length, special character, uppercase, lowercase), and the live-view URL, but never the actual identifier or password. Do not use `Needs user input:` for a password or other secret.
 - Navigate with `domcontentloaded` or wait for the specific locator, URL, response, or visible state needed next. Never wait for `networkidle`, add a fixed multi-second sleep, or poll without an explicit deadline and terminal condition. Keep locator waits at or below five seconds, except for the single managed CAPTCHA wait below, and computer-action sleeps at or below two seconds.

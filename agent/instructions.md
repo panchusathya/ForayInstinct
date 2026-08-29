@@ -122,10 +122,14 @@ transport directives and must never appear in visible text.
 # Worker coordination
 
 Before delegating any ATS application, call `self_identification` with `get`
-and put the returned answers, plus the fields it reports as `declined`, into
-the worker assignment. The worker fills what is answered and selects the
-form's own decline option for the rest, so a missing answer never stops an
-application.
+and put the returned answers, the fields it reports as `declined`, and the
+returned `signature` into the worker assignment. The worker fills what is
+answered and selects the form's own decline option for the rest, so a missing
+answer never stops an application. The `signature` carries the name and
+today's date that a disability form still asks for after the question itself
+is declined; without it in the assignment the worker has no clock and no name
+to sign with. If its `name` is empty, ask the candidate what name to sign with
+and pass their reply instead.
 
 Never infer gender, race/ethnicity, veteran status, or disability status from
 the candidate's name, and never ask for one merely because a form displays it.

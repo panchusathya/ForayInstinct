@@ -170,7 +170,59 @@ describe("database services", () => {
     expect(await settings.readGatewayModel(alice)).toBe("openai/test");
     expect(await settings.readGatewayModel(bob)).toBeUndefined();
   }, 15_000);
+
+  it("keeps an application alive when the answers cannot be stored", async () => {
+    // A settings_key_check that admitted only 'gateway_model' turned this
+    // write into a thrown tool error, which killed the application waiting on
+    // the answer. Storing is a convenience; the answer itself is the result.
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, selfIdentification] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/self-identification"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    const rejected = await selfIdentification.saveSelfIdentification(alice, {
+      gender: "Male",
+    });
+
+    expect(rejected).toEqual({ answers: { gender: "Male" }, stored: false });
+
+    await applyMigration(client, "0008_self_identification_setting.sql");
+    const accepted = await selfIdentification.saveSelfIdentification(alice, {
+      disabilityStatus: "I do not wish to answer",
+    });
+
+    // The rejected answer was never stored, so it is absent from the merge
+    // the widened constraint now accepts.
+    expect(accepted).toEqual({
+      answers: { disabilityStatus: "I do not wish to answer" },
+      stored: true,
+    });
+    expect(await selfIdentification.readSelfIdentification(alice)).toEqual({
+      disabilityStatus: "I do not wish to answer",
+    });
+  }, 15_000);
 });
+
+async function applyMigration(database: PGlite, name: string) {
+  const migration = await readFile(
+    new URL(`../db/migrations/${name}`, import.meta.url),
+    "utf8"
+  );
+  for (const statement of migration.split("--> statement-breakpoint")) {
+    if (statement.trim()) await database.exec(statement);
+  }
+}
 
 async function applyInitialMigration(database: PGlite) {
   const migration = await readFile(

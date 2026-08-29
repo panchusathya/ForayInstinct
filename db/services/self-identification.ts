@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
-import { db, settings } from "@/db";
+import { db, settings, user } from "@/db";
 import {
   type SelfIdentification,
   selfIdentificationSchema,
@@ -32,23 +32,50 @@ export async function readSelfIdentification(
   }
 }
 
-/** Merges the supplied answers over the stored ones and returns the result. */
+/**
+ * Merges the supplied answers over the stored ones and returns the result.
+ *
+ * Storing them only saves the candidate from being asked the same question on
+ * the next application, so a failed write is reported rather than thrown: an
+ * application already waiting on the answer must not die with the insert. A
+ * `settings_key_check` that admitted only `gateway_model` did exactly that.
+ */
 export async function saveSelfIdentification(
   scope: AccessScope,
   answers: SelfIdentification
-): Promise<SelfIdentification> {
+): Promise<{ answers: SelfIdentification; stored: boolean }> {
   const merged = { ...(await readSelfIdentification(scope)), ...answers };
   const value = JSON.stringify(merged);
-  await db
-    .insert(settings)
-    .values({
-      key: selfIdentificationKey,
-      value,
+  try {
+    await db
+      .insert(settings)
+      .values({
+        key: selfIdentificationKey,
+        value,
+        workspaceId: scope.workspaceId,
+      })
+      .onConflictDoUpdate({
+        target: [settings.workspaceId, settings.key],
+        set: { value },
+      });
+    return { answers: merged, stored: true };
+  } catch (error) {
+    console.error("[self-identification] persistence failed", {
+      error: error instanceof Error ? error.message : String(error),
       workspaceId: scope.workspaceId,
-    })
-    .onConflictDoUpdate({
-      target: [settings.workspaceId, settings.key],
-      set: { value },
     });
-  return merged;
+    return { answers: merged, stored: false };
+  }
+}
+
+/** The name the candidate signs a disability self-identification form with. */
+export async function readSelfIdentificationSignatureName(
+  scope: AccessScope
+): Promise<string> {
+  const rows = await db
+    .select({ name: user.name })
+    .from(user)
+    .where(eq(user.id, scope.userId))
+    .limit(1);
+  return rows[0]?.name.trim() ?? "";
 }

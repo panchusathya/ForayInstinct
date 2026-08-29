@@ -129,6 +129,39 @@ describe("database migrations", () => {
     ).rejects.toThrow(/constraint/);
   }, 15_000);
 
+  it("stores the candidate's self-identification answers", async () => {
+    // settings_key_check only admitted 'gateway_model', so saving an EEO
+    // answer failed at the database and stalled the application on the
+    // voluntary disclosures section it was meant to get past.
+    const database = createDatabase();
+
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(database, "0008_self_identification_setting.sql");
+    await applyMigration(database, "0008_self_identification_setting.sql");
+
+    await database.exec(`
+      INSERT INTO workspaces VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO settings VALUES (
+        'workspace-1',
+        'self_identification',
+        '{"gender":"Male"}'
+      );
+      INSERT INTO settings VALUES ('workspace-1', 'gateway_model', 'openai/gpt-5');
+    `);
+
+    await expect(
+      database.query<{ value: string }>(
+        `SELECT value FROM settings WHERE key = 'self_identification'`
+      )
+    ).resolves.toMatchObject({ rows: [{ value: '{"gender":"Male"}' }] });
+    expect(await pendingConstraintCount(database)).toBe(0);
+    await expect(
+      database.exec(
+        `INSERT INTO settings VALUES ('workspace-1', 'unknown_key', 'x')`
+      )
+    ).rejects.toThrow(/constraint/);
+  }, 15_000);
+
   it("adopts existing Better Auth tables without changing their rows", async () => {
     const database = createDatabase();
     await database.exec(legacyAuthSchema);

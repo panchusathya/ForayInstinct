@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   declinedSelfIdentificationFields,
   selfIdentificationSchema,
+  selfIdentificationSignature,
 } from "../lib/self-identification";
 
 const flat = (path: string) => readFileSync(path, "utf8").replace(/\s+/g, " ");
@@ -61,6 +62,40 @@ describe("voluntary self-identification", () => {
     }
   });
 
+  it("signs a declined disability form with the name and today's date", () => {
+    // Declining the CC-305 question leaves its signature block empty, and the
+    // page will not advance until a name and date are filled. The worker has
+    // no clock, so both travel with the assignment.
+    expect(
+      selfIdentificationSignature(
+        "Alex Rivera",
+        new Date("2026-08-29T21:00:00Z")
+      )
+    ).toEqual({
+      day: "29",
+      isoDate: "2026-08-29",
+      month: "08",
+      name: "Alex Rivera",
+      year: "2026",
+    });
+    expect(
+      selfIdentificationSignature(
+        "Alex Rivera",
+        new Date("2026-01-05T00:00:00Z")
+      ).isoDate
+    ).toBe("2026-01-05");
+  });
+
+  it("fills the signature block rather than treating it as a blocker", () => {
+    for (const source of [browserSkillText(), workerInstructionsText()]) {
+      expect(source).toContain("CC-305");
+      expect(source).toContain("signature");
+      expect(source).toMatch(/name and today's date/i);
+      expect(source).toContain("`month`, `day`, and `year`");
+      expect(source).not.toMatch(/signature block is a takeover/i);
+    }
+  });
+
   it("sends stored answers with the assignment and resumes after asking", () => {
     const instructions = coordinatorText();
 
@@ -75,5 +110,9 @@ describe("voluntary self-identification", () => {
       "resume that worker with its `agentId` to finish the"
     );
     expect(instructions).toContain("Never turn that question into a takeover");
+    // The disability form's signature block needs a name and a date the
+    // worker cannot produce on its own.
+    expect(instructions).toContain("returned `signature`");
+    expect(instructions).toContain("no clock and no name");
   });
 });
