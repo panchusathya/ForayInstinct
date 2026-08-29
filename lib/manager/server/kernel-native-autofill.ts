@@ -7,8 +7,10 @@ import {
   nativeLoginAutofillTokens,
   nativeLoginControlInspectionExpression,
   nativeLoginFillFunctionDeclaration,
+  nativeSignupAutofillTokens,
   selectNativeLoginFills,
   type ClassifiedNativeLoginControl,
+  type NativeLoginPurpose,
 } from "./kernel-login-autofill";
 
 const targetListSchema = z.object({
@@ -57,6 +59,7 @@ const controlDescriptorsSchema = z.array(
 const loginControlDescriptorsSchema = z.array(
   z.object({
     autocomplete: z.string(),
+    automationId: z.string(),
     focused: z.boolean(),
     formIndex: z.number().int().nonnegative().nullable(),
     index: z.number().int().nonnegative(),
@@ -89,6 +92,7 @@ export const nativeAutofillTokens = {
   address: Object.keys(addressTokenToChromiumField),
   login: nativeLoginAutofillTokens,
   payment: [...cardTokens],
+  sign_up: nativeSignupAutofillTokens,
 } as const;
 
 type NativeAutofillKind = "address" | "login" | "payment";
@@ -157,12 +161,14 @@ export async function fillWithKernelNativeAutofill({
   claims,
   expectedOrigin,
   kind,
+  purpose = "sign_in",
   signal,
 }: {
   readonly browserSessionId: string;
   readonly claims: readonly AutofillClaim[];
   readonly expectedOrigin: string;
   readonly kind: NativeAutofillKind;
+  readonly purpose?: NativeLoginPurpose;
   readonly signal?: AbortSignal;
 }) {
   const payload =
@@ -182,7 +188,8 @@ export async function fillWithKernelNativeAutofill({
         const filledClaims = await fillNativeLoginControls(
           connection,
           sessionId,
-          claims
+          claims,
+          purpose
         );
         return { filledClaims, origin };
       }
@@ -221,9 +228,14 @@ export async function fillWithKernelNativeAutofill({
 async function fillNativeLoginControls(
   connection: CdpConnection,
   sessionIds: readonly string[],
-  claims: readonly AutofillClaim[]
+  claims: readonly AutofillClaim[],
+  purpose: NativeLoginPurpose
 ) {
-  const controls = await inspectNativeLoginControls(connection, sessionIds);
+  const controls = await inspectNativeLoginControls(
+    connection,
+    sessionIds,
+    purpose
+  );
   const focused = controls.find((control) => control.focused);
   if (!focused) {
     throw new Error(
@@ -235,7 +247,7 @@ async function fillNativeLoginControls(
       control.frameId === focused.frameId &&
       control.sessionId === focused.sessionId
   );
-  const fills = selectNativeLoginFills(sameFrame, claims);
+  const fills = selectNativeLoginFills(sameFrame, claims, purpose);
   if (fills.length === 0) {
     throw new Error(
       "The focused login form does not accept a field available in this saved login."
@@ -253,7 +265,8 @@ async function fillNativeLoginControls(
 
 async function inspectNativeLoginControls(
   connection: CdpConnection,
-  sessionIds: readonly string[]
+  sessionIds: readonly string[],
+  purpose: NativeLoginPurpose
 ) {
   return (
     await Promise.all(
@@ -266,9 +279,12 @@ async function inspectNativeLoginControls(
           return (
             await Promise.all(
               flattenFrames(frameTree).map(({ id: frameId }) =>
-                inspectNativeLoginFrame(connection, sessionId, frameId).catch(
-                  () => []
-                )
+                inspectNativeLoginFrame(
+                  connection,
+                  sessionId,
+                  frameId,
+                  purpose
+                ).catch(() => [])
               )
             )
           ).flat();
@@ -283,7 +299,8 @@ async function inspectNativeLoginControls(
 async function inspectNativeLoginFrame(
   connection: CdpConnection,
   sessionId: string,
-  frameId: string
+  frameId: string,
+  purpose: NativeLoginPurpose
 ) {
   const { executionContextId } = isolatedWorldSchema.parse(
     await connection.send(
@@ -307,7 +324,7 @@ async function inspectNativeLoginFrame(
     response.result.value
   );
   return descriptors.flatMap((descriptor) => {
-    const classified = classifyNativeLoginControl(descriptor);
+    const classified = classifyNativeLoginControl(descriptor, purpose);
     return classified
       ? [{ ...classified, executionContextId, frameId, sessionId }]
       : [];

@@ -539,15 +539,17 @@ describe("Kernel browser contract", () => {
     });
   });
 
-  it("does not offer a create-account panel to vault autofill", async () => {
-    // The signup panel renders a password box too; filling it can never
-    // complete a sign-in.
+  it("reports a create-account-only wall as account_creation_ready, not login", async () => {
+    // The signup panel renders a password box too; filling it as sign-in can
+    // never complete. When no sign-in switch is reachable, hand the worker a
+    // purpose-aware signup fill instead of a generic incomplete route.
     const state = await routeAgainst({
       url: jobUrl,
       visible: ['input[type="password"]', "verifyPassword"],
     });
 
-    expect(state).toMatchObject({ state: "route_incomplete" });
+    expect(state).toMatchObject({ state: "account_creation_ready" });
+    expect(state).not.toMatchObject({ state: "email_login_ready" });
   });
 
   it("waits for Workday hydration and bounds itself to a budget", () => {

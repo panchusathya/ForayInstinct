@@ -2,6 +2,7 @@ import type { PlaywrightExecuteResponse } from "@onkernel/sdk/resources/browsers
 
 export type WorkdayRouteState =
   | "email_login_ready"
+  | "account_creation_ready"
   | "wizard_ready"
   | "error_shell"
   | "navigation_failed"
@@ -38,8 +39,7 @@ export interface WorkdayRouteResult {
  * Matches Workday's Apply / Apply Now / Apply for this job labels without
  * taking "Apply with LinkedIn" or other social apply controls.
  */
-export const workdayApplyControlName =
-  /^apply(?:\s+now|\s+for this job)?$/i;
+export const workdayApplyControlName = /^apply(?:\s+now|\s+for this job)?$/i;
 
 /**
  * The router script must finish inside its own budget and return a structured
@@ -53,6 +53,7 @@ const maxRouteIterations = 24;
 
 const routeStateRank: Record<WorkdayRouteState, number> = {
   email_login_ready: 5,
+  account_creation_ready: 5,
   wizard_ready: 5,
   route_incomplete: 3,
   error_shell: 2,
@@ -62,7 +63,11 @@ const routeStateRank: Record<WorkdayRouteState, number> = {
 
 /** A resolved route is the only reason to stop trying the remaining strategies. */
 export function isResolvedWorkdayRoute(state: WorkdayRouteState): boolean {
-  return state === "email_login_ready" || state === "wizard_ready";
+  return (
+    state === "email_login_ready" ||
+    state === "account_creation_ready" ||
+    state === "wizard_ready"
+  );
 }
 
 /** Ranks how much a result tells us, so a late failure cannot bury an earlier read. */
@@ -98,7 +103,7 @@ const deadline = Date.now() + ${JSON.stringify(routeBudgetMs)};
 const remaining = () => Math.max(0, deadline - Date.now());
 // Every wait is clamped to the budget so one slow step cannot starve the rest.
 const cap = (ms) => Math.max(250, Math.min(ms, remaining()));
-const applyName = ${workdayApplyControlName};
+const applyName = new RegExp(${JSON.stringify(workdayApplyControlName.source)}, ${JSON.stringify(workdayApplyControlName.flags)});
 const trace = [];
 const tried = new Set();
 const failedOnce = new Set();
@@ -137,6 +142,13 @@ const click = async (step, locator) => {
   return true;
 };
 const signupOnly = async () => visible(page.locator('input[data-automation-id="verifyPassword"], input[data-automation-id="verifyNewPassword"]'));
+const signInSwitchVisible = async (root) => (
+  await visible(root.locator('button[data-automation-id="SignInWithEmailButton"]'))
+  || await visible(root.getByRole("button", { name: /^sign in with email(?: address)?$/i }))
+  || await visible(root.locator('[data-automation-id="signInLink"]'))
+  || await visible(root.getByRole("link", { name: /^sign in$/i }))
+  || await visible(root.getByRole("button", { name: /^sign in$/i }))
+);
 const postingApplyVisible = async () => (
   await visible(page.locator('a[data-automation-id="adventureButton"], button[data-automation-id="adventureButton"]'))
   || await visible(page.locator('[data-automation-id="applyManually"]'))
@@ -175,8 +187,12 @@ const currentState = async () => {
     return withToday({ state: "error_shell", trace, url });
   }
   // Workday's create-account panel renders a password box too. Reporting it as
-  // a login form sends vault autofill into a signup it can never complete.
-  if (await signupOnly()) return null;
+  // a login form sends vault autofill into a signup it cannot complete as
+  // sign-in. Only report account creation when no sign-in switch is reachable.
+  if (await signupOnly()) {
+    if (await signInSwitchVisible(await scopedRoot())) return null;
+    return withToday({ state: "account_creation_ready", trace, url });
+  }
   if (await visible(page.locator('input[type="password"], input[data-automation-id="password"]'))) {
     return withToday({ state: "email_login_ready", trace, url });
   }
@@ -299,13 +315,23 @@ export function normalizeWorkdayRouteResult(
 
 function isToday(value: unknown): value is WorkdayRouteToday {
   if (!value || typeof value !== "object") return false;
-  const candidate = value as Record<string, unknown>;
+  if (
+    !(
+      "day" in value &&
+      "isoDate" in value &&
+      "month" in value &&
+      "timeZone" in value &&
+      "year" in value
+    )
+  ) {
+    return false;
+  }
   return (
-    typeof candidate.day === "string" &&
-    typeof candidate.isoDate === "string" &&
-    typeof candidate.month === "string" &&
-    typeof candidate.timeZone === "string" &&
-    typeof candidate.year === "string"
+    typeof value.day === "string" &&
+    typeof value.isoDate === "string" &&
+    typeof value.month === "string" &&
+    typeof value.timeZone === "string" &&
+    typeof value.year === "string"
   );
 }
 
@@ -322,6 +348,7 @@ function isRouteResult(value: unknown): value is WorkdayRouteResult {
   };
   return (
     (candidate.state === "email_login_ready" ||
+      candidate.state === "account_creation_ready" ||
       candidate.state === "wizard_ready" ||
       candidate.state === "error_shell" ||
       candidate.state === "navigation_failed" ||

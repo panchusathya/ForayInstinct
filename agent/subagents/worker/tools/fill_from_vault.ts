@@ -21,7 +21,7 @@ const outputSchema = z.object({
 
 export default defineTool({
   description:
-    "Fill a login, card, or address form with an opaque handle returned by list_vault. Focus one control in the intended form first. Never supply vault fields, selectors, origins, or secret values.",
+    'Fill a login, card, or address form with an opaque handle returned by list_vault. Focus one control in the intended form first. Never supply vault fields, selectors, origins, or secret values. For a login, purpose is "sign_in" (default) or "sign_up"; use "sign_up" only on a create-account form.',
   inputSchema: fillFromVaultRequestSchema,
   outputSchema,
   async execute(input, context) {
@@ -44,13 +44,17 @@ export default defineTool({
       browserSessionId: input.browserSessionId,
       signal: context.abortSignal,
     });
+    const purpose = input.purpose;
     const surfaceKind =
       item.kind === "payment"
         ? "payment-card"
         : item.kind === "login"
           ? "credentials"
           : "postal-address";
-    const tokens = nativeAutofillTokens[item.kind];
+    const tokens =
+      item.kind === "login" && purpose === "sign_up"
+        ? nativeAutofillTokens.sign_up
+        : nativeAutofillTokens[item.kind];
     const surface = {
       fields: tokens.map((token) => ({ score: 100, token })),
       id: surfaceKind,
@@ -72,6 +76,7 @@ export default defineTool({
       claims,
       expectedOrigin: origin,
       kind: item.kind,
+      purpose,
       signal: context.abortSignal,
     });
 

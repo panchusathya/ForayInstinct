@@ -1,5 +1,8 @@
 import type { AutofillClaim } from "../vault-autofill-protocol";
 
+export const nativeLoginPurposes = ["sign_in", "sign_up"] as const;
+export type NativeLoginPurpose = (typeof nativeLoginPurposes)[number];
+
 export const nativeLoginAutofillTokens = [
   "username",
   "email",
@@ -7,8 +10,14 @@ export const nativeLoginAutofillTokens = [
   "current-password",
 ] as const;
 
+export const nativeSignupAutofillTokens = [
+  ...nativeLoginAutofillTokens,
+  "new-password",
+] as const;
+
 export interface NativeLoginControlDescriptor {
   readonly autocomplete: string;
+  readonly automationId: string;
   readonly focused: boolean;
   readonly formIndex: number | null;
   readonly index: number;
@@ -19,35 +28,40 @@ export interface NativeLoginControlDescriptor {
 
 export interface ClassifiedNativeLoginControl extends NativeLoginControlDescriptor {
   readonly score: number;
-  readonly token: (typeof nativeLoginAutofillTokens)[number];
+  readonly token: (typeof nativeSignupAutofillTokens)[number];
 }
 
 export function classifyNativeLoginControl(
-  descriptor: NativeLoginControlDescriptor
+  descriptor: NativeLoginControlDescriptor,
+  purpose: NativeLoginPurpose = "sign_in"
 ): ClassifiedNativeLoginControl | null {
-  const autocompleteTokens = descriptor.autocomplete
-    .toLowerCase()
-    .split(/\s+/u)
-    .filter(Boolean);
-  if (
-    autocompleteTokens.some((token) =>
-      ["new-password", "one-time-code"].includes(token)
-    )
-  ) {
+  const autocompleteTokens = new Set(
+    descriptor.autocomplete.toLowerCase().split(/\s+/u).filter(Boolean)
+  );
+  if (autocompleteTokens.has("one-time-code")) {
     return null;
+  }
+  if (autocompleteTokens.has("new-password")) {
+    return purpose === "sign_up"
+      ? { ...descriptor, score: 100, token: "new-password" }
+      : null;
   }
 
   for (const token of nativeLoginAutofillTokens) {
-    if (autocompleteTokens.includes(token)) {
+    if (autocompleteTokens.has(token)) {
       return { ...descriptor, score: 100, token };
     }
   }
 
   const searchable = normalizeText(
-    [descriptor.name, descriptor.label].filter(Boolean).join(" ")
+    [descriptor.automationId, descriptor.name, descriptor.label]
+      .filter(Boolean)
+      .join(" ")
   );
-  if (/\b(?:new|confirm|create|repeat)\s*password\b/u.test(searchable)) {
-    return null;
+  if (isConfirmPasswordControl(descriptor, searchable)) {
+    return purpose === "sign_up"
+      ? { ...descriptor, score: 95, token: "new-password" }
+      : null;
   }
   if (descriptor.type === "password") {
     return { ...descriptor, score: 90, token: "current-password" };
@@ -76,7 +90,8 @@ export function classifyNativeLoginControl(
 
 export function selectNativeLoginFills<T extends ClassifiedNativeLoginControl>(
   controls: readonly T[],
-  claims: readonly Pick<AutofillClaim, "token" | "value">[]
+  claims: readonly Pick<AutofillClaim, "token" | "value">[],
+  purpose: NativeLoginPurpose = "sign_in"
 ) {
   const focused = controls.find((control) => control.focused);
   if (!focused) return [];
@@ -89,12 +104,25 @@ export function selectNativeLoginFills<T extends ClassifiedNativeLoginControl>(
 
   const identifier = sameSurface.find(
     (control) =>
-      control.token !== "current-password" &&
+      !isPasswordToken(control.token) &&
       (values.has(control.token) || values.has("username"))
   );
   if (identifier) {
     const value = values.get(identifier.token) ?? values.get("username");
     if (value !== undefined) selected.push({ control: identifier, value });
+  }
+
+  if (purpose === "sign_up") {
+    const passwordValue =
+      values.get("new-password") ?? values.get("current-password");
+    if (passwordValue !== undefined) {
+      for (const control of sameSurface) {
+        if (isPasswordToken(control.token)) {
+          selected.push({ control, value: passwordValue });
+        }
+      }
+    }
+    return selected;
   }
 
   const password = sameSurface.find(
@@ -125,6 +153,7 @@ export const nativeLoginControlInspectionExpression = `(() => {
     const resolvedFormIndex = element.form ? forms.indexOf(element.form) : -1;
     return [{
       autocomplete: element.autocomplete || "",
+      automationId: element.getAttribute("data-automation-id") || "",
       focused: document.activeElement === element,
       formIndex: resolvedFormIndex >= 0 ? resolvedFormIndex : null,
       index,
@@ -153,6 +182,28 @@ export const nativeLoginFillFunctionDeclaration = `function(value) {
   this.dispatchEvent(new Event("change", { bubbles: true }));
   return this.value.length > 0;
 }`;
+
+function isPasswordToken(
+  token: ClassifiedNativeLoginControl["token"]
+): token is "current-password" | "new-password" {
+  return token === "current-password" || token === "new-password";
+}
+
+function isConfirmPasswordControl(
+  descriptor: NativeLoginControlDescriptor,
+  searchable: string
+) {
+  if (
+    /^(?:verifyPassword|verifyNewPassword|newPassword|confirmPassword)$/i.test(
+      descriptor.automationId
+    )
+  ) {
+    return true;
+  }
+  return /\b(?:new|confirm|create|repeat|verify)\s*password\b/u.test(
+    searchable
+  );
+}
 
 function compareLoginControls(
   left: ClassifiedNativeLoginControl,

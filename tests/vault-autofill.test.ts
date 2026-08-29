@@ -169,6 +169,15 @@ describe("vault browser autofill", () => {
       "current-password": "correct horse",
       username: "ada@example.com",
     });
+    const signupClaims = await provider.materializeClaims(scope, login.id, {
+      availableTokens: new Set(["email", "current-password", "new-password"]),
+      origin: "https://checkout.example",
+      surface: credentialsSurface,
+    });
+    expect(claimValues(signupClaims)).toMatchObject({
+      "current-password": "correct horse",
+      "new-password": "correct horse",
+    });
 
     await expect(
       provider.materializeClaims(scope, login.id, {
@@ -442,6 +451,60 @@ describe("vault browser autofill", () => {
     ).toBeNull();
   });
 
+  it("classifies and fills both password controls on a sign_up form", () => {
+    expect(
+      classifyNativeLoginControl(
+        loginControl({ autocomplete: "new-password", type: "password" }),
+        "sign_up"
+      )
+    ).toMatchObject({ token: "new-password" });
+    expect(
+      classifyNativeLoginControl(
+        loginControl({
+          automationId: "verifyPassword",
+          label: "Verify Password",
+          type: "password",
+        }),
+        "sign_up"
+      )
+    ).toMatchObject({ token: "new-password" });
+    expect(
+      classifyNativeLoginControl(
+        loginControl({ autocomplete: "one-time-code", type: "text" }),
+        "sign_up"
+      )
+    ).toBeNull();
+
+    const password = classifiedLoginControl({
+      focused: true,
+      formIndex: 0,
+      index: 0,
+      token: "current-password",
+      type: "password",
+    });
+    const confirm = classifiedLoginControl({
+      automationId: "verifyPassword",
+      formIndex: 0,
+      index: 1,
+      token: "new-password",
+      type: "password",
+    });
+    expect(
+      selectNativeLoginFills(
+        [password, confirm],
+        [
+          claim("email", "ada@example.com"),
+          claim("current-password", "correct horse"),
+          claim("new-password", "correct horse"),
+        ],
+        "sign_up"
+      )
+    ).toEqual([
+      { control: password, value: "correct horse" },
+      { control: confirm, value: "correct horse" },
+    ]);
+  });
+
   it("selects one identifier and current password from the focused login form", () => {
     const controls = [
       classifiedLoginControl({
@@ -516,6 +579,7 @@ function loginControl(
 ): NativeLoginControlDescriptor {
   return {
     autocomplete: "",
+    automationId: "",
     focused: false,
     formIndex: 0,
     index: 0,

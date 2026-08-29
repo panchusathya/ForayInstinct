@@ -25,9 +25,8 @@ const mocks = vi.hoisted(() => ({
   requireOwnedBrowserSession:
     vi.fn<(_scope: unknown, _sessionId: string) => Promise<unknown>>(),
   requireWorkerScope: vi.fn<(_context: unknown) => Promise<unknown>>(),
-  snapshotKernelPage: vi.fn<
-    (_input: unknown) => Promise<{ body: string; url: string }>
-  >(),
+  snapshotKernelPage:
+    vi.fn<(_input: unknown) => Promise<{ body: string; url: string }>>(),
 }));
 
 vi.mock("@/agent/subagents/worker/lib/access", () => ({
@@ -51,6 +50,7 @@ vi.mock("@/lib/kernel", () => ({
 }));
 
 vi.mock("@/lib/manager/server/kernel-native-autofill", () => ({
+  currentKernelPageUrl: vi.fn(async () => undefined),
   snapshotKernelPage: mocks.snapshotKernelPage,
 }));
 
@@ -90,7 +90,10 @@ describe("browser submission evidence", () => {
       )
     ).toBe("successfully submitted");
     expect(
-      observedSubmission("https://tenant.example/job/role", "Continue application")
+      observedSubmission(
+        "https://tenant.example/job/role",
+        "Continue application"
+      )
     ).toBeUndefined();
   });
 
@@ -175,9 +178,8 @@ describe("playwright checkpoints observe a submission without final_output", () 
   });
 
   it("records submission_observed from the live page, not the Playwright return", async () => {
-    const { default: executePlaywrightCode } = await import(
-      "../agent/subagents/worker/tools/execute_playwright_code"
-    );
+    const { default: executePlaywrightCode } =
+      await import("../agent/subagents/worker/tools/execute_playwright_code");
 
     await executePlaywrightCode.execute(
       { code: "await page.click('text=Submit')", session_id: "browser-1" },

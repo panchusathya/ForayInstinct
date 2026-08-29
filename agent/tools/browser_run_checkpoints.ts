@@ -1,8 +1,6 @@
 import { defineDynamic, defineTool } from "eve/tools";
 import { z } from "zod";
-import {
-  groupBrowserRunCheckpoints,
-} from "@/lib/browser-submission";
+import { groupBrowserRunCheckpoints } from "@/lib/browser-submission";
 import { listRecentBrowserRunCheckpoints } from "@/db/services/browser-run-checkpoints";
 import { scopeFromPrincipal } from "@/lib/access-scope";
 

@@ -10,7 +10,10 @@ export function observedSubmission(
   body: string
 ): string | undefined {
   const location = browserPageLocation(url) ?? url;
-  if (/applicationSubmitted/i.test(location) || /\/confirmation(?:\/|$)/i.test(location)) {
+  if (
+    /applicationSubmitted/i.test(location) ||
+    /\/confirmation(?:\/|$)/i.test(location)
+  ) {
     return "application submitted";
   }
 

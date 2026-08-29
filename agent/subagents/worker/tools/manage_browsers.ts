@@ -311,6 +311,8 @@ const workdayNextActions: Record<
 > = {
   email_login_ready:
     "Workday is at its real email/password form. Use list_vault, focus that form, then use fill_from_vault; do not click a header Sign In control.",
+  account_creation_ready:
+    "Workday is offering create-account with no reachable sign-in switch. Focus that form and use fill_from_vault with purpose sign_up, using the saved vault password to create the account; then continue the application.",
   wizard_ready:
     "Workday is already inside the application wizard. Continue filling the current step with execute_playwright_code; do not navigate back to the job posting or re-enter the account wall.",
   route_incomplete:

@@ -67,6 +67,7 @@ const codecs: readonly VaultAutofillCodec[] = [
       }
       if (login.authentication.type === "password") {
         values.set("current-password", login.authentication.password);
+        values.set("new-password", login.authentication.password);
       }
       return values;
     },

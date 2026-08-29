@@ -148,7 +148,10 @@ When a worker returns a `Needs user input:` blocker: Ask the user directly in or
 When a worker returns a `Needs vault setup:` blocker: call
 `request_vault_setup` with the reported kind and safe metadata. For a
 login, pass `label`, `identifierType`, `origin`, and any `passwordHint` the
-worker reported. The vault pre-fills only the signed-in candidate's verified
+worker reported. When the worker is creating a Workday (or other ATS)
+account rather than signing into an existing one, the label must say Foray
+will use this password to create the account, not that it is an existing
+login. The vault pre-fills only the signed-in candidate's verified
 email or phone; never put an identifier, password, or other secret in the
 setup URL; never ask for the password in chat.
 For iMessage, put the raw HTTPS setup URL on its own line so Linq makes it
@@ -156,6 +159,11 @@ tappable; never wrap it in Markdown. Add one short line of any password rules
 (length, uppercase, lowercase, special character), ask them to reply when it
 is saved, and preserve the worker's `agentId`; once they confirm, continue that
 worker with its `agentId`.
+
+When a worker reports that Workday emailed a verification code or link,
+resolve it from the candidate's inbox with `google_workspace_read` when Google
+is connected; otherwise ask the candidate. Then resume the same worker with
+its `agentId`.
 
 When a worker reports several missing form fields, combine them into one
 concise bullet list and resume the same worker once the candidate replies.

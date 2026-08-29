@@ -7,7 +7,10 @@ import {
   browserPageLocation,
   observedSubmission,
 } from "@/lib/browser-submission";
-import { snapshotKernelPage } from "@/lib/manager/server/kernel-native-autofill";
+import {
+  snapshotKernelPage,
+  currentKernelPageUrl,
+} from "@/lib/manager/server/kernel-native-autofill";
 
 export async function recordBrowserActionCheckpoint(
   scope: AccessScope,
@@ -19,12 +22,20 @@ export async function recordBrowserActionCheckpoint(
     browserSessionId: sessionId,
     signal,
   }).catch(() => undefined);
+  const url =
+    snapshot?.url ??
+    (await currentKernelPageUrl({
+      browserSessionId: sessionId,
+      signal,
+    }).catch(() => undefined));
   const evidence = snapshot
     ? observedSubmission(snapshot.url, snapshot.body)
-    : undefined;
+    : url
+      ? observedSubmission(url, "")
+      : undefined;
   await recordBrowserRunCheckpoint(scope, sessionId, {
     ...checkpoint,
-    page: checkpoint.page ?? browserPageLocation(snapshot?.url),
+    page: checkpoint.page ?? browserPageLocation(url),
     ...(evidence === undefined
       ? {}
       : {
