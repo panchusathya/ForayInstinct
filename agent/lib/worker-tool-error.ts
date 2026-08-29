@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export function logWorkerToolError(input: {
   error: unknown;
   sessionId?: string;
@@ -38,12 +40,20 @@ export function logWorkerRuntimeEvent(payload: Record<string, unknown>) {
   }
 }
 
-export function errorMessage(error: unknown) {
+function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
 function errorFromResult(result: unknown) {
-  if (!result || typeof result !== "object") return undefined;
-  const record = result as Record<string, unknown>;
-  return errorMessage(record.error ?? record.message ?? record.output);
+  const parsed = resultSchema.safeParse(result);
+  if (!parsed.success) return undefined;
+  return errorMessage(
+    parsed.data.error ?? parsed.data.message ?? parsed.data.output
+  );
 }
+
+const resultSchema = z.object({
+  error: z.unknown().optional(),
+  message: z.unknown().optional(),
+  output: z.unknown().optional(),
+});

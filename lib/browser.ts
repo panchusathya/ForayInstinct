@@ -23,18 +23,18 @@ const browserStateTtlMs = 2 * 60 * 60 * 1000;
 const browserFileKeyPrefix = "browser-file:";
 const browserMetaKeyPrefix = "browser-meta:";
 
-export type BrowserDescriptor = {
+export interface BrowserDescriptor {
   browser_live_view_url: string;
   session_id: string;
   status: "active" | "deleted";
   viewport?: { height: number; width: number };
-};
+}
 
-export type BrowserSessionHandle = {
+export interface BrowserSessionHandle {
   browser: Browser;
   page: Page;
   sessionId: string;
-};
+}
 
 export function browserCdpUrl(sessionId: string) {
   const { password, username } = brightDataCredentials(sessionId);
@@ -133,7 +133,7 @@ export async function updateRemoteBrowserViewport(
   }
 }
 
-export async function connectRemoteBrowser(
+async function connectRemoteBrowser(
   sessionId: string,
   options?: { provision?: boolean }
 ) {
@@ -185,15 +185,7 @@ export async function executePlaywrightCode(
       disableESTransforms: true,
       transforms: ["typescript"],
     }).code;
-    const AsyncFunction = Object.getPrototypeOf(async () => undefined)
-      .constructor as new (
-      ...args: string[]
-    ) => (
-      browser: Browser,
-      page: Page,
-      context: BrowserContext
-    ) => Promise<unknown>;
-    const run = new AsyncFunction("browser", "page", "context", javascript);
+    const run = compilePlaywrightScript(javascript);
     return await Promise.race([
       run(handle.browser, handle.page, handle.page.context()),
       abortOrTimeout(signal, playwrightTimeoutMs),
@@ -239,7 +231,7 @@ export async function writeBrowserFile(
   await writeFile(filePath, bytes);
 }
 
-export async function materializeStagedFiles(sessionId: string) {
+async function materializeStagedFiles(sessionId: string) {
   const rows = await db
     .select({ value: chatStateValues.value })
     .from(chatStateValues)
@@ -261,20 +253,22 @@ export async function materializeStagedFiles(sessionId: string) {
 }
 
 async function prepareSession(page: Page, sessionId: string) {
-  const client = cdpClient(await page.context().newCDPSession(page));
-  await sendCdp(client, "Proxy.useSession", { sessionId }).catch(
+  const session = await page.context().newCDPSession(page);
+  await sendCdp(session, "Proxy.useSession", { sessionId }).catch(
     () => undefined
   );
 }
 
 async function inspectLiveView(page: Page) {
-  const client = cdpClient(await page.context().newCDPSession(page));
-  const frames = asRecord(await sendCdp(client, "Page.getFrameTree"));
+  const session = await page.context().newCDPSession(page);
+  const frames = asRecord(await sendCdp(session, "Page.getFrameTree"));
   const frameTree = asRecord(frames.frameTree);
   const frame = asRecord(frameTree.frame);
+  /* oxlint-disable typescript/no-unsafe-assignment -- Bright Data Page.inspect is outside Playwright's CDP typings. */
   const inspect = asRecord(
-    await sendCdp(client, "Page.inspect", { frameId: frame.id })
+    await sendCdp(session, "Page.inspect", { frameId: frame.id })
   );
+  /* oxlint-enable typescript/no-unsafe-assignment */
   if (typeof inspect.url !== "string" || inspect.url.length === 0) {
     throw new Error("Bright Data did not return a live-view URL.");
   }
@@ -363,22 +357,40 @@ async function abortOrTimeout(
   });
 }
 
-type CdpClient = {
-  send(method: string, params?: object): Promise<unknown>;
-};
+type PlaywrightScript = (
+  browser: Browser,
+  page: Page,
+  context: BrowserContext
+) => Promise<unknown>;
 
-function cdpClient(client: unknown): CdpClient {
-  return client as CdpClient;
+function compilePlaywrightScript(javascript: string): PlaywrightScript {
+  // Dynamic Playwright scripts are user-authored TypeScript compiled to a
+  // function body. AsyncFunction is not in the TypeScript lib typings.
+  /* oxlint-disable typescript/no-unsafe-type-assertion */
+  const AsyncFunction = (async () => undefined).constructor as new (
+    ...args: string[]
+  ) => PlaywrightScript;
+  /* oxlint-enable typescript/no-unsafe-type-assertion */
+  return new AsyncFunction("browser", "page", "context", javascript);
 }
 
-async function sendCdp(client: CdpClient, method: string, params?: object) {
-  return client.send(method, params);
+async function sendCdp(
+  session: Awaited<ReturnType<BrowserContext["newCDPSession"]>>,
+  method: string,
+  params?: object
+): Promise<unknown> {
+  // Bright Data custom CDP methods are not in Playwright's protocol types.
+  /* oxlint-disable typescript/no-unsafe-type-assertion */
+  const result: unknown = await Promise.resolve(
+    session.send(method as never, params as never)
+  );
+  return result;
+  /* oxlint-enable typescript/no-unsafe-type-assertion */
 }
 
 function asRecord(value: unknown) {
-  return value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : {};
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value));
 }
 
 function unexpired() {

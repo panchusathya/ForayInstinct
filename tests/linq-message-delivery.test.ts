@@ -3,11 +3,63 @@ import { describe, expect, it, vi } from "vitest";
 import workerCancellationHook from "../agent/hooks/worker-cancellation-delivery";
 
 const cancellationStore = vi.hoisted(() => new Map<string, string>());
+
+interface CompletedEvent {
+  finishReason?: string | null;
+  message?: string | null;
+  sequence: number;
+  stepIndex: number;
+  turnId: string;
+}
+
+interface HandlerContext {
+  bot: {
+    getAdapter: () => {
+      addReaction: (
+        threadId: string,
+        messageId: string,
+        emoji: string
+      ) => Promise<void>;
+    };
+  };
+  state: Record<string, unknown>;
+  thread: {
+    id: string;
+    post: (message: { markdown: string }) => Promise<void>;
+    toJSON: () => { currentMessage?: { id?: string } };
+  };
+}
+
+interface SessionContext {
+  session: {
+    auth?: { current?: unknown; initiator?: unknown };
+    id: string;
+  };
+}
+
+type MessageCompletedHandler = (
+  event: CompletedEvent,
+  context: HandlerContext,
+  session: SessionContext
+) => Promise<unknown>;
+
+type ActionResultHandler = (
+  event: {
+    result: unknown;
+    sequence: number;
+    status: string;
+    stepIndex: number;
+    turnId: string;
+  },
+  context: HandlerContext,
+  session?: SessionContext
+) => Promise<unknown>;
+
 const chatSdkChannelCapture = vi.hoisted(() => ({
   events: undefined as
     | {
-        "action.result"?: (...args: never[]) => unknown;
-        "message.completed"?: (...args: never[]) => unknown;
+        "action.result": ActionResultHandler;
+        "message.completed": MessageCompletedHandler;
       }
     | undefined,
 }));
@@ -67,13 +119,11 @@ vi.mock("@/lib/linq-state", () => ({
 await import("../agent/channels/linq-v2");
 
 const channelEvents = chatSdkChannelCapture.events;
-const trackWorkerCancellation = channelEvents?.["action.result"];
-const deliverCompletedMessage = channelEvents?.["message.completed"];
-if (!trackWorkerCancellation || !deliverCompletedMessage) {
+if (!channelEvents) {
   throw new Error("Linq event handlers are not configured.");
 }
-
-type HandlerParameters = Parameters<typeof deliverCompletedMessage>;
+const trackWorkerCancellation = channelEvents["action.result"];
+const deliverCompletedMessage = channelEvents["message.completed"];
 
 describe("Linq message delivery", () => {
   it("posts final responses as native iMessage Markdown", async () => {
@@ -256,7 +306,7 @@ describe("Linq message delivery", () => {
 
 function workerCancellationResult(
   taskId = "task-worker"
-): Parameters<NonNullable<typeof trackWorkerCancellation>>[0] {
+): Parameters<ActionResultHandler>[0] {
   return {
     result: {
       callId: "call-cancel",
@@ -285,8 +335,8 @@ function workerCancellationResult(
 }
 
 function completedEvent(
-  overrides: Partial<HandlerParameters[0]> = {}
-): HandlerParameters[0] {
+  overrides: Partial<CompletedEvent> = {}
+): CompletedEvent {
   return {
     finishReason: "stop",
     message: "Done",
@@ -301,7 +351,7 @@ function handlerContext(
   currentMessageId = "message-1",
   state: Record<string, unknown> = {}
 ) {
-  const post = vi.fn<(message: string) => Promise<void>>();
+  const post = vi.fn<(message: { markdown: string }) => Promise<void>>();
   post.mockResolvedValue();
   const addReaction = vi
     .fn<(threadId: string, messageId: string, emoji: string) => Promise<void>>()
@@ -326,7 +376,7 @@ function handlerContext(
         isDM: true,
       }),
     },
-  } as unknown as HandlerParameters[1];
+  } as unknown as HandlerContext;
 
   return {
     addReaction,
@@ -336,10 +386,10 @@ function handlerContext(
   };
 }
 
-function sessionContext() {
+function sessionContext(): SessionContext {
   return {
-    session: { id: "session-1" },
-  } as HandlerParameters[2];
+    session: { auth: {}, id: "session-1" },
+  };
 }
 
 async function recordCancellationThroughHook(

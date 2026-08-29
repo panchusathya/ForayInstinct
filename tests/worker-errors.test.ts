@@ -1,3 +1,4 @@
+/* oxlint-disable typescript/no-unsafe-type-assertion -- Hook fixtures supply only the event fields the logger reads. */
 import { describe, expect, it, vi } from "vitest";
 import workerErrors from "../agent/hooks/worker-errors";
 import workerSubagentErrors from "../agent/subagents/worker/hooks/worker-errors";
@@ -34,14 +35,14 @@ describe("worker error logging", () => {
     error.mockRestore();
   });
 
-  it("ignores successful action results", () => {
+  it("ignores successful action results", async () => {
     const error = vi
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
     const handler = workerErrors.events?.["action.result"];
     if (!handler) throw new Error("action.result handler is missing.");
 
-    handler(
+    await handler(
       {
         data: { result: { isError: false, output: { ok: true } }, turnId: "t" },
       } as never,

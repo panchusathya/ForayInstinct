@@ -1,3 +1,4 @@
+/* oxlint-disable typescript/no-unsafe-type-assertion, vitest/require-mock-type-parameters, typescript/unbound-method -- The query fake only implements Pool.query. */
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { PostgresStateAdapter } from "../lib/linq-state";
@@ -24,6 +25,7 @@ describe("Postgres Linq state adapter", () => {
 
   it("acquires a lock only when the previous lock has expired", async () => {
     const sql = fakeSql([
+      { rowCount: 1, rows: [{}] },
       {
         rowCount: 1,
         rows: [{ expiresAt: Date.now() + 1_000, token: "lock-token" }],
@@ -45,6 +47,7 @@ describe("Postgres Linq state adapter", () => {
 
   it("round-trips JSON values", async () => {
     const sql = fakeSql([
+      { rowCount: 1, rows: [{}] },
       { rowCount: 1, rows: [] },
       { rowCount: 1, rows: [{ value: { agentId: "ag_worker:1" } }] },
     ]);

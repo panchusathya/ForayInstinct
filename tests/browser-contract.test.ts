@@ -1,3 +1,4 @@
+/* oxlint-disable typescript/no-unsafe-type-assertion -- Tool execute fixtures only supply the worker scope mock. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import manageBrowsers from "../agent/subagents/worker/tools/manage_browsers";

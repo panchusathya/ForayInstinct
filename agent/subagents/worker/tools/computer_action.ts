@@ -182,15 +182,16 @@ export default defineTool({
               }
               case "drag_mouse": {
                 const payload = requiredAction(action.drag_mouse, action.type);
-                const [start, ...rest] = payload.path;
-                const startPoint = start ?? [0, 0];
+                const startPoint = dragPoint(payload.path[0]);
+                const rest = payload.path.slice(1);
                 await withHeldKeys(page, payload.hold_keys, async () => {
-                  await page.mouse.move(startPoint[0], startPoint[1]);
+                  await page.mouse.move(startPoint.x, startPoint.y);
                   await page.mouse.down({
                     button: payload.button ?? "left",
                   });
-                  for (const [x, y] of rest) {
-                    await page.mouse.move(x, y, {
+                  for (const point of rest) {
+                    const next = dragPoint(point);
+                    await page.mouse.move(next.x, next.y, {
                       steps: payload.steps_per_segment,
                     });
                     if (payload.step_delay_ms) {
@@ -198,8 +199,10 @@ export default defineTool({
                     }
                   }
                   await page.mouse.up({ button: payload.button ?? "left" });
-                  const last = payload.path.at(-1) ?? startPoint;
-                  mouse = { x: last[0], y: last[1] };
+                  const last = dragPoint(
+                    payload.path.at(-1) ?? payload.path[0]
+                  );
+                  mouse = { x: last.x, y: last.y };
                 });
                 break;
               }
@@ -287,6 +290,15 @@ function requiredAction<T>(value: T | undefined, action: string): T {
   return value;
 }
 
+function dragPoint(value: readonly number[] | undefined) {
+  const x = value?.[0];
+  const y = value?.[1];
+  if (x === undefined || y === undefined) {
+    throw new Error("A drag path point is missing.");
+  }
+  return { x, y };
+}
+
 async function withHeldKeys(
   page: Page,
   keys: readonly string[] | undefined,
@@ -296,7 +308,7 @@ async function withHeldKeys(
   try {
     await operate();
   } finally {
-    for (const key of [...(keys ?? [])].reverse()) {
+    for (const key of (keys ?? []).toReversed()) {
       await page.keyboard.up(key);
     }
   }

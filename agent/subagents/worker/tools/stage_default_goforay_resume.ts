@@ -31,7 +31,11 @@ export default defineTool({
         const document = await candidateDefaultResume(scope);
         const filename = safeFilename(document.filename);
         const path = `/tmp/goforay-default-resume-${filename}`;
-        await writeBrowserFile(input.session_id, path, document.bytes);
+        await writeBrowserFile(
+          input.session_id,
+          path,
+          new Uint8Array(document.bytes)
+        );
         return { filename, path };
       }
     );

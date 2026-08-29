@@ -43,7 +43,11 @@ export default defineTool({
           document.filename || `${input.document_id}.pdf`
         );
         const path = `/tmp/goforay-${input.document_id}-${filename}`;
-        await writeBrowserFile(input.session_id, path, document.bytes);
+        await writeBrowserFile(
+          input.session_id,
+          path,
+          new Uint8Array(document.bytes)
+        );
         return { filename, path };
       }
     );
