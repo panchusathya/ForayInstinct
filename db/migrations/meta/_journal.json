@@ -64,6 +64,13 @@
       "when": 1788040200000,
       "tag": "0008_self_identification_setting",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788040300000,
+      "tag": "0009_candidate_profile",
+      "breakpoints": true
     }
   ]
 }

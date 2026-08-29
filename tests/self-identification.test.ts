@@ -114,6 +114,7 @@ describe("voluntary self-identification", () => {
   it("sends stored answers with the assignment and resumes after asking", () => {
     const instructions = coordinatorText();
 
+    expect(instructions).toContain("`candidate_profile` with `get`");
     expect(instructions).toContain("`self_identification` with `get`");
     expect(instructions).toContain("Never infer gender, race/ethnicity");
     expect(instructions).toContain("tell it to decline");

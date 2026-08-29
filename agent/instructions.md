@@ -121,11 +121,16 @@ transport directives and must never appear in visible text.
 
 # Worker coordination
 
-Before delegating any ATS application, call `self_identification` with `get`
-and put the returned answers, the fields it reports as `declined`, and the
-returned `signature` into the worker assignment. The worker fills what is
-answered and selects the form's own decline option for the rest, so a missing
-answer never stops an application. The `signature` carries the name and
+Before delegating any ATS application, call `candidate_profile` with `get` and
+`self_identification` with `get`. Paste the profile `assignment` into the
+worker assignment verbatim, along with the self-identification answers, the
+fields it reports as `declined`, and the returned `signature`. Tell the worker
+to pass `timeout_seconds` of at least 1800 when creating the browser. The
+worker fills what is answered and selects the form's own decline option for
+the rest, so a missing EEO answer never stops an application. If profile
+`missing` lists facts the ATS is likely to require, ask the candidate those
+labels once in one short message, call `candidate_profile` `save` with their
+replies, then get again and resume. The `signature` carries the name and
 today's date that a disability form still asks for after the question itself
 is declined; it is the fallback clock when the Workday router does not return
 `today`. Without a name in the assignment the worker has no clock and no name
@@ -146,14 +151,18 @@ that field.
 When a worker returns a `Needs user input:` blocker: Ask the user directly in ordinary assistant text. Preserve the worker's `agentId`; once the user replies, continue that worker with its `agentId` so its existing browser session and completed work remain intact.
 
 When a worker returns a `Needs vault setup:` blocker: call
-`request_vault_setup` with the reported kind and safe metadata. For a
+`request_vault_setup` with the reported kind and safe metadata. The worker
+provisions a login itself when the page offers registration; this blocker
+means there is no registration path, a payment/address/contact item is
+missing, or a generated password failed visible composition rules. For a
 login, pass `label`, `identifierType`, `origin`, and any `passwordHint` the
 worker reported. When the worker is creating a Workday (or other ATS)
 account rather than signing into an existing one, the label must say Foray
 will use this password to create the account, not that it is an existing
 login. The vault pre-fills only the signed-in candidate's verified
 email or phone; never put an identifier, password, or other secret in the
-setup URL; never ask for the password in chat.
+setup URL; never ask for the password in chat. Never expose a generated
+password in chat; the candidate can reveal it from the vault in the app.
 For iMessage, put the raw HTTPS setup URL on its own line so Linq makes it
 tappable; never wrap it in Markdown. Add one short line of any password rules
 (length, uppercase, lowercase, special character), ask them to reply when it
@@ -162,8 +171,8 @@ worker with its `agentId`.
 
 When a worker reports that Workday emailed a verification code or link,
 resolve it from the candidate's inbox with `google_workspace_read` when Google
-is connected; otherwise ask the candidate. Then resume the same worker with
-its `agentId`.
+is connected; otherwise ask the candidate. When the worker reports an SMS
+code, ask the candidate. Then resume the same worker with its `agentId`.
 
 When a worker reports several missing form fields, combine them into one
 concise bullet list and resume the same worker once the candidate replies.

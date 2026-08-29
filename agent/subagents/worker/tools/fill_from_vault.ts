@@ -5,6 +5,7 @@ import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { readVaultItem } from "@/db/services/vault";
 import { materializeAutofillClaims } from "@/lib/manager/server/vault-autofill";
 import { vaultAutofillProvider } from "@/lib/manager/server/vault-autofill-provider";
+import { loginTokensForPurpose } from "@/lib/manager/server/kernel-login-autofill";
 import {
   currentKernelPageOrigin,
   fillWithKernelNativeAutofill,
@@ -39,6 +40,11 @@ export default defineTool({
         "Native browser autofill currently supports only logins, cards, and addresses."
       );
     }
+    if (input.purpose === "sign_up" && item.kind !== "login") {
+      throw new Error(
+        'purpose "sign_up" is only valid for a login vault item.'
+      );
+    }
 
     const origin = await currentKernelPageOrigin({
       browserSessionId: input.browserSessionId,
@@ -52,8 +58,8 @@ export default defineTool({
           ? "credentials"
           : "postal-address";
     const tokens =
-      item.kind === "login" && purpose === "sign_up"
-        ? nativeAutofillTokens.sign_up
+      item.kind === "login"
+        ? loginTokensForPurpose(purpose)
         : nativeAutofillTokens[item.kind];
     const surface = {
       fields: tokens.map((token) => ({ score: 100, token })),

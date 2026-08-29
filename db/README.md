@@ -1,7 +1,8 @@
 # Database
 
-This directory owns the eight workspace application tables, the four Better
-Auth tables, and the application domain query services. Better Auth uses the
+This directory owns the ten workspace application tables (including
+`candidate_profiles`), the four Better Auth tables, and the application
+domain query services. Better Auth uses the
 canonical Drizzle client from `db/index.ts`; request paths never create or
 migrate tables.
 

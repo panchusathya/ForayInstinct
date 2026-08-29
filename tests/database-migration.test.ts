@@ -162,6 +162,38 @@ describe("database migrations", () => {
     ).rejects.toThrow(/constraint/);
   }, 15_000);
 
+  it("stores the candidate ATS profile beside the workspace Kernel profile id", async () => {
+    const database = createDatabase();
+
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(database, "0009_candidate_profile.sql");
+    await applyMigration(database, "0009_candidate_profile.sql");
+
+    await database.exec(`
+      INSERT INTO workspaces (id, created_at) VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO candidate_profiles (workspace_id, legal_first_name, created_at, updated_at)
+      VALUES ('workspace-1', 'Ada', '2026-01-01', '2026-01-01');
+    `);
+
+    await expect(
+      database.query<{ legal_first_name: string; kernel_profile_id: string }>(
+        `SELECT p.legal_first_name, w.kernel_profile_id
+         FROM candidate_profiles p
+         JOIN workspaces w ON w.id = p.workspace_id
+         WHERE p.workspace_id = 'workspace-1'`
+      )
+    ).resolves.toMatchObject({
+      rows: [{ legal_first_name: "Ada", kernel_profile_id: "" }],
+    });
+    await expect(
+      database.exec(
+        `INSERT INTO workspaces (id, created_at) VALUES ('workspace-2', '2026-01-01');
+         INSERT INTO candidate_profiles (workspace_id, work_authorization, created_at, updated_at)
+         VALUES ('workspace-2', 'not-a-status', '2026-01-01', '2026-01-01')`
+      )
+    ).rejects.toThrow(/constraint/);
+  }, 15_000);
+
   it("adopts existing Better Auth tables without changing their rows", async () => {
     const database = createDatabase();
     await database.exec(legacyAuthSchema);

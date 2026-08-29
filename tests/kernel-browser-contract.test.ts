@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import manageBrowsers from "../agent/subagents/worker/tools/manage_browsers";
 import {
+  isResolvedWorkdayRoute,
   workdayApplyControlName,
   workdayRestoreCode,
   workdayRouterCode,
@@ -43,6 +44,11 @@ const mocks = vi.hoisted(() => ({
     >(),
   kernelProxyId: undefined as string | undefined,
   requireWorkerScope: vi.fn<(_context: unknown) => Promise<unknown>>(),
+  createProfile: vi.fn<() => Promise<{ id: string }>>(),
+  retrieveProfile: vi.fn<() => Promise<{ id: string }>>(),
+  deleteProfile: vi.fn<() => Promise<unknown>>(),
+  readWorkspaceKernelProfileId: vi.fn<() => Promise<string>>(),
+  saveWorkspaceKernelProfileId: vi.fn<() => Promise<{ stored: boolean }>>(),
 }));
 
 vi.mock("@/agent/subagents/worker/lib/access", () => ({
@@ -65,7 +71,21 @@ vi.mock("@/lib/kernel", () => ({
       create: mocks.createBrowser,
       playwright: { execute: mocks.executePlaywright },
     },
+    profiles: {
+      create: mocks.createProfile,
+      retrieve: mocks.retrieveProfile,
+      delete: mocks.deleteProfile,
+    },
   },
+}));
+
+vi.mock("@/db/services/scope", () => ({
+  ensureScope: vi.fn(async () => undefined),
+}));
+
+vi.mock("@/db/services/workspaces", () => ({
+  readWorkspaceKernelProfileId: mocks.readWorkspaceKernelProfileId,
+  saveWorkspaceKernelProfileId: mocks.saveWorkspaceKernelProfileId,
 }));
 
 vi.mock("@/lib/env", () => ({
@@ -90,6 +110,10 @@ beforeEach(() => {
     session_id: "browser-1",
     viewport: null,
   });
+  mocks.readWorkspaceKernelProfileId.mockResolvedValue("");
+  mocks.saveWorkspaceKernelProfileId.mockResolvedValue({ stored: true });
+  mocks.createProfile.mockResolvedValue({ id: "profile-1" });
+  mocks.retrieveProfile.mockResolvedValue({ id: "profile-1" });
   mocks.executePlaywright.mockResolvedValue({
     success: true,
     result: {
@@ -267,6 +291,7 @@ describe("Kernel browser contract", () => {
         telemetry: { enabled: true },
         timeout_seconds: 900,
         viewport: undefined,
+        profile: { id: "profile-1", save_changes: true },
       },
       { signal: undefined }
     );
@@ -286,10 +311,65 @@ describe("Kernel browser contract", () => {
         telemetry: { enabled: true },
         timeout_seconds: 900,
         viewport: undefined,
+        profile: { id: "profile-1", save_changes: true },
         proxy: { id: "proxy-us-residential" },
       },
       { signal: undefined }
     );
+  });
+
+  it("reattaches a stored Kernel profile without creating a second one", async () => {
+    mocks.readWorkspaceKernelProfileId.mockResolvedValue("stored-profile");
+    const execute = manageBrowsers.execute;
+
+    await execute({ action: "create" }, toolContext);
+
+    expect(mocks.createProfile).not.toHaveBeenCalled();
+    expect(mocks.createBrowser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: { id: "stored-profile", save_changes: true },
+      }),
+      { signal: undefined }
+    );
+  });
+
+  it("retrieves an existing Kernel profile when create collides on name", async () => {
+    mocks.createProfile.mockRejectedValue(new Error("name already exists"));
+    mocks.retrieveProfile.mockResolvedValue({ id: "retrieved-profile" });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const execute = manageBrowsers.execute;
+
+    await execute({ action: "create" }, toolContext);
+
+    expect(mocks.retrieveProfile).toHaveBeenCalled();
+    expect(mocks.createBrowser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: { id: "retrieved-profile", save_changes: true },
+      }),
+      { signal: undefined }
+    );
+    error.mockRestore();
+  });
+
+  it("creates a browser without a profile when Kernel profiles are unavailable", async () => {
+    mocks.createProfile.mockRejectedValue(new Error("kernel down"));
+    mocks.retrieveProfile.mockRejectedValue(new Error("kernel down"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const execute = manageBrowsers.execute;
+
+    await execute({ action: "create" }, toolContext);
+
+    expect(mocks.createBrowser).toHaveBeenCalledExactlyOnceWith(
+      {
+        start_url: undefined,
+        stealth: true,
+        telemetry: { enabled: true },
+        timeout_seconds: 900,
+        viewport: undefined,
+      },
+      { signal: undefined }
+    );
+    error.mockRestore();
   });
 
   it("routes Workday with a settled Playwright navigation instead of start_url", async () => {
@@ -550,6 +630,7 @@ describe("Kernel browser contract", () => {
 
     expect(state).toMatchObject({ state: "account_creation_ready" });
     expect(state).not.toMatchObject({ state: "email_login_ready" });
+    expect(isResolvedWorkdayRoute("account_creation_ready")).toBe(true);
   });
 
   it("waits for Workday hydration and bounds itself to a budget", () => {

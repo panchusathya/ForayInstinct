@@ -7,7 +7,6 @@ import {
   nativeLoginAutofillTokens,
   nativeLoginControlInspectionExpression,
   nativeLoginFillFunctionDeclaration,
-  nativeSignupAutofillTokens,
   selectNativeLoginFills,
   type ClassifiedNativeLoginControl,
   type NativeLoginPurpose,
@@ -59,7 +58,7 @@ const controlDescriptorsSchema = z.array(
 const loginControlDescriptorsSchema = z.array(
   z.object({
     autocomplete: z.string(),
-    automationId: z.string(),
+    automationId: z.string().default(""),
     focused: z.boolean(),
     formIndex: z.number().int().nonnegative().nullable(),
     index: z.number().int().nonnegative(),
@@ -92,7 +91,6 @@ export const nativeAutofillTokens = {
   address: Object.keys(addressTokenToChromiumField),
   login: nativeLoginAutofillTokens,
   payment: [...cardTokens],
-  sign_up: nativeSignupAutofillTokens,
 } as const;
 
 type NativeAutofillKind = "address" | "login" | "payment";

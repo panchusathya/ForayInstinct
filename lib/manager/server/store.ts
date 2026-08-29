@@ -45,6 +45,22 @@ export async function applyManagerMutation(
   return readManagerSnapshot(scope);
 }
 
+/**
+ * Persist a login without the manager snapshot / Google Workspace round trip.
+ * Returns no secret, no length, no charset, and no entropy hint.
+ */
+export async function createVaultLogin(
+  scope: AccessScope,
+  input: { readonly label: string; readonly secret: string }
+) {
+  return createVaultItem(scope, {
+    account: "",
+    kind: "login",
+    label: input.label,
+    secret: input.secret,
+  });
+}
+
 async function createVaultItem(
   scope: AccessScope,
   input: Extract<ManagerMutation, { action: "vault.create" }>["input"]
@@ -66,6 +82,8 @@ async function createVaultItem(
     await deleteSecret({ id, namespace: "vault", scope });
     throw error;
   }
+
+  return { account: vaultAccountHint(input), id, label: input.label };
 }
 
 function vaultAccountHint(

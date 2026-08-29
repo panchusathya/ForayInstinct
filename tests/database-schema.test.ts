@@ -7,6 +7,7 @@ import {
   agentSessions,
   browserRunCheckpoints,
   browserSessions,
+  candidateProfiles,
   chats,
   encryptedSecrets,
   session,
@@ -31,6 +32,7 @@ describe("database schema", () => {
         browserRunCheckpoints,
         chats,
         encryptedSecrets,
+        candidateProfiles,
         user,
         session,
         account,
@@ -46,6 +48,7 @@ describe("database schema", () => {
       "browser_run_checkpoints",
       "chats",
       "encrypted_secrets",
+      "candidate_profiles",
       "user",
       "session",
       "account",
@@ -85,6 +88,7 @@ describe("database schema", () => {
       settings,
       chats,
       encryptedSecrets,
+      candidateProfiles,
     ]) {
       expect(
         getTableConfig(table).foreignKeys.some((foreignKey) =>

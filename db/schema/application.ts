@@ -10,10 +10,16 @@ import {
   primaryKey,
   text,
 } from "drizzle-orm/pg-core";
+import type {
+  EducationEntry,
+  ProfileLink,
+  WorkHistoryEntry,
+} from "@/lib/candidate-profile";
 
 export const workspaces = pgTable("workspaces", {
   id: text("id").primaryKey(),
   createdAt: text("created_at").notNull(),
+  kernelProfileId: text("kernel_profile_id").notNull().default(""),
 });
 
 export const workspaceMemberships = pgTable(
@@ -228,6 +234,85 @@ export const encryptedSecrets = pgTable(
     check(
       "encrypted_secrets_namespace_check",
       sql`${table.namespace} = 'vault'`
+    ),
+  ]
+);
+
+/**
+ * Candidate-authored ATS profile. Deliberately excludes SSN, date of birth,
+ * government IDs, references, passwords, and EEO answers (those stay on
+ * settings.self_identification).
+ */
+export const candidateProfiles = pgTable(
+  "candidate_profiles",
+  {
+    workspaceId: text("workspace_id").primaryKey(),
+    legalFirstName: text("legal_first_name").notNull().default(""),
+    legalLastName: text("legal_last_name").notNull().default(""),
+    preferredName: text("preferred_name").notNull().default(""),
+    locationCity: text("location_city").notNull().default(""),
+    locationRegion: text("location_region").notNull().default(""),
+    locationPostalCode: text("location_postal_code").notNull().default(""),
+    locationCountryCode: text("location_country_code").notNull().default(""),
+    workAuthorization: text("work_authorization").notNull().default(""),
+    requiresSponsorshipNow: text("requires_sponsorship_now")
+      .notNull()
+      .default(""),
+    requiresSponsorshipFuture: text("requires_sponsorship_future")
+      .notNull()
+      .default(""),
+    salaryMin: integer("salary_min"),
+    salaryMax: integer("salary_max"),
+    salaryCurrency: text("salary_currency").notNull().default("USD"),
+    salaryPeriod: text("salary_period").notNull().default(""),
+    earliestStartDate: text("earliest_start_date").notNull().default(""),
+    willingToRelocate: text("willing_to_relocate").notNull().default(""),
+    workArrangement: text("work_arrangement").notNull().default(""),
+    headline: text("headline").notNull().default(""),
+    summary: text("summary").notNull().default(""),
+    yearsExperience: integer("years_experience"),
+    skills: jsonb("skills").$type<string[]>().notNull().default([]),
+    links: jsonb("links").$type<ProfileLink[]>().notNull().default([]),
+    workHistory: jsonb("work_history")
+      .$type<WorkHistoryEntry[]>()
+      .notNull()
+      .default([]),
+    education: jsonb("education")
+      .$type<EducationEntry[]>()
+      .notNull()
+      .default([]),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "candidate_profiles_workspace_id_fkey",
+      columns: [table.workspaceId],
+      foreignColumns: [workspaces.id],
+    }).onDelete("cascade"),
+    check(
+      "candidate_profiles_work_authorization_check",
+      sql`${table.workAuthorization} IN ('', 'us_citizen', 'us_permanent_resident', 'us_visa_no_sponsorship', 'requires_sponsorship', 'other')`
+    ),
+    check(
+      "candidate_profiles_requires_sponsorship_now_check",
+      sql`${table.requiresSponsorshipNow} IN ('', 'yes', 'no')`
+    ),
+    check(
+      "candidate_profiles_requires_sponsorship_future_check",
+      sql`${table.requiresSponsorshipFuture} IN ('', 'yes', 'no')`
+    ),
+    check(
+      "candidate_profiles_salary_period_check",
+      sql`${table.salaryPeriod} IN ('', 'year', 'hour')`
+    ),
+    check(
+      "candidate_profiles_willing_to_relocate_check",
+      sql`${table.willingToRelocate} IN ('', 'yes', 'no')`
+    ),
+    check(
+      "candidate_profiles_work_arrangement_check",
+      sql`${table.workArrangement} IN ('', 'remote', 'hybrid', 'onsite', 'flexible')`
     ),
   ]
 );

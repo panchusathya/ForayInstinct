@@ -14,6 +14,7 @@ import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoint
 import type { AccessScope } from "@/lib/access-scope";
 import { env } from "@/lib/env";
 import { kernel } from "@/lib/kernel";
+import { ensureKernelBrowserProfile } from "@/lib/manager/server/kernel-profile";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import {
@@ -59,6 +60,10 @@ export default defineTool({
         const isWorkday =
           input.start_url !== undefined &&
           isWorkdayApplicationUrl(input.start_url);
+        const profileId = await ensureKernelBrowserProfile(
+          scope,
+          signal
+        );
         const browser = await kernel.browsers.create(
           {
             // Kernel start_url navigation is fire-and-forget. Workday needs a
@@ -69,6 +74,9 @@ export default defineTool({
             timeout_seconds:
               input.timeout_seconds ?? browserTimeoutFloorSeconds,
             viewport: browserViewport(input),
+            ...(profileId === undefined
+              ? {}
+              : { profile: { id: profileId, save_changes: true } }),
             ...(env.KERNEL_PROXY_ID === undefined
               ? {}
               : { proxy: { id: env.KERNEL_PROXY_ID } }),
@@ -312,7 +320,7 @@ const workdayNextActions: Record<
   email_login_ready:
     "Workday is at its real email/password form. Use list_vault, focus that form, then use fill_from_vault; do not click a header Sign In control.",
   account_creation_ready:
-    "Workday is offering create-account with no reachable sign-in switch. Focus that form and use fill_from_vault with purpose sign_up, using the saved vault password to create the account; then continue the application.",
+    "Workday is offering create-account with no reachable sign-in switch. Call list_vault; if no login exists for this origin, call provision_login, then focus the create-account form and fill_from_vault with purpose sign_up. Do not pass origin, identifier, or password. Then continue the application.",
   wizard_ready:
     "Workday is already inside the application wizard. Continue filling the current step with execute_playwright_code; do not navigate back to the job posting or re-enter the account wall.",
   route_incomplete:

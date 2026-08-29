@@ -8,12 +8,23 @@ export const nativeLoginAutofillTokens = [
   "email",
   "tel",
   "current-password",
+  "new-password",
+  "confirm-password",
 ] as const;
 
-export const nativeSignupAutofillTokens = [
-  ...nativeLoginAutofillTokens,
-  "new-password",
-] as const;
+type NativeLoginAutofillToken = (typeof nativeLoginAutofillTokens)[number];
+
+/** Leak boundary: sign-in never materializes new/confirm; sign-up never materializes current. */
+export function loginTokensForPurpose(purpose: NativeLoginPurpose) {
+  if (purpose === "sign_up") {
+    return nativeLoginAutofillTokens.filter(
+      (token) => token !== "current-password"
+    );
+  }
+  return nativeLoginAutofillTokens.filter(
+    (token) => token !== "new-password" && token !== "confirm-password"
+  );
+}
 
 export interface NativeLoginControlDescriptor {
   readonly autocomplete: string;
@@ -28,7 +39,7 @@ export interface NativeLoginControlDescriptor {
 
 export interface ClassifiedNativeLoginControl extends NativeLoginControlDescriptor {
   readonly score: number;
-  readonly token: (typeof nativeSignupAutofillTokens)[number];
+  readonly token: NativeLoginAutofillToken;
 }
 
 export function classifyNativeLoginControl(
@@ -46,11 +57,20 @@ export function classifyNativeLoginControl(
       ? { ...descriptor, score: 100, token: "new-password" }
       : null;
   }
+  if (autocompleteTokens.has("current-password")) {
+    return purpose === "sign_up"
+      ? null
+      : { ...descriptor, score: 100, token: "current-password" };
+  }
+  if (autocompleteTokens.has("confirm-password")) {
+    return purpose === "sign_up"
+      ? { ...descriptor, score: 100, token: "confirm-password" }
+      : null;
+  }
 
   for (const token of nativeLoginAutofillTokens) {
-    if (autocompleteTokens.has(token)) {
-      return { ...descriptor, score: 100, token };
-    }
+    if (isPasswordToken(token) || !autocompleteTokens.has(token)) continue;
+    return { ...descriptor, score: 100, token };
   }
 
   const searchable = normalizeText(
@@ -60,11 +80,13 @@ export function classifyNativeLoginControl(
   );
   if (isConfirmPasswordControl(descriptor, searchable)) {
     return purpose === "sign_up"
-      ? { ...descriptor, score: 95, token: "new-password" }
+      ? { ...descriptor, score: 95, token: "confirm-password" }
       : null;
   }
   if (descriptor.type === "password") {
-    return { ...descriptor, score: 90, token: "current-password" };
+    return purpose === "sign_up"
+      ? { ...descriptor, score: 60, token: "new-password" }
+      : { ...descriptor, score: 90, token: "current-password" };
   }
   if (descriptor.type === "email") {
     return { ...descriptor, score: 85, token: "email" };
@@ -114,7 +136,9 @@ export function selectNativeLoginFills<T extends ClassifiedNativeLoginControl>(
 
   if (purpose === "sign_up") {
     const passwordValue =
-      values.get("new-password") ?? values.get("current-password");
+      values.get("new-password") ??
+      values.get("confirm-password") ??
+      values.get("current-password");
     if (passwordValue !== undefined) {
       for (const control of sameSurface) {
         if (isPasswordToken(control.token)) {
@@ -184,9 +208,13 @@ export const nativeLoginFillFunctionDeclaration = `function(value) {
 }`;
 
 function isPasswordToken(
-  token: ClassifiedNativeLoginControl["token"]
-): token is "current-password" | "new-password" {
-  return token === "current-password" || token === "new-password";
+  token: NativeLoginAutofillToken
+): token is "current-password" | "new-password" | "confirm-password" {
+  return (
+    token === "current-password" ||
+    token === "new-password" ||
+    token === "confirm-password"
+  );
 }
 
 function isConfirmPasswordControl(

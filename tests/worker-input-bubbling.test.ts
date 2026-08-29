@@ -50,6 +50,11 @@ describe("worker input bubbling", () => {
     expect(browserSkill).toContain("Sign in to apply");
     expect(browserSkill).toContain("Needs vault setup:");
     expect(browserSkill).toContain("visible password rules");
+    expect(browserSkill).toContain("provision_login");
+    expect(browserSkill).toContain("no registration path");
+    expect(instructions).toContain("timeout_seconds` of at least 1800");
+    expect(workerInstructions).toContain("timeout_seconds` of at least 1800");
+    expect(browserSkill).toContain("twenty-five minutes");
   });
 
   it("submits a completed ATS login without inspecting injected credentials", () => {

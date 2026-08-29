@@ -212,6 +212,53 @@ describe("database services", () => {
       disabilityStatus: "I do not wish to answer",
     });
   }, 15_000);
+
+  it("keeps an application alive when the candidate profile cannot be stored", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, candidateProfile, workspaces] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/candidate-profile"),
+      import("@/db/services/workspaces"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    const rejected = await candidateProfile.saveCandidateProfile(alice, {
+      legalFirstName: "Ada",
+    });
+    expect(rejected.stored).toBe(false);
+    expect(rejected.profile.legalFirstName).toBe("Ada");
+
+    const kernelRejected = await workspaces.saveWorkspaceKernelProfileId(
+      alice,
+      "profile-1"
+    );
+    expect(kernelRejected).toEqual({ stored: false });
+
+    await applyMigration(client, "0009_candidate_profile.sql");
+    const accepted = await candidateProfile.saveCandidateProfile(alice, {
+      legalFirstName: "Ada",
+      legalLastName: "Lovelace",
+    });
+    expect(accepted.stored).toBe(true);
+    expect(accepted.profile.legalFirstName).toBe("Ada");
+    expect(accepted.profile.legalLastName).toBe("Lovelace");
+    expect(await candidateProfile.readCandidateProfile(alice)).toEqual(
+      accepted.profile
+    );
+    expect(await workspaces.saveWorkspaceKernelProfileId(alice, "profile-1")).toEqual(
+      { stored: true }
+    );
+    expect(await workspaces.readWorkspaceKernelProfileId(alice)).toBe("profile-1");
+  }, 15_000);
 });
 
 async function applyMigration(database: PGlite, name: string) {

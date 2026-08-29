@@ -32,6 +32,7 @@ describe("root and worker capability boundaries", () => {
       "agent.ts",
       "ask_question.ts",
       "browser_run_checkpoints.ts",
+      "candidate_profile.ts",
       "goforay-applications.ts",
       "google_workspace_read.ts",
       "google_workspace_write.ts",
@@ -60,6 +61,7 @@ describe("root and worker capability boundaries", () => {
       "fill_from_vault.ts",
       "list_vault.ts",
       "manage_browsers.ts",
+      "provision_login.ts",
       "solve_captcha.ts",
       "stage_default_goforay_resume.ts",
       "stage_goforay_document.ts",
@@ -80,13 +82,16 @@ describe("root and worker capability boundaries", () => {
     for (const tool of [
       "computer_action",
       "execute_playwright_code",
+      "fill_from_vault",
       "manage_browsers",
+      "provision_login",
       "solve_captcha",
     ]) {
       const source = readFileSync(`${workerTools}/${tool}.ts`, "utf8");
       expect(source).toContain("defineTool(");
       expect(source).not.toContain("defineDynamic(");
       expect(source).toContain("requireWorkerScope(context)");
+      expect(source).toContain("requireOwnedBrowserSession");
     }
     expect(existsSync(`${workerRoot}/hooks/session-owner.ts`)).toBe(true);
     expect(existsSync(`${workerRoot}/skills/browser-execution/SKILL.md`)).toBe(
@@ -116,6 +121,12 @@ describe("root and worker capability boundaries", () => {
     expect(readFileSync(`${workerTools}/fill_from_vault.ts`, "utf8")).toContain(
       'from "@/lib/manager/server/kernel-native-autofill"'
     );
+    expect(readFileSync(`${workerTools}/list_vault.ts`, "utf8")).toContain(
+      "requireWorkerScope(ctx)"
+    );
+    expect(
+      readFileSync(`${workerTools}/provision_login.ts`, "utf8")
+    ).toContain("Username registration is not supported");
   });
 
   it("requires structured completion without a parent-supplied outputSchema", () => {

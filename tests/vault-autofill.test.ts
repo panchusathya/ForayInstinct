@@ -4,6 +4,7 @@ import type { VaultItemKind } from "../lib/manager";
 import { serializePaymentCard } from "../lib/manager/payment-card";
 import {
   classifyNativeLoginControl,
+  loginTokensForPurpose,
   selectNativeLoginFills,
   type NativeLoginControlDescriptor,
 } from "../lib/manager/server/kernel-login-autofill";
@@ -178,6 +179,19 @@ describe("vault browser autofill", () => {
       "current-password": "correct horse",
       "new-password": "correct horse",
     });
+    const signupLeakBoundary = await provider.materializeClaims(scope, login.id, {
+      availableTokens: new Set(["email", "new-password", "confirm-password"]),
+      origin: "https://checkout.example",
+      surface: credentialsSurface,
+    });
+    expect(claimValues(signupLeakBoundary)).toEqual({
+      "confirm-password": "correct horse",
+      email: "ada@example.com",
+      "new-password": "correct horse",
+    });
+    expect(claimValues(signupLeakBoundary)).not.toHaveProperty(
+      "current-password"
+    );
 
     await expect(
       provider.materializeClaims(scope, login.id, {
@@ -449,6 +463,13 @@ describe("vault browser autofill", () => {
         loginControl({ autocomplete: "new-password", type: "password" })
       )
     ).toBeNull();
+    expect(Array.isArray(nativeAutofillTokens.login)).toBe(true);
+    expect(nativeAutofillTokens.login).toContain("confirm-password");
+    expect(nativeAutofillTokens).not.toHaveProperty("sign_up");
+    expect(loginTokensForPurpose("sign_in")).not.toContain("new-password");
+    expect(loginTokensForPurpose("sign_in")).not.toContain("confirm-password");
+    expect(loginTokensForPurpose("sign_up")).not.toContain("current-password");
+    expect(loginTokensForPurpose("sign_up")).toContain("confirm-password");
   });
 
   it("classifies and fills both password controls on a sign_up form", () => {
@@ -467,7 +488,13 @@ describe("vault browser autofill", () => {
         }),
         "sign_up"
       )
-    ).toMatchObject({ token: "new-password" });
+    ).toMatchObject({ token: "confirm-password" });
+    expect(
+      classifyNativeLoginControl(
+        loginControl({ autocomplete: "current-password", type: "password" }),
+        "sign_up"
+      )
+    ).toBeNull();
     expect(
       classifyNativeLoginControl(
         loginControl({ autocomplete: "one-time-code", type: "text" }),
@@ -479,14 +506,14 @@ describe("vault browser autofill", () => {
       focused: true,
       formIndex: 0,
       index: 0,
-      token: "current-password",
+      token: "new-password",
       type: "password",
     });
     const confirm = classifiedLoginControl({
       automationId: "verifyPassword",
       formIndex: 0,
       index: 1,
-      token: "new-password",
+      token: "confirm-password",
       type: "password",
     });
     expect(
@@ -494,8 +521,8 @@ describe("vault browser autofill", () => {
         [password, confirm],
         [
           claim("email", "ada@example.com"),
-          claim("current-password", "correct horse"),
           claim("new-password", "correct horse"),
+          claim("confirm-password", "correct horse"),
         ],
         "sign_up"
       )
