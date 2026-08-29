@@ -79,6 +79,13 @@ describe("worker input bubbling", () => {
     );
     expect(browserSkill).toContain("Never fill into or submit a global header");
     expect(browserSkill).toContain("form-bound sign-in control");
+    expect(browserSkill).toContain(
+      "a centered Intapp modal that offers Google, LinkedIn, and `Sign in with email`"
+    );
+    expect(browserSkill).toContain("never close that modal with its `X`");
+    expect(browserSkill).toContain(
+      "Ignore any `click to take control` overlay"
+    );
   });
 
   it("forbids dumping tool or worker JSON to the user", () => {
