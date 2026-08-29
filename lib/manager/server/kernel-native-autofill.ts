@@ -103,6 +103,55 @@ export async function currentKernelPageOrigin({
   return withKernelPage(browserSessionId, signal, async ({ origin }) => origin);
 }
 
+export async function currentKernelPageUrl({
+  browserSessionId,
+  signal,
+}: {
+  readonly browserSessionId: string;
+  readonly signal?: AbortSignal;
+}) {
+  return withKernelPage(browserSessionId, signal, async ({ url }) => url);
+}
+
+export async function snapshotKernelPage({
+  browserSessionId,
+  signal,
+}: {
+  readonly browserSessionId: string;
+  readonly signal?: AbortSignal;
+}) {
+  return withKernelPage(
+    browserSessionId,
+    signal,
+    async ({ connection, sessionId, url }) => {
+      const pageSessionId = sessionId[0];
+      if (pageSessionId === undefined) return { body: "", url };
+      try {
+        const response = evaluatedValueSchema.parse(
+          await connection.send(
+            "Runtime.evaluate",
+            {
+              expression:
+                'document.body ? document.body.innerText.slice(0, 2000) : ""',
+              returnByValue: true,
+            },
+            pageSessionId
+          )
+        );
+        return {
+          body:
+            typeof response.result.value === "string"
+              ? response.result.value
+              : "",
+          url,
+        };
+      } catch {
+        return { body: "", url };
+      }
+    }
+  );
+}
+
 export async function fillWithKernelNativeAutofill({
   browserSessionId,
   claims,
@@ -460,6 +509,7 @@ async function withKernelPage<T>(
     readonly connection: CdpConnection;
     readonly origin: string;
     readonly sessionId: readonly string[];
+    readonly url: string;
   }) => Promise<T>
 ) {
   const browser = await new Kernel({
@@ -508,6 +558,7 @@ async function withKernelPage<T>(
         connection,
         origin: new URL(target.url).origin,
         sessionId: sessionIds,
+        url: target.url,
       });
     } finally {
       await Promise.all(

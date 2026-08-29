@@ -3,7 +3,7 @@ import { z } from "zod";
 import { kernel } from "@/lib/kernel";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
-import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoints";
+import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/browser-run-evidence";
 
 const actionSchema = z.object({
   type: z.enum([
@@ -224,12 +224,17 @@ export default defineTool({
         }
       }
 
-      await checkpoint(scope, input.session_id, {
-        action: "batch",
-        actions: input.actions.map((action) => action.type),
-        phase: "computer",
-        state: "completed",
-      });
+      await recordBrowserActionCheckpoint(
+        scope,
+        input.session_id,
+        {
+          action: "batch",
+          actions: input.actions.map((action) => action.type),
+          phase: "computer",
+          state: "completed",
+        },
+        context.abortSignal
+      );
       return outputSchema.parse({
         data: data.length > 0 ? data : undefined,
         message: `Executed ${String(input.actions.length)} computer action${input.actions.length === 1 ? "" : "s"}.`,
@@ -237,13 +242,18 @@ export default defineTool({
         screenshotBase64,
       });
     } catch (error) {
-      await checkpoint(scope, input.session_id, {
-        action: "batch",
-        actions: input.actions.map((action) => action.type),
-        errorCode: diagnosticErrorCode(error),
-        phase: "computer",
-        state: "failed",
-      });
+      await recordBrowserActionCheckpoint(
+        scope,
+        input.session_id,
+        {
+          action: "batch",
+          actions: input.actions.map((action) => action.type),
+          errorCode: diagnosticErrorCode(error),
+          phase: "computer",
+          state: "failed",
+        },
+        context.abortSignal
+      );
       throw error;
     }
   },
@@ -270,28 +280,15 @@ function requiredAction<T>(value: T | undefined, action: string): T {
   return value;
 }
 
-async function checkpoint(
-  scope: Awaited<ReturnType<typeof requireWorkerScope>>,
-  sessionId: string,
-  checkpointInput: Parameters<typeof recordBrowserRunCheckpoint>[2]
-) {
-  await recordBrowserRunCheckpoint(scope, sessionId, checkpointInput).catch(
-    (error: unknown) => {
-      console.error("[browser-checkpoint] persistence failed", {
-        error_code: diagnosticErrorCode(error),
-        phase: checkpointInput.phase,
-        session_id: sessionId,
-      });
-    }
-  );
-}
-
 function diagnosticErrorCode(error: unknown) {
   if (typeof error !== "string" && !(error instanceof Error)) {
     return "computer_action";
   }
   const message = typeof error === "string" ? error : error.message;
   if (/timeout/i.test(message)) return "timeout";
+  if (/407|proxy.*auth|wrong_password|auth failed/i.test(message)) {
+    return "proxy_auth";
+  }
   if (/chrome-error|net::/i.test(message)) return "navigation";
   return "computer_action";
 }

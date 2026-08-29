@@ -31,6 +31,7 @@ describe("root and worker capability boundaries", () => {
     expect(toolFiles(rootTools)).toEqual([
       "agent.ts",
       "ask_question.ts",
+      "browser_run_checkpoints.ts",
       "goforay-applications.ts",
       "google_workspace_read.ts",
       "google_workspace_write.ts",
@@ -129,6 +130,10 @@ describe("root and worker capability boundaries", () => {
       "Do not pass `outputSchema` on `worker` calls"
     );
     expect(rootInstructions).toContain("do not retry the same handoff");
+    expect(rootInstructions).toContain("list_browser_run_checkpoints");
+    expect(rootInstructions).toContain("submission_observed");
+    expect(rootInstructions).toContain("never spawn a fresh worker");
+    expect(rootInstructions).toContain("role title and `apply_url`");
     expect(rootInstructions).not.toContain(
       "Every initial or resumed `worker` call must set `outputSchema`"
     );
