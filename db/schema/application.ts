@@ -5,6 +5,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -128,6 +129,43 @@ export const browserSessions = pgTable(
       ],
     }).onDelete("cascade"),
     index("browser_sessions_workspace_idx").on(
+      table.workspaceId,
+      table.createdAt.desc().nullsFirst()
+    ),
+  ]
+);
+
+export const browserRunCheckpoints = pgTable(
+  "browser_run_checkpoints",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    sessionId: text("session_id").notNull(),
+    workspaceId: text("workspace_id").notNull(),
+    createdByUserId: text("created_by_user_id").notNull(),
+    createdAt: text("created_at").notNull(),
+    phase: text("phase").notNull(),
+    state: text("state"),
+    action: text("action"),
+    attempt: integer("attempt").notNull().default(0),
+    page: text("page"),
+    errorCode: text("error_code"),
+    actions: jsonb("actions").$type<string[]>().notNull().default([]),
+    trace: jsonb("trace").$type<string[]>().notNull().default([]),
+  },
+  (table) => [
+    foreignKey({
+      name: "browser_run_checkpoints_membership_fkey",
+      columns: [table.workspaceId, table.createdByUserId],
+      foreignColumns: [
+        workspaceMemberships.workspaceId,
+        workspaceMemberships.userId,
+      ],
+    }).onDelete("cascade"),
+    index("browser_run_checkpoints_session_created_idx").on(
+      table.sessionId,
+      table.createdAt.desc().nullsFirst()
+    ),
+    index("browser_run_checkpoints_workspace_created_idx").on(
       table.workspaceId,
       table.createdAt.desc().nullsFirst()
     ),

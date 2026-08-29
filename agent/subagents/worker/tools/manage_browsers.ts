@@ -10,6 +10,8 @@ import {
   deleteBrowserSession,
   listBrowserSessions,
 } from "@/db/services/browsers";
+import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoints";
+import type { AccessScope } from "@/lib/access-scope";
 import { env } from "@/lib/env";
 import { kernel } from "@/lib/kernel";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
@@ -18,6 +20,7 @@ import {
   isWorkdayApplicationUrl,
   normalizeWorkdayRouteResult,
   workdayRouterCode,
+  workdayRouteStrategies,
 } from "@/agent/subagents/worker/lib/workday-router";
 
 const browserTimeoutFloorSeconds = 15 * 60;
@@ -78,6 +81,12 @@ export default defineTool({
             .catch(() => undefined);
           throw error;
         }
+        await recordCheckpoint(scope, browser.session_id, {
+          action: "create",
+          page: safeWorkdayLocation(input.start_url),
+          phase: "browser",
+          state: "created",
+        });
         let workday: ReturnType<typeof normalizeWorkdayRouteResult> | undefined;
         if (isWorkday && input.start_url) {
           console.info("[workday-router] browser created", {
@@ -85,19 +94,47 @@ export default defineTool({
             target: safeWorkdayLocation(input.start_url),
           });
           try {
-            const response = await kernel.browsers.playwright.execute(
-              browser.session_id,
-              { code: workdayRouterCode(input.start_url), timeout_sec: 30 },
-              { signal }
-            );
-            workday = normalizeWorkdayRouteResult(response);
-            logWorkdayRoute({
-              applicationUrl: input.start_url,
-              browser,
-              response,
-              workday,
-            });
+            for (const [index, strategy] of workdayRouteStrategies.entries()) {
+              const response = await kernel.browsers.playwright.execute(
+                browser.session_id,
+                {
+                  code: workdayRouterCode(input.start_url, strategy),
+                  timeout_sec: 30,
+                },
+                { signal }
+              );
+              workday = {
+                ...normalizeWorkdayRouteResult(response),
+                attempt: index + 1,
+                strategy,
+              };
+              await recordCheckpoint(scope, browser.session_id, {
+                action: strategy,
+                actions: workday.actions,
+                attempt: index + 1,
+                errorCode: diagnosticErrorCode(response.error),
+                page: safeWorkdayLocation(workday.url),
+                phase: "workday_router",
+                state: workday.state,
+                trace: workday.trace,
+              });
+              logWorkdayRoute({
+                applicationUrl: input.start_url,
+                browser,
+                response,
+                workday,
+              });
+              if (workday.state !== "route_incomplete") break;
+            }
           } catch (error) {
+            await recordCheckpoint(scope, browser.session_id, {
+              action: workday?.strategy,
+              attempt: workday?.attempt,
+              errorCode: diagnosticErrorCode(error),
+              page: safeWorkdayLocation(input.start_url),
+              phase: "workday_router",
+              state: "execution_failed",
+            });
             console.error("[workday-router] route request failed", {
               browser_session_id: browser.session_id,
               error_code: diagnosticErrorCode(error),
@@ -211,6 +248,11 @@ function lifecycleResult(
             "Workday is at its real email/password form. Use list_vault, focus that form, then use fill_from_vault; do not click a header Sign In control.",
           ]
         : []),
+      ...(workday?.state === "route_incomplete"
+        ? [
+            "Workday routing completed its direct, reload, and direct-autofill retries without finding a safe next control. Continue autonomously with one observed Playwright inspection/recovery; do not request human takeover unless a required answer, OTP, or personal verification is actually present.",
+          ]
+        : []),
       `Use execute_playwright_code with session_id "${value.session_id}" for deterministic browser automation.`,
       `Use computer_action with session_id "${value.session_id}" for visual browser control.`,
       `Use manage_browsers with action "delete" and session_id "${value.session_id}" when finished.`,
@@ -232,11 +274,13 @@ function logWorkdayRoute({
 }) {
   const detail = {
     actions: workday.actions ?? [],
+    attempt: workday.attempt,
     browser_session_id: browser.session_id,
     execution_error: diagnosticErrorCode(response.error),
     execution_success: response.success,
     page: safeWorkdayLocation(workday.url),
     state: workday.state,
+    strategy: workday.strategy,
     target: safeWorkdayLocation(applicationUrl),
     trace: workday.trace ?? [],
   };
@@ -244,6 +288,22 @@ function logWorkdayRoute({
     console.info("[workday-router] route completed", detail);
   } else {
     console.error("[workday-router] route execution failed", detail);
+  }
+}
+
+async function recordCheckpoint(
+  scope: AccessScope,
+  sessionId: string,
+  checkpoint: Parameters<typeof recordBrowserRunCheckpoint>[2]
+) {
+  try {
+    await recordBrowserRunCheckpoint(scope, sessionId, checkpoint);
+  } catch (error) {
+    console.error("[browser-checkpoint] persistence failed", {
+      error_code: diagnosticErrorCode(error),
+      phase: checkpoint.phase,
+      session_id: sessionId,
+    });
   }
 }
 

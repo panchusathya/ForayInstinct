@@ -88,6 +88,10 @@ describe("worker input bubbling", () => {
     );
     expect(browserSkill).toContain("dedicated Workday router");
     expect(browserSkill).toContain("Read its `workday` result");
+    expect(browserSkill).toContain(
+      "Treat `route_incomplete` as an automatic recovery state"
+    );
+    expect(browserSkill).toContain("Do not ask for a takeover");
   });
 
   it("keeps an ATS resume that is already attached", () => {

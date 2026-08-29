@@ -26,6 +26,14 @@ const mocks = vi.hoisted(() => ({
     >(),
   createBrowserSession:
     vi.fn<(_scope: unknown, _record: unknown) => Promise<void>>(),
+  recordBrowserRunCheckpoint:
+    vi.fn<
+      (
+        _scope: unknown,
+        _sessionId: string,
+        _checkpoint: unknown
+      ) => Promise<void>
+    >(),
   kernelProxyId: undefined as string | undefined,
   requireWorkerScope: vi.fn<(_context: unknown) => Promise<unknown>>(),
 }));
@@ -38,6 +46,10 @@ vi.mock("@/db/services/browsers", () => ({
   createBrowserSession: mocks.createBrowserSession,
   deleteBrowserSession: vi.fn<() => Promise<boolean>>(),
   listBrowserSessions: vi.fn<() => Promise<never[]>>(),
+}));
+
+vi.mock("@/db/services/browser-run-checkpoints", () => ({
+  recordBrowserRunCheckpoint: mocks.recordBrowserRunCheckpoint,
 }));
 
 vi.mock("@/lib/kernel", () => ({
@@ -172,8 +184,20 @@ describe("Kernel browser contract", () => {
       workdayRouterCode("https://tenant.myworkdayjobs.com/en-US/job/example")
     ).toContain("sign_in:initial_link");
     expect(result).toMatchObject({
-      workday: { state: "email_login_ready" },
+      workday: {
+        attempt: 1,
+        state: "email_login_ready",
+        strategy: "direct",
+      },
     });
+    expect(mocks.recordBrowserRunCheckpoint).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      "browser-1",
+      expect.objectContaining({
+        phase: "workday_router",
+        state: "email_login_ready",
+      })
+    );
     expect(info).toHaveBeenCalledWith(
       "[workday-router] browser created",
       expect.objectContaining({
@@ -188,5 +212,43 @@ describe("Kernel browser contract", () => {
         state: "email_login_ready",
       })
     );
+  });
+
+  it("retries incomplete Workday routes with bounded recovery strategies", async () => {
+    mocks.executePlaywright.mockResolvedValue({
+      success: true,
+      result: { actions: ["Sign In"], state: "route_incomplete" },
+    });
+    const execute = manageBrowsers.execute;
+
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; create only reads abortSignal after the mocked authorization boundary.
+    const result = await execute(
+      {
+        action: "create",
+        start_url: "https://tenant.myworkdayjobs.com/en-US/job/example",
+      },
+      {} as never
+    );
+
+    expect(mocks.executePlaywright).toHaveBeenCalledTimes(3);
+    expect(
+      mocks.executePlaywright.mock.calls.map(([, input]) => input)
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: expect.stringContaining('"direct"') }),
+        expect.objectContaining({ code: expect.stringContaining('"reload"') }),
+        expect.objectContaining({
+          code: expect.stringContaining("autofillWithResume"),
+        }),
+      ])
+    );
+    expect(result).toMatchObject({
+      workday: {
+        attempt: 3,
+        state: "route_incomplete",
+        strategy: "autofill_path",
+      },
+    });
+    expect(mocks.recordBrowserRunCheckpoint).toHaveBeenCalledTimes(4);
   });
 });

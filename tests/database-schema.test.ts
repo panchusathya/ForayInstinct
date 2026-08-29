@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   account,
   agentSessions,
+  browserRunCheckpoints,
   browserSessions,
   chats,
   encryptedSecrets,
@@ -27,6 +28,7 @@ describe("database schema", () => {
         settings,
         agentSessions,
         browserSessions,
+        browserRunCheckpoints,
         chats,
         encryptedSecrets,
         user,
@@ -41,6 +43,7 @@ describe("database schema", () => {
       "settings",
       "agent_sessions",
       "browser_sessions",
+      "browser_run_checkpoints",
       "chats",
       "encrypted_secrets",
       "user",
@@ -51,7 +54,11 @@ describe("database schema", () => {
   });
 
   it("anchors session creators to a membership in the same workspace", () => {
-    for (const table of [agentSessions, browserSessions]) {
+    for (const table of [
+      agentSessions,
+      browserSessions,
+      browserRunCheckpoints,
+    ]) {
       const foreignKeys = getTableConfig(table).foreignKeys;
       expect(foreignKeys.map((foreignKey) => foreignKey.getName())).toContain(
         `${getTableConfig(table).name}_membership_fkey`

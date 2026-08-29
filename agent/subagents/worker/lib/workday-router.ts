@@ -7,9 +7,19 @@ export type WorkdayRouteState =
   | "navigation_failed"
   | "route_incomplete";
 
+export const workdayRouteStrategies = [
+  "direct",
+  "reload",
+  "autofill_path",
+] as const;
+
+export type WorkdayRouteStrategy = (typeof workdayRouteStrategies)[number];
+
 export interface WorkdayRouteResult {
   actions?: string[];
+  attempt?: number;
   state: WorkdayRouteState;
+  strategy?: WorkdayRouteStrategy;
   trace?: string[];
   url?: string;
 }
@@ -31,9 +41,13 @@ export function isWorkdayApplicationUrl(value: string): boolean {
   }
 }
 
-export function workdayRouterCode(applicationUrl: string): string {
+export function workdayRouterCode(
+  applicationUrl: string,
+  strategy: WorkdayRouteStrategy = "direct"
+): string {
   return `
-const applicationUrl = ${JSON.stringify(applicationUrl)};
+const applicationUrl = ${JSON.stringify(workdayRouteUrl(applicationUrl, strategy))};
+const strategy = ${JSON.stringify(strategy)};
 const trace = [];
 const availableActions = async () => page.locator("a, button").evaluateAll((nodes) => nodes
   .map((node) => (node.innerText || node.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim())
@@ -66,6 +80,10 @@ const currentState = async () => {
 
 const navigation = await page.goto(applicationUrl, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => undefined);
 trace.push(navigation ? "navigation:loaded" : "navigation:unconfirmed");
+if (strategy === "reload") {
+  const reloaded = await page.reload({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => undefined);
+  trace.push(reloaded ? "navigation:reloaded" : "navigation:reload_unconfirmed");
+}
 await page.locator("body").waitFor({ state: "visible", timeout: 5000 }).catch(() => undefined);
 
 // Cookie banners are optional and never determine whether routing succeeded.
@@ -94,8 +112,18 @@ for (let attempt = 0; attempt < 4; attempt += 1) {
 }
 
 const state = await currentState();
-return state ?? { actions: await availableActions(), state: "route_incomplete", trace, url: page.url() };
+return state ?? { actions: await availableActions(), state: "route_incomplete", strategy, trace, url: page.url() };
 `;
+}
+
+function workdayRouteUrl(
+  applicationUrl: string,
+  strategy: WorkdayRouteStrategy
+) {
+  if (strategy !== "autofill_path") return applicationUrl;
+  const url = new URL(applicationUrl);
+  url.pathname = `${url.pathname.replace(/\/$/u, "")}/apply/autofillWithResume`;
+  return url.toString();
 }
 
 export function normalizeWorkdayRouteResult(
@@ -111,7 +139,9 @@ function isRouteResult(value: unknown): value is WorkdayRouteResult {
   if (!value || typeof value !== "object") return false;
   const candidate = value as {
     actions?: unknown;
+    attempt?: unknown;
     state?: unknown;
+    strategy?: unknown;
     trace?: unknown;
     url?: unknown;
   };
@@ -124,6 +154,11 @@ function isRouteResult(value: unknown): value is WorkdayRouteResult {
     (candidate.actions === undefined ||
       (Array.isArray(candidate.actions) &&
         candidate.actions.every((entry) => typeof entry === "string"))) &&
+    (candidate.attempt === undefined || Number.isInteger(candidate.attempt)) &&
+    (candidate.strategy === undefined ||
+      candidate.strategy === "direct" ||
+      candidate.strategy === "reload" ||
+      candidate.strategy === "autofill_path") &&
     (candidate.url === undefined || typeof candidate.url === "string") &&
     (candidate.trace === undefined ||
       (Array.isArray(candidate.trace) &&
