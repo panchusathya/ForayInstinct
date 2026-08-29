@@ -109,6 +109,16 @@ describe("root and worker capability boundaries", () => {
     expect(readFileSync("lib/browser.ts", "utf8")).toContain(
       "chromium.connectOverCDP"
     );
+    expect(readFileSync("lib/browser.ts", "utf8")).toContain(
+      "disposeOnDetach: false"
+    );
+    expect(readFileSync("lib/browser.ts", "utf8")).not.toContain(
+      "browser.newContext("
+    );
+    expect(existsSync("agent/schedules/browser-keepalive.ts")).toBe(true);
+    expect(
+      readFileSync("agent/schedules/browser-keepalive.ts", "utf8")
+    ).toContain('cron: "*/2 * * * *"');
     for (const tool of [
       "computer_action",
       "execute_playwright_code",

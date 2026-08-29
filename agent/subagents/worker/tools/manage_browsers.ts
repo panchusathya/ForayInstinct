@@ -6,16 +6,18 @@ import {
   listBrowserSessions,
 } from "@/db/services/browsers";
 import {
+  browserTimeoutFloorSeconds,
+  clampBrowserTimeoutSeconds,
   createRemoteBrowser,
   describeRemoteBrowser,
+  extendRemoteBrowserKeepAlive,
+  forgetRemoteBrowser,
   updateRemoteBrowserViewport,
   type BrowserDescriptor,
 } from "@/lib/browser";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { withWorkerToolError } from "@/agent/lib/worker-tool-error";
-
-const browserTimeoutFloorSeconds = 15 * 60;
 
 const inputSchema = z.object({
   action: z.enum(["create", "update", "list", "get", "delete"]),
@@ -36,7 +38,7 @@ const inputSchema = z.object({
 
 export default defineTool({
   description:
-    'Manage browser sessions. Create one browser and reuse it for the assignment; use "list" or "get" to inspect sessions and "delete" when finished. Keep a browser open only for a pending human action or transaction approval.',
+    'Manage browser sessions. Create one browser and reuse it for the assignment; the hosted Chrome stays alive across tool reconnects until timeout_seconds (default 15 minutes, max 60). Use "list" or "get" to inspect sessions, "update" to extend timeout_seconds, and "delete" when finished. Keep a browser open only for a pending human action, vault setup, or transaction approval.',
   inputSchema,
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
@@ -50,6 +52,7 @@ export default defineTool({
             const viewport = browserViewport(input);
             const browser = await createRemoteBrowser({
               startUrl: input.start_url,
+              timeoutSeconds: clampBrowserTimeoutSeconds(input.timeout_seconds),
               viewport,
             });
             await createBrowserSession(scope, {
@@ -100,6 +103,12 @@ export default defineTool({
           case "update": {
             const sessionId = requireSessionId(input.session_id);
             await requireOwnedBrowserSession(scope, sessionId);
+            if (input.timeout_seconds !== undefined) {
+              await extendRemoteBrowserKeepAlive(
+                sessionId,
+                input.timeout_seconds
+              );
+            }
             const viewport = browserViewport(input);
             const browser = viewport
               ? await updateRemoteBrowserViewport(sessionId, viewport)
@@ -109,6 +118,7 @@ export default defineTool({
           case "delete": {
             const sessionId = requireSessionId(input.session_id);
             await requireOwnedBrowserSession(scope, sessionId);
+            await forgetRemoteBrowser(sessionId);
             await deleteBrowserSession(scope, sessionId);
             return "Browser session deleted successfully";
           }

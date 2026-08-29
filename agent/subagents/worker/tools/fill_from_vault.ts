@@ -11,6 +11,7 @@ import {
   nativeAutofillTokens,
 } from "@/lib/manager/server/kernel-native-autofill";
 import { withWorkerToolError } from "@/agent/lib/worker-tool-error";
+import { extendRemoteBrowserKeepAlive } from "@/lib/browser";
 import { fillFromVaultRequestSchema } from "@/lib/manager/vault-autofill";
 
 const outputSchema = z.object({
@@ -78,6 +79,7 @@ export default defineTool({
           kind: item.kind,
           signal: context.abortSignal,
         });
+        await extendRemoteBrowserKeepAlive(input.browserSessionId);
 
         return {
           filledClaims: result.filledClaims,

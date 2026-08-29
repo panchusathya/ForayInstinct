@@ -29,7 +29,14 @@ vi.mock("@/db/services/browsers", () => ({
 }));
 
 vi.mock("@/lib/browser", () => ({
+  browserTimeoutFloorSeconds: 900,
+  clampBrowserTimeoutSeconds: (timeoutSeconds?: number) =>
+    timeoutSeconds ?? 900,
   createRemoteBrowser: mocks.createRemoteBrowser,
+  describeRemoteBrowser: vi.fn<() => Promise<never>>(),
+  extendRemoteBrowserKeepAlive: vi.fn<() => Promise<void>>(),
+  forgetRemoteBrowser: vi.fn<() => Promise<void>>(),
+  updateRemoteBrowserViewport: vi.fn<() => Promise<never>>(),
 }));
 
 beforeEach(() => {
@@ -79,6 +86,7 @@ describe("Bright Data browser contract", () => {
 
     expect(mocks.createRemoteBrowser).toHaveBeenCalledExactlyOnceWith({
       startUrl: undefined,
+      timeoutSeconds: 900,
       viewport: undefined,
     });
   });
@@ -93,7 +101,20 @@ describe("Bright Data browser contract", () => {
 
     expect(mocks.createRemoteBrowser).toHaveBeenCalledExactlyOnceWith({
       startUrl: undefined,
+      timeoutSeconds: 900,
       viewport: { height: 900, width: 1440 },
+    });
+  });
+
+  it("passes an explicit timeout through to Bright Data session keepalive", async () => {
+    const execute = manageBrowsers.execute;
+
+    await execute({ action: "create", timeout_seconds: 3600 }, {} as never);
+
+    expect(mocks.createRemoteBrowser).toHaveBeenCalledExactlyOnceWith({
+      startUrl: undefined,
+      timeoutSeconds: 3600,
+      viewport: undefined,
     });
   });
 });
