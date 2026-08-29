@@ -26,11 +26,10 @@ reading the code!
 
 ## Deployment
 
-The deploy button provisions [Neon](https://neon.tech) for Postgres. Add a
-[Browserbase API key](https://docs.browserbase.com/platform/browser/getting-started/create-browser-session)
-for hosted browsers. Browserbase Contexts retain browser profile state across
-sessions; available proxy, stealth, verified-browser, and CAPTCHA features are
-configured by your Browserbase plan. Vercel AI Gateway handles inference.
+The deploy button provisions [Neon](https://neon.tech) for Postgres. Add
+[Bright Data Browser API](https://docs.brightdata.com/scraping-automation/scraping-browser/configuration)
+credentials for hosted browsers. Browser API supplies managed residential proxy
+routing, CAPTCHA solving, and fingerprint handling. Vercel AI Gateway handles inference.
 [Linq](https://linq.app) is optional and requires the setup below before
 iMessage or production phone sign-in is available. Usage is billed to your
 Vercel account. Set the remaining auth variables on the deployment:
@@ -40,14 +39,14 @@ BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 BETTER_AUTH_URL=https://your-host
 DATABASE_URL=postgresql://user:password@host/database
 DATABASE_URL_UNPOOLED=postgresql://user:password@host/database
-BROWSERBASE_API_KEY=bb_live_your_api_key
+BRIGHT_DATA_BROWSER_AUTH=brd-customer-YOUR_ID-zone-YOUR_ZONE:YOUR_PASSWORD
 SECRET_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ```
 
 ### GoForay candidate deployment
 
 Deploy this fork independently at `https://apply.goforay.io`, with its own
-Postgres database, Better Auth secret, Browserbase API key,
+Postgres database, Better Auth secret, Bright Data Browser API credentials,
 and vault-encryption key.
 Set `JUICEBOX_API_URL=https://api.goforay.io` and the same
 `OPENINSTINCT_SHARED_SECRET` configured on JuiceBox. This shared secret signs
@@ -171,7 +170,7 @@ stops and removes the PostgreSQL container; its data remains in the
 `postgres-data` volume for the next run. Run `pnpm dev:app` when intentionally
 using an externally managed database instead.
 
-Local development otherwise uses the same vault, Browserbase browser, and AI Gateway
+Local development otherwise uses the same vault, Bright Data browser, and AI Gateway
 path as the Vercel deployment. Better Auth and vault encryption use stable
 local-only defaults when their variables are unset; deployments still require
 explicit secrets.
@@ -183,6 +182,6 @@ explicit secrets.
 
 <div align="center">
 
-Built on [Vercel](https://vercel.com) · [Browserbase](https://browserbase.com) · [Linq](https://linq.app) · [Neon](https://neon.tech)
+Built on [Vercel](https://vercel.com) · [Bright Data](https://brightdata.com) · [Linq](https://linq.app) · [Neon](https://neon.tech)
 
 </div>

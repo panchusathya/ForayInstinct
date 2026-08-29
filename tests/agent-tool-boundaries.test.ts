@@ -110,7 +110,7 @@ describe("root and worker capability boundaries", () => {
       "chromium.connectOverCDP"
     );
     expect(readFileSync("lib/browser.ts", "utf8")).toContain(
-      "new Browserbase({ apiKey: env.BROWSERBASE_API_KEY })"
+      '"Proxy.useSession"'
     );
     expect(readFileSync("lib/browser.ts", "utf8")).not.toContain(
       "browser.newContext("

@@ -462,7 +462,7 @@ async function withKernelPage<T>(
   }) => Promise<T>
 ) {
   const connection = await CdpConnection.connect(
-    await browserCdpUrl(browserSessionId),
+    browserCdpUrl(browserSessionId),
     signal
   );
 

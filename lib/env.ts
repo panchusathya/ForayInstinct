@@ -32,9 +32,13 @@ export const env = createEnv({
   server: {
     // Required
     DATABASE_URL: databaseUrlSchema,
-    // Browserbase infers the project from this API key. Do not configure a
-    // project ID separately: that would override the key's project binding.
-    BROWSERBASE_API_KEY: requiredValue,
+    // Bright Data Browser API credentials (`customer-zone:password`). Worker
+    // browsers connect over CDP; `-session-<id>` is appended so later tool
+    // calls can resume the same hosted Chrome.
+    BRIGHT_DATA_BROWSER_AUTH: requiredValue.refine(
+      (value) => value.includes(":"),
+      "BRIGHT_DATA_BROWSER_AUTH must be `username:password`."
+    ),
     // Vercel's automatic free allowance is deliberately not enough for the
     // candidate agent. A named paid Gateway key makes the routing and billing
     // relationship explicit instead of silently falling back to a free model.

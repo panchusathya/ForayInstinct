@@ -64,9 +64,9 @@ export function WorkspaceManager({
                 {browserReady ? "Connected" : "Unavailable"}
               </span>
             }
-            description="Hosted Chrome through Browserbase, with durable browser profile storage."
+            description="Hosted Chrome through Bright Data, with a Decodo residential exit."
             icon={<CloudIcon />}
-            label="Browserbase browser"
+            label="Bright Data browser"
           />
           <ConnectorRow
             action={
@@ -204,7 +204,7 @@ function channelAvailabilityMessage({
   const messages = [
     browserReady
       ? "WebChat is ready."
-      : "BROWSERBASE_API_KEY is required to enable WebChat.",
+      : "BRIGHT_DATA_BROWSER_AUTH is required to enable WebChat.",
     linqPhoneNumber
       ? `iMessage opens ${linqPhoneNumber}.`
       : "Set up Linq to enable iMessage.",

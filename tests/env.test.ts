@@ -4,7 +4,7 @@ const requiredEnvironment = {
   BETTER_AUTH_SECRET: "test-auth-secret",
   BETTER_AUTH_URL: "https://example.com",
   AI_GATEWAY_API_KEY: "test-ai-gateway-key",
-  BROWSERBASE_API_KEY: "test-browserbase-key",
+  BRIGHT_DATA_BROWSER_AUTH: "brd-customer-test-zone-browser:test-password",
   DATABASE_URL: "postgresql://user:password@example.com/database",
   SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
 };
@@ -33,8 +33,8 @@ describe("environment", () => {
     expect(env).toMatchObject(requiredEnvironment);
   });
 
-  it("rejects an empty Browserbase API key", async () => {
-    vi.stubEnv("BROWSERBASE_API_KEY", "");
+  it("rejects Bright Data credentials without a password separator", async () => {
+    vi.stubEnv("BRIGHT_DATA_BROWSER_AUTH", "missing-password");
 
     await expect(import("../lib/env")).rejects.toThrow(
       "Invalid environment variables"
@@ -94,7 +94,7 @@ describe("environment", () => {
     );
   });
 
-  it.each(["DATABASE_URL", "BROWSERBASE_API_KEY"])(
+  it.each(["DATABASE_URL", "BRIGHT_DATA_BROWSER_AUTH"])(
     "keeps %s required in local development",
     async (name) => {
       vi.stubEnv(name, "");
@@ -121,7 +121,7 @@ describe("environment", () => {
     ["AI_GATEWAY_API_KEY", "Invalid environment variables"],
     ["BETTER_AUTH_SECRET", "Invalid environment variables"],
     ["BETTER_AUTH_URL", "Invalid environment variables"],
-    ["BROWSERBASE_API_KEY", "Invalid environment variables"],
+    ["BRIGHT_DATA_BROWSER_AUTH", "Invalid environment variables"],
     ["DATABASE_URL", "Invalid environment variables"],
     ["SECRET_ENCRYPTION_KEY", "Invalid environment variables"],
   ])(
