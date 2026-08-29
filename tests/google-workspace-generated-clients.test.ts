@@ -6,6 +6,7 @@ import {
   searchGoogleContacts,
 } from "@/agent/lib/google-workspace/calendar";
 import { withGoogleAuth } from "@/agent/lib/google-workspace/client";
+import { buildEmailOtpSearchQuery } from "@/agent/lib/google-workspace/email-otp";
 import {
   readGmailThread,
   searchGmail,
@@ -214,7 +215,7 @@ describe("generated Google Workspace clients", () => {
     expect(list).toHaveBeenCalledWith(
       {
         maxResults: 5,
-        q: expect.stringContaining("from:noreply@myworkday.com"),
+        q: buildEmailOtpSearchQuery({ fromHint: "noreply@myworkday.com" }),
         userId: "me",
       },
       { signal: ctx.abortSignal }

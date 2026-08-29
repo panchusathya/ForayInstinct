@@ -114,7 +114,7 @@ export async function waitForEmailOtp(
     throw error;
   }
 
-  while (true) {
+  do {
     try {
       const found = await findEmailOtp(client, ctx.abortSignal, query);
       if (found) return found;
@@ -123,19 +123,19 @@ export async function waitForEmailOtp(
       throw error;
     }
 
-    if (Date.now() >= deadline) {
-      return {
-        message:
-          "No verification email arrived in time. Ask the candidate for the code and resume the worker.",
-        status: "timeout" as const,
-      };
-    }
+    if (Date.now() >= deadline) break;
 
     await sleep(
       Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())),
       ctx.abortSignal
     );
-  }
+  } while (Date.now() < deadline);
+
+  return {
+    message:
+      "No verification email arrived in time. Ask the candidate for the email code and resume the worker.",
+    status: "timeout" as const,
+  };
 }
 
 export async function updateGmail(

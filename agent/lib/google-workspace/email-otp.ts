@@ -58,8 +58,9 @@ export function extractEmailOtp(text: string) {
   for (const match of normalized.matchAll(/\b(\d{6})\b/gu)) {
     const code = match[1];
     if (!code || !isPlausibleOtp(code)) continue;
-    const index = match.index ?? 0;
-    if (isIgnoredNumericContext(normalized, index, code.length)) continue;
+    if (isIgnoredNumericContext(normalized, match.index, code.length)) {
+      continue;
+    }
     return code;
   }
   return null;
