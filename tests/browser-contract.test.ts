@@ -46,14 +46,14 @@ beforeEach(() => {
     workspaceId: "workspace-1",
   });
   mocks.createRemoteBrowser.mockResolvedValue({
-    browser_live_view_url: "",
+    browser_live_view_url: "https://inspect.brightdata.test/browser-1",
     created_at: "2026-08-27T00:00:00.000Z",
     session_id: "browser-1",
     status: "active",
   });
 });
 
-describe("residential browser contract", () => {
+describe("Bright Data browser contract", () => {
   it("keeps agent-created browsers alive for at least 15 minutes", () => {
     const inputSchema = manageBrowsers.inputSchema;
     if (!(inputSchema instanceof z.ZodType)) {
@@ -74,13 +74,13 @@ describe("residential browser contract", () => {
     ).toBe(true);
   });
 
-  it("returns the browser descriptor for a created browser", async () => {
+  it("returns the live-view URL for a created browser", async () => {
     const execute = manageBrowsers.execute;
 
     const result = await execute({ action: "create" }, {} as never);
     expect(result).toMatchObject({
       browser: {
-        browser_live_view_url: "",
+        browser_live_view_url: "https://inspect.brightdata.test/browser-1",
       },
     });
 
@@ -91,7 +91,7 @@ describe("residential browser contract", () => {
     });
   });
 
-  it("passes a viewport when both dimensions are set", async () => {
+  it("passes a viewport to Bright Data when both dimensions are set", async () => {
     const execute = manageBrowsers.execute;
 
     await execute(
@@ -106,7 +106,7 @@ describe("residential browser contract", () => {
     });
   });
 
-  it("passes an explicit timeout through to browser session metadata", async () => {
+  it("passes an explicit timeout through to Bright Data session keepalive", async () => {
     const execute = manageBrowsers.execute;
 
     await execute({ action: "create", timeout_seconds: 3600 }, {} as never);

@@ -64,9 +64,9 @@ export function WorkspaceManager({
                 {browserReady ? "Connected" : "Unavailable"}
               </span>
             }
-            description="Chromium sessions through a Decodo residential exit."
+            description="Hosted Chrome through Bright Data, with a Decodo residential exit."
             icon={<CloudIcon />}
-            label="Residential browser"
+            label="Bright Data browser"
           />
           <ConnectorRow
             action={
@@ -204,7 +204,7 @@ function channelAvailabilityMessage({
   const messages = [
     browserReady
       ? "WebChat is ready."
-      : "DECODO_PROXY_URL is required to enable WebChat.",
+      : "BRIGHT_DATA_BROWSER_AUTH is required to enable WebChat.",
     linqPhoneNumber
       ? `iMessage opens ${linqPhoneNumber}.`
       : "Set up Linq to enable iMessage.",

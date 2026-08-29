@@ -27,9 +27,9 @@ reading the code!
 ## Deployment
 
 The deploy button provisions [Neon](https://neon.tech) for Postgres. Add
-[Decodo](https://help.decodo.com/docs/residential-proxy-custom-sticky-sessions)
-residential proxy URL for Chromium browser sessions. Vercel AI Gateway handles
-inference.
+[Bright Data Browser API](https://docs.brightdata.com/scraping-automation/scraping-browser/configuration)
+credentials and a [Decodo](https://help.decodo.com/docs/residential-proxy-custom-sticky-sessions)
+residential proxy URL for hosted browsers. Vercel AI Gateway handles inference.
 [Linq](https://linq.app) is optional and requires the setup below before
 iMessage or production phone sign-in is available. Usage is billed to your
 Vercel account. Set the remaining auth variables on the deployment:
@@ -39,6 +39,7 @@ BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 BETTER_AUTH_URL=https://your-host
 DATABASE_URL=postgresql://user:password@host/database
 DATABASE_URL_UNPOOLED=postgresql://user:password@host/database
+BRIGHT_DATA_BROWSER_AUTH=brd-customer-YOUR_ID-zone-YOUR_ZONE:YOUR_PASSWORD
 DECODO_PROXY_URL=http://user:pass@gate.decodo.com:7000
 SECRET_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ```
@@ -46,8 +47,8 @@ SECRET_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ### GoForay candidate deployment
 
 Deploy this fork independently at `https://apply.goforay.io`, with its own
-Postgres database, Better Auth secret, Decodo residential proxy URL, and
-vault-encryption key.
+Postgres database, Better Auth secret, Bright Data Browser API credentials,
+Decodo residential proxy URL, and vault-encryption key.
 Set `JUICEBOX_API_URL=https://api.goforay.io` and the same
 `OPENINSTINCT_SHARED_SECRET` configured on JuiceBox. This shared secret signs
 short-lived service calls only; it is not an ATS credential and is never sent
@@ -170,7 +171,7 @@ stops and removes the PostgreSQL container; its data remains in the
 `postgres-data` volume for the next run. Run `pnpm dev:app` when intentionally
 using an externally managed database instead.
 
-Local development otherwise uses the same vault, Decodo browser route, and AI Gateway
+Local development otherwise uses the same vault, Bright Data browser, and AI Gateway
 path as the Vercel deployment. Better Auth and vault encryption use stable
 local-only defaults when their variables are unset; deployments still require
 explicit secrets.

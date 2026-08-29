@@ -38,7 +38,7 @@ const inputSchema = z.object({
 
 export default defineTool({
   description:
-    'Manage persisted browser sessions. Create one session and reuse its session_id for the assignment; each browser tool call launches Chromium through the same Decodo sticky residential route and restores saved state. timeout_seconds defaults to 15 minutes and is capped at 60. Use "list" or "get" to inspect sessions, "update" to extend timeout_seconds, and "delete" when finished.',
+    'Manage browser sessions. Create one browser and reuse it for the assignment; the hosted Chrome stays alive across tool reconnects until timeout_seconds (default 15 minutes, max 60). Use "list" or "get" to inspect sessions, "update" to extend timeout_seconds, and "delete" when finished. Keep a browser open only for a pending human action, vault setup, or transaction approval.',
   inputSchema,
   async execute(input, context) {
     const scope = await requireWorkerScope(context);

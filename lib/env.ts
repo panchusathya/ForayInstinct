@@ -32,8 +32,15 @@ export const env = createEnv({
   server: {
     // Required
     DATABASE_URL: databaseUrlSchema,
-    // Decodo residential proxy URL. Each worker launch gets its own sticky
-    // residential session while the persisted browser state lives in Neon.
+    // Bright Data Browser API credentials (`customer-zone:password`). Worker
+    // browsers connect over CDP; `-session-<id>` is appended so later tool
+    // calls can resume the same hosted Chrome.
+    BRIGHT_DATA_BROWSER_AUTH: requiredValue.refine(
+      (value) => value.includes(":"),
+      "BRIGHT_DATA_BROWSER_AUTH must be `username:password`."
+    ),
+    // Decodo residential proxy URL. Traffic from the hosted browser uses this
+    // sticky residential exit instead of a shared ISP pool.
     DECODO_PROXY_URL: z.url().refine((value) => {
       const url = new URL(value);
       return url.username.length > 0 && url.password.length > 0;
