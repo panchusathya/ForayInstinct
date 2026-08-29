@@ -37,9 +37,6 @@ export const env = createEnv({
     // stealth (CAPTCHA solver) and replace Kernel's default shared ISP
     // exit with this proxy.
     KERNEL_PROXY_ID: requiredValue.optional(),
-    // Temporary maintenance token for a one-time state reset. It is optional
-    // in normal deployments and removed immediately after use.
-    AGENT_STATE_RESET_TOKEN: requiredValue.optional(),
     // Vercel's automatic free allowance is deliberately not enough for the
     // candidate agent. A named paid Gateway key makes the routing and billing
     // relationship explicit instead of silently falling back to a free model.

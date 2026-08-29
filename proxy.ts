@@ -6,8 +6,7 @@ export async function proxy(request: NextRequest) {
   if (
     pathname === "/sign-in" ||
     pathname.startsWith("/api/auth/") ||
-    pathname === "/eve/v1/health" ||
-    pathname === "/api/internal/reset-agent-state"
+    pathname === "/eve/v1/health"
   ) {
     return NextResponse.next();
   }
