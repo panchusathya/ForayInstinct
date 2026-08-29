@@ -59,12 +59,26 @@ describe("worker input bubbling", () => {
     );
 
     expect(browserSkill).toContain(
-      "Immediately after a successful login fill, activate that pre-identified control once"
+      "Immediately after a successful login fill, activate that pre-identified form control once"
     );
     expect(browserSkill).toContain(
-      "After the final credential fill, always activate the observed sign-in control"
+      "After the final credential fill, always activate the observed form-bound sign-in control"
     );
     expect(browserSkill).toContain("do not inspect filled values");
+  });
+
+  it("uses the Workday email path and avoids page-level sign-in bubbles", () => {
+    const browserSkill = readFileSync(
+      "agent/subagents/worker/skills/browser-execution/SKILL.md",
+      "utf8"
+    );
+
+    expect(browserSkill).toContain("Sign in with email");
+    expect(browserSkill).toContain(
+      "dismiss it with its observed close (`X`) control"
+    );
+    expect(browserSkill).toContain("Never fill into or submit a global header");
+    expect(browserSkill).toContain("form-bound sign-in control");
   });
 
   it("forbids dumping tool or worker JSON to the user", () => {
