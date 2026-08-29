@@ -14,6 +14,11 @@ import { env } from "@/lib/env";
 import { kernel } from "@/lib/kernel";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
+import {
+  isWorkdayApplicationUrl,
+  normalizeWorkdayRouteResult,
+  workdayRouterCode,
+} from "@/agent/subagents/worker/lib/workday-router";
 
 const browserTimeoutFloorSeconds = 15 * 60;
 
@@ -44,9 +49,14 @@ export default defineTool({
 
     switch (input.action) {
       case "create": {
+        const isWorkday =
+          input.start_url !== undefined &&
+          isWorkdayApplicationUrl(input.start_url);
         const browser = await kernel.browsers.create(
           {
-            start_url: input.start_url,
+            // Kernel start_url navigation is fire-and-forget. Workday needs a
+            // settled page before its account chooser can be routed safely.
+            start_url: isWorkday ? undefined : input.start_url,
             stealth: true,
             timeout_seconds:
               input.timeout_seconds ?? browserTimeoutFloorSeconds,
@@ -68,7 +78,17 @@ export default defineTool({
             .catch(() => undefined);
           throw error;
         }
-        return lifecycleResult(browser);
+        const workday =
+          isWorkday && input.start_url
+            ? normalizeWorkdayRouteResult(
+                await kernel.browsers.playwright.execute(
+                  browser.session_id,
+                  { code: workdayRouterCode(input.start_url), timeout_sec: 30 },
+                  { signal }
+                )
+              )
+            : undefined;
+        return lifecycleResult(browser, workday);
       }
       case "list": {
         const records = await listBrowserSessions(scope);
@@ -160,14 +180,23 @@ function browserDescriptor(browser: KernelBrowser) {
   };
 }
 
-function lifecycleResult(browser: KernelBrowser) {
+function lifecycleResult(
+  browser: KernelBrowser,
+  workday?: ReturnType<typeof normalizeWorkdayRouteResult>
+) {
   const value = browserDescriptor(browser);
   return {
     browser: value,
     next_actions: [
+      ...(workday?.state === "email_login_ready"
+        ? [
+            "Workday is at its real email/password form. Use list_vault, focus that form, then use fill_from_vault; do not click a header Sign In control.",
+          ]
+        : []),
       `Use execute_playwright_code with session_id "${value.session_id}" for deterministic browser automation.`,
       `Use computer_action with session_id "${value.session_id}" for visual browser control.`,
       `Use manage_browsers with action "delete" and session_id "${value.session_id}" when finished.`,
     ],
+    ...(workday === undefined ? {} : { workday }),
   };
 }

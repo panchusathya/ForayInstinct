@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import manageBrowsers from "../agent/subagents/worker/tools/manage_browsers";
+import { workdayRouterCode } from "../agent/subagents/worker/lib/workday-router";
 
 const mocks = vi.hoisted(() => ({
   createBrowser: vi.fn<
@@ -15,6 +16,14 @@ const mocks = vi.hoisted(() => ({
       viewport: null;
     }>
   >(),
+  executePlaywright:
+    vi.fn<
+      (
+        _sessionId: string,
+        _input: unknown,
+        _options: unknown
+      ) => Promise<unknown>
+    >(),
   createBrowserSession:
     vi.fn<(_scope: unknown, _record: unknown) => Promise<void>>(),
   kernelProxyId: undefined as string | undefined,
@@ -32,7 +41,12 @@ vi.mock("@/db/services/browsers", () => ({
 }));
 
 vi.mock("@/lib/kernel", () => ({
-  kernel: { browsers: { create: mocks.createBrowser } },
+  kernel: {
+    browsers: {
+      create: mocks.createBrowser,
+      playwright: { execute: mocks.executePlaywright },
+    },
+  },
 }));
 
 vi.mock("@/lib/env", () => ({
@@ -56,6 +70,13 @@ beforeEach(() => {
     deleted_at: null,
     session_id: "browser-1",
     viewport: null,
+  });
+  mocks.executePlaywright.mockResolvedValue({
+    success: true,
+    result: {
+      state: "email_login_ready",
+      url: "https://tenant.myworkdayjobs.com/login",
+    },
   });
 });
 
@@ -119,5 +140,32 @@ describe("Kernel browser contract", () => {
       },
       { signal: undefined }
     );
+  });
+
+  it("routes Workday with a settled Playwright navigation instead of start_url", async () => {
+    const execute = manageBrowsers.execute;
+
+    const input = {
+      action: "create" as const,
+      start_url: "https://tenant.myworkdayjobs.com/en-US/job/example",
+    };
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; create only reads abortSignal after the mocked authorization boundary.
+    const result = await execute(input, {} as never);
+
+    expect(mocks.createBrowser).toHaveBeenCalledWith(
+      expect.objectContaining({ start_url: undefined, stealth: true }),
+      { signal: undefined }
+    );
+    expect(mocks.executePlaywright).toHaveBeenCalledWith(
+      "browser-1",
+      expect.objectContaining({ timeout_sec: 30 }),
+      { signal: undefined }
+    );
+    expect(
+      workdayRouterCode("https://tenant.myworkdayjobs.com/en-US/job/example")
+    ).toContain("SignInWithEmailButton");
+    expect(result).toMatchObject({
+      workday: { state: "email_login_ready" },
+    });
   });
 });

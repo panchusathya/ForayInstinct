@@ -86,6 +86,8 @@ describe("worker input bubbling", () => {
     expect(browserSkill).toContain(
       "Ignore any `click to take control` overlay"
     );
+    expect(browserSkill).toContain("dedicated Workday router");
+    expect(browserSkill).toContain("Read its `workday` result");
   });
 
   it("keeps an ATS resume that is already attached", () => {
