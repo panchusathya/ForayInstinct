@@ -412,7 +412,7 @@ export async function applicationTaskDocument(
 
 /**
  * Reads the candidate's parsed protected default resume for a direct external
- * application. The worker stages these bytes in Kernel; models receive only
+ * application. The worker stages these bytes in the hosted browser; models receive only
  * the resulting local file path.
  */
 export async function candidateDefaultResume(scope: AccessScope) {

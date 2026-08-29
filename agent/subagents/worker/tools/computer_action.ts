@@ -1,8 +1,10 @@
 import { defineTool, toolOutput, toolOutputPart } from "eve/tools";
 import { z } from "zod";
-import { kernel } from "@/lib/kernel";
+import type { Page } from "playwright-core";
+import { withRemotePage } from "@/lib/browser";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
+import { withWorkerToolError } from "@/agent/lib/worker-tool-error";
 
 const actionSchema = z.object({
   type: z.enum([
@@ -108,126 +110,162 @@ export default defineTool({
     const scope = await requireWorkerScope(context);
     await requireOwnedBrowserSession(scope, input.session_id);
 
-    const computer = kernel.browsers.computer;
-    const data: unknown[] = [];
-    let screenshotBase64: string | undefined;
+    return withWorkerToolError("computer_action", input.session_id, () =>
+      withRemotePage(
+        input.session_id,
+        context.abortSignal,
+        async ({ page }) => {
+          const data: unknown[] = [];
+          let screenshotBase64: string | undefined;
+          let mouse = { x: 0, y: 0 };
 
-    for (const action of input.actions) {
-      switch (action.type) {
-        case "click_mouse":
-          await computer.clickMouse(
-            input.session_id,
-            requiredAction(action.click_mouse, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "move_mouse":
-          await computer.moveMouse(
-            input.session_id,
-            requiredAction(action.move_mouse, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "type_text":
-          await computer.typeText(
-            input.session_id,
-            requiredAction(action.type_text, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "press_key":
-          await computer.pressKey(
-            input.session_id,
-            requiredAction(action.press_key, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "scroll":
-          await computer.scroll(
-            input.session_id,
-            requiredAction(action.scroll, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "drag_mouse":
-          await computer.dragMouse(
-            input.session_id,
-            requiredAction(action.drag_mouse, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "set_cursor":
-          data.push(
-            await computer.setCursorVisibility(
-              input.session_id,
-              requiredAction(action.set_cursor, action.type),
-              { signal: context.abortSignal }
-            )
-          );
-          break;
-        case "sleep":
-          await computer.batch(
-            input.session_id,
-            {
-              actions: [
-                {
-                  sleep: requiredAction(action.sleep, action.type),
-                  type: "sleep",
-                },
-              ],
-            },
-            { signal: context.abortSignal }
-          );
-          break;
-        case "write_clipboard":
-          await computer.writeClipboard(
-            input.session_id,
-            requiredAction(action.write_clipboard, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "read_clipboard":
-          data.push(
-            await computer.readClipboard(input.session_id, {
-              signal: context.abortSignal,
-            })
-          );
-          break;
-        case "get_mouse_position":
-          data.push(
-            await computer.getMousePosition(input.session_id, {
-              signal: context.abortSignal,
-            })
-          );
-          break;
-        case "screenshot": {
-          const removeMask = await maskVaultFields(
-            input.session_id,
-            context.abortSignal
-          );
-          try {
-            const response = await computer.captureScreenshot(
-              input.session_id,
-              action.screenshot,
-              { signal: context.abortSignal }
-            );
-            screenshotBase64 = Buffer.from(
-              await response.arrayBuffer()
-            ).toString("base64");
-          } finally {
-            await removeMask();
+          for (const action of input.actions) {
+            switch (action.type) {
+              case "click_mouse": {
+                const payload = requiredAction(action.click_mouse, action.type);
+                await withHeldKeys(page, payload.hold_keys, async () => {
+                  await page.mouse.move(payload.x, payload.y);
+                  mouse = { x: payload.x, y: payload.y };
+                  const button = payload.button ?? "left";
+                  if (payload.click_type === "down") {
+                    await page.mouse.down({ button });
+                    return;
+                  }
+                  if (payload.click_type === "up") {
+                    await page.mouse.up({ button });
+                    return;
+                  }
+                  await page.mouse.click(payload.x, payload.y, {
+                    button,
+                    clickCount: payload.num_clicks ?? 1,
+                  });
+                });
+                break;
+              }
+              case "move_mouse": {
+                const payload = requiredAction(action.move_mouse, action.type);
+                await withHeldKeys(page, payload.hold_keys, async () => {
+                  await page.mouse.move(payload.x, payload.y);
+                  mouse = { x: payload.x, y: payload.y };
+                });
+                break;
+              }
+              case "type_text": {
+                const payload = requiredAction(action.type_text, action.type);
+                await page.keyboard.type(payload.text, {
+                  delay: payload.delay,
+                });
+                break;
+              }
+              case "press_key": {
+                const payload = requiredAction(action.press_key, action.type);
+                await withHeldKeys(page, payload.hold_keys, async () => {
+                  for (const key of payload.keys) {
+                    await page.keyboard.press(key, {
+                      delay: payload.duration,
+                    });
+                  }
+                });
+                break;
+              }
+              case "scroll": {
+                const payload = requiredAction(action.scroll, action.type);
+                await withHeldKeys(page, payload.hold_keys, async () => {
+                  await page.mouse.move(payload.x, payload.y);
+                  await page.mouse.wheel(
+                    payload.delta_x ?? 0,
+                    payload.delta_y ?? 0
+                  );
+                  mouse = { x: payload.x, y: payload.y };
+                });
+                break;
+              }
+              case "drag_mouse": {
+                const payload = requiredAction(action.drag_mouse, action.type);
+                const startPoint = dragPoint(payload.path[0]);
+                const rest = payload.path.slice(1);
+                await withHeldKeys(page, payload.hold_keys, async () => {
+                  await page.mouse.move(startPoint.x, startPoint.y);
+                  await page.mouse.down({
+                    button: payload.button ?? "left",
+                  });
+                  for (const point of rest) {
+                    const next = dragPoint(point);
+                    await page.mouse.move(next.x, next.y, {
+                      steps: payload.steps_per_segment,
+                    });
+                    if (payload.step_delay_ms) {
+                      await page.waitForTimeout(payload.step_delay_ms);
+                    }
+                  }
+                  await page.mouse.up({ button: payload.button ?? "left" });
+                  const last = dragPoint(
+                    payload.path.at(-1) ?? payload.path[0]
+                  );
+                  mouse = { x: last.x, y: last.y };
+                });
+                break;
+              }
+              case "set_cursor": {
+                const payload = requiredAction(action.set_cursor, action.type);
+                await page.evaluate((hidden) => {
+                  document.documentElement.style.cursor = hidden ? "none" : "";
+                }, payload.hidden);
+                data.push({ hidden: payload.hidden });
+                break;
+              }
+              case "sleep": {
+                const payload = requiredAction(action.sleep, action.type);
+                await page.waitForTimeout(payload.duration_ms);
+                break;
+              }
+              case "write_clipboard": {
+                const payload = requiredAction(
+                  action.write_clipboard,
+                  action.type
+                );
+                await page.evaluate(async (text) => {
+                  await navigator.clipboard.writeText(text);
+                }, payload.text);
+                break;
+              }
+              case "read_clipboard": {
+                data.push(
+                  await page.evaluate(async () =>
+                    navigator.clipboard.readText()
+                  )
+                );
+                break;
+              }
+              case "get_mouse_position":
+                data.push(mouse);
+                break;
+              case "screenshot": {
+                const removeMask = await maskVaultFields(page);
+                try {
+                  const region = action.screenshot?.region;
+                  const buffer = await page.screenshot({
+                    clip: region,
+                    type: "png",
+                  });
+                  screenshotBase64 = buffer.toString("base64");
+                } finally {
+                  await removeMask();
+                }
+                break;
+              }
+            }
           }
-          break;
-        }
-      }
-    }
 
-    return outputSchema.parse({
-      data: data.length > 0 ? data : undefined,
-      message: `Executed ${String(input.actions.length)} computer action${input.actions.length === 1 ? "" : "s"}.`,
-      mimeType: screenshotBase64 ? "image/png" : undefined,
-      screenshotBase64,
-    });
+          return outputSchema.parse({
+            data: data.length > 0 ? data : undefined,
+            message: `Executed ${String(input.actions.length)} computer action${input.actions.length === 1 ? "" : "s"}.`,
+            mimeType: screenshotBase64 ? "image/png" : undefined,
+            screenshotBase64,
+          });
+        }
+      )
+    );
   },
   toModelOutput(output) {
     if (!output.screenshotBase64) {
@@ -252,41 +290,46 @@ function requiredAction<T>(value: T | undefined, action: string): T {
   return value;
 }
 
-async function maskVaultFields(sessionId: string, signal?: AbortSignal) {
+function dragPoint(value: readonly number[] | undefined) {
+  const x = value?.[0];
+  const y = value?.[1];
+  if (x === undefined || y === undefined) {
+    throw new Error("A drag path point is missing.");
+  }
+  return { x, y };
+}
+
+async function withHeldKeys(
+  page: Page,
+  keys: readonly string[] | undefined,
+  operate: () => Promise<void>
+) {
+  for (const key of keys ?? []) await page.keyboard.down(key);
+  try {
+    await operate();
+  } finally {
+    for (const key of (keys ?? []).toReversed()) {
+      await page.keyboard.up(key);
+    }
+  }
+}
+
+async function maskVaultFields(page: Page) {
   const styleId = "vault-screenshot-mask";
   const selector = '[data-vault-secret="true"]';
-  const addCode = `
-for (const currentContext of browser.contexts()) {
-  for (const currentPage of currentContext.pages()) {
-    for (const frame of currentPage.frames()) {
-      await frame.evaluate(({ styleId, selector }) => {
-        if (document.getElementById(styleId)) return;
-        const style = document.createElement("style");
-        style.id = styleId;
-        style.textContent = selector + " { color: transparent !important; text-shadow: 0 0 8px black !important; -webkit-text-security: disc !important; }";
-        document.documentElement.append(style);
-      }, ${JSON.stringify({ selector, styleId })}).catch(() => undefined);
-    }
-  }
-}
-return true;`;
-  await kernel.browsers.playwright.execute(
-    sessionId,
-    { code: addCode, timeout_sec: 10 },
-    { signal }
+  await page.evaluate(
+    ({ selector: maskSelector, styleId: id }) => {
+      if (document.getElementById(id)) return;
+      const style = document.createElement("style");
+      style.id = id;
+      style.textContent = `${maskSelector} { color: transparent !important; text-shadow: 0 0 8px black !important; -webkit-text-security: disc !important; }`;
+      document.documentElement.append(style);
+    },
+    { selector, styleId }
   );
   return async () => {
-    const removeCode = `
-for (const currentContext of browser.contexts()) {
-  for (const currentPage of currentContext.pages()) {
-    for (const frame of currentPage.frames()) {
-      await frame.evaluate((styleId) => document.getElementById(styleId)?.remove(), ${JSON.stringify(styleId)}).catch(() => undefined);
-    }
-  }
-}
-return true;`;
-    await kernel.browsers.playwright
-      .execute(sessionId, { code: removeCode, timeout_sec: 10 }, { signal })
+    await page
+      .evaluate((id) => document.getElementById(id)?.remove(), styleId)
       .catch(() => undefined);
   };
 }

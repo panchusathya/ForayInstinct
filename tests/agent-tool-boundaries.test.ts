@@ -85,6 +85,14 @@ describe("root and worker capability boundaries", () => {
       expect(source).toContain("requireWorkerScope(context)");
     }
     expect(existsSync(`${workerRoot}/hooks/session-owner.ts`)).toBe(true);
+    expect(existsSync(`${workerRoot}/hooks/worker-errors.ts`)).toBe(true);
+    expect(existsSync("agent/hooks/worker-errors.ts")).toBe(true);
+    expect(
+      readFileSync("agent/lib/worker-cancellation-delivery.ts", "utf8")
+    ).toContain("chatStateValues");
+    expect(
+      readFileSync("agent/lib/worker-cancellation-delivery.ts", "utf8")
+    ).not.toContain("globalThis");
     expect(existsSync(`${workerRoot}/skills/browser-execution/SKILL.md`)).toBe(
       true
     );
@@ -98,15 +106,28 @@ describe("root and worker capability boundaries", () => {
     expect(existsSync(`${workerRoot}/lib/browser-runtime.ts`)).toBe(false);
     expect(existsSync(`${workerRoot}/lib/owned-browser.ts`)).toBe(true);
 
-    expect(readFileSync("lib/kernel.ts", "utf8")).toContain("new Kernel(");
+    expect(readFileSync("lib/browser.ts", "utf8")).toContain(
+      "chromium.connectOverCDP"
+    );
+    expect(readFileSync("lib/browser.ts", "utf8")).toContain(
+      "disposeOnDetach: false"
+    );
+    expect(readFileSync("lib/browser.ts", "utf8")).not.toContain(
+      "browser.newContext("
+    );
+    expect(existsSync("agent/schedules/browser-keepalive.ts")).toBe(true);
+    expect(
+      readFileSync("agent/schedules/browser-keepalive.ts", "utf8")
+    ).toContain('cron: "*/2 * * * *"');
     for (const tool of [
       "computer_action",
       "execute_playwright_code",
       "manage_browsers",
     ]) {
       const source = readFileSync(`${workerTools}/${tool}.ts`, "utf8");
-      expect(source).toContain('from "@/lib/kernel"');
+      expect(source).toContain('from "@/lib/browser"');
       expect(source).not.toContain("new Kernel(");
+      expect(source).not.toContain("@onkernel/sdk");
     }
     expect(readFileSync(`${workerTools}/fill_from_vault.ts`, "utf8")).toContain(
       'from "@/lib/manager/server/kernel-native-autofill"'
@@ -125,6 +146,13 @@ describe("root and worker capability boundaries", () => {
       "Do not pass `outputSchema` on `worker` calls"
     );
     expect(rootInstructions).toContain("do not retry the same handoff");
+    expect(rootInstructions).toContain("Quote the worker `Error:` text");
+    expect(rootInstructions).toContain(
+      "Never invent “failed before returning a verifiable result.”"
+    );
+    expect(rootInstructions).toContain(
+      "If the envelope has no Error text, say the last verified page"
+    );
     expect(rootInstructions).not.toContain(
       "Every initial or resumed `worker` call must set `outputSchema`"
     );

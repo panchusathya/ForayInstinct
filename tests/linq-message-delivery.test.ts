@@ -1,31 +1,129 @@
 /* oxlint-disable typescript/no-unsafe-type-assertion -- Eve's Linq adapter exposes the handler context through a transitive Chat SDK `any`; the fixture supplies only the fields exercised here. */
-import type * as LinqModule from "eve/channels/linq";
 import { describe, expect, it, vi } from "vitest";
 import workerCancellationHook from "../agent/hooks/worker-cancellation-delivery";
 
-const linqChannelCapture = vi.hoisted(() => ({ config: undefined as unknown }));
-vi.mock("eve/channels/linq", async (importOriginal) => {
-  const original = await importOriginal<typeof LinqModule>();
-  return {
-    ...original,
-    linqChannel(config: unknown) {
-      linqChannelCapture.config = config;
-      return config;
-    },
-  };
-});
-await import("../agent/channels/linq-v2");
+const cancellationStore = vi.hoisted(() => new Map<string, string>());
 
-const channelEvents = (
-  linqChannelCapture.config as LinqModule.LinqChannelConfig
-).events;
-const trackWorkerCancellation = channelEvents?.["action.result"];
-const deliverCompletedMessage = channelEvents?.["message.completed"];
-if (!trackWorkerCancellation || !deliverCompletedMessage) {
-  throw new Error("Linq event handlers are not configured.");
+interface CompletedEvent {
+  finishReason?: string | null;
+  message?: string | null;
+  sequence: number;
+  stepIndex: number;
+  turnId: string;
 }
 
-type HandlerParameters = Parameters<typeof deliverCompletedMessage>;
+interface HandlerContext {
+  bot: {
+    getAdapter: () => {
+      addReaction: (
+        threadId: string,
+        messageId: string,
+        emoji: string
+      ) => Promise<void>;
+    };
+  };
+  state: Record<string, unknown>;
+  thread: {
+    id: string;
+    post: (message: { markdown: string }) => Promise<void>;
+    toJSON: () => { currentMessage?: { id?: string } };
+  };
+}
+
+interface SessionContext {
+  session: {
+    auth?: { current?: unknown; initiator?: unknown };
+    id: string;
+  };
+}
+
+type MessageCompletedHandler = (
+  event: CompletedEvent,
+  context: HandlerContext,
+  session: SessionContext
+) => Promise<unknown>;
+
+type ActionResultHandler = (
+  event: {
+    result: unknown;
+    sequence: number;
+    status: string;
+    stepIndex: number;
+    turnId: string;
+  },
+  context: HandlerContext,
+  session?: SessionContext
+) => Promise<unknown>;
+
+const chatSdkChannelCapture = vi.hoisted(() => ({
+  events: undefined as
+    | {
+        "action.result": ActionResultHandler;
+        "message.completed": MessageCompletedHandler;
+      }
+    | undefined,
+}));
+
+vi.mock("../agent/lib/worker-cancellation-delivery", () => ({
+  async recordWorkerCancellationTurn(
+    sessionId: string,
+    turnId: string,
+    message: string
+  ) {
+    const taskId = /^Background task (\S+) \(worker\) is cancelled\.$/u.exec(
+      message
+    )?.[1];
+    if (taskId) cancellationStore.set(`${sessionId}:${turnId}`, taskId);
+  },
+  async consumeWorkerCancellationTurn(sessionId: string, turnId: string) {
+    const key = `${sessionId}:${turnId}`;
+    const taskId = cancellationStore.get(key);
+    cancellationStore.delete(key);
+    return taskId;
+  },
+  async clearWorkerCancellationTurn(sessionId: string, turnId: string) {
+    cancellationStore.delete(`${sessionId}:${turnId}`);
+  },
+}));
+
+vi.mock("eve/channels/chat-sdk", () => ({
+  chatSdkChannel(config: { events: typeof chatSdkChannelCapture.events }) {
+    chatSdkChannelCapture.events = config.events;
+    return {
+      bot: {
+        getAdapter: () => ({
+          addReaction: async () => undefined,
+          markRead: async () => undefined,
+        }),
+        onDirectMessage() {
+          return undefined;
+        },
+        onNewMessage() {
+          return undefined;
+        },
+      },
+      channel: {},
+      send: async () => undefined,
+    };
+  },
+}));
+
+vi.mock("@linqapp/chat-sdk-adapter", () => ({
+  createLinqAdapter: () => ({}),
+}));
+
+vi.mock("@/lib/linq-state", () => ({
+  createPostgresState: () => ({}),
+}));
+
+await import("../agent/channels/linq-v2");
+
+const channelEvents = chatSdkChannelCapture.events;
+if (!channelEvents) {
+  throw new Error("Linq event handlers are not configured.");
+}
+const trackWorkerCancellation = channelEvents["action.result"];
+const deliverCompletedMessage = channelEvents["message.completed"];
 
 describe("Linq message delivery", () => {
   it("posts final responses as native iMessage Markdown", async () => {
@@ -208,7 +306,7 @@ describe("Linq message delivery", () => {
 
 function workerCancellationResult(
   taskId = "task-worker"
-): Parameters<NonNullable<typeof trackWorkerCancellation>>[0] {
+): Parameters<ActionResultHandler>[0] {
   return {
     result: {
       callId: "call-cancel",
@@ -237,8 +335,8 @@ function workerCancellationResult(
 }
 
 function completedEvent(
-  overrides: Partial<HandlerParameters[0]> = {}
-): HandlerParameters[0] {
+  overrides: Partial<CompletedEvent> = {}
+): CompletedEvent {
   return {
     finishReason: "stop",
     message: "Done",
@@ -253,7 +351,7 @@ function handlerContext(
   currentMessageId = "message-1",
   state: Record<string, unknown> = {}
 ) {
-  const post = vi.fn<(message: string) => Promise<void>>();
+  const post = vi.fn<(message: { markdown: string }) => Promise<void>>();
   post.mockResolvedValue();
   const addReaction = vi
     .fn<(threadId: string, messageId: string, emoji: string) => Promise<void>>()
@@ -278,7 +376,7 @@ function handlerContext(
         isDM: true,
       }),
     },
-  } as unknown as HandlerParameters[1];
+  } as unknown as HandlerContext;
 
   return {
     addReaction,
@@ -288,10 +386,10 @@ function handlerContext(
   };
 }
 
-function sessionContext() {
+function sessionContext(): SessionContext {
   return {
-    session: { id: "session-1" },
-  } as HandlerParameters[2];
+    session: { auth: {}, id: "session-1" },
+  };
 }
 
 async function recordCancellationThroughHook(

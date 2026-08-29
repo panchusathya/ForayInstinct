@@ -1,6 +1,6 @@
 export default {
   includeLocked: true,
-  maturityPeriodExclude: ["@onkernel/*", "@vercel/*", "eve"],
+  maturityPeriodExclude: ["@vercel/*", "eve"],
   mode: "major",
   packageMode: {
     "@types/node": "minor",

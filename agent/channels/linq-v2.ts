@@ -110,7 +110,7 @@ const { bot, channel, send } = chatSdkChannel({
         return;
       }
 
-      const cancelledTaskId = consumeWorkerCancellationTurn(
+      const cancelledTaskId = await consumeWorkerCancellationTurn(
         session.session.id,
         event.turnId
       );
@@ -179,9 +179,13 @@ function linqAdapterConfig(): Parameters<typeof createLinqAdapter>[0] {
       webhookVerifier: credentials.webhookVerifier,
     };
   }
-  throw new Error(
-    "Configure LINQ_API_KEY and LINQ_WEBHOOK_SECRET or LINQ_CONNECTOR."
-  );
+  return {
+    credentials: async () => {
+      throw new Error(
+        "Configure LINQ_API_KEY and LINQ_WEBHOOK_SECRET or LINQ_CONNECTOR."
+      );
+    },
+  };
 }
 
 async function dispatchLinqMessage(thread: Thread, message: Message) {

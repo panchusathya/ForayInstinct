@@ -4,8 +4,9 @@ const requiredEnvironment = {
   BETTER_AUTH_SECRET: "test-auth-secret",
   BETTER_AUTH_URL: "https://example.com",
   AI_GATEWAY_API_KEY: "test-ai-gateway-key",
+  BRIGHT_DATA_BROWSER_AUTH: "brd-customer-test-zone-browser:test-password",
   DATABASE_URL: "postgresql://user:password@example.com/database",
-  KERNEL_API_KEY: "test-kernel-key",
+  DECODO_PROXY_URL: "http://user:pass@gate.decodo.com:7000",
   SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
 };
 
@@ -16,7 +17,6 @@ describe("environment", () => {
     for (const [name, value] of Object.entries(requiredEnvironment)) {
       vi.stubEnv(name, value);
     }
-    vi.stubEnv("KERNEL_PROXY_ID", "");
     vi.stubEnv("LINQ_CONNECTOR", "");
     vi.stubEnv("LINQ_API_KEY", "");
     vi.stubEnv("LINQ_WEBHOOK_SECRET", "");
@@ -32,15 +32,22 @@ describe("environment", () => {
     const { env } = await import("../lib/env");
 
     expect(env).toMatchObject(requiredEnvironment);
-    expect(env.KERNEL_PROXY_ID).toBeUndefined();
   });
 
-  it("accepts a configured Kernel proxy id", async () => {
-    vi.stubEnv("KERNEL_PROXY_ID", "proxy-us-residential");
+  it("rejects Bright Data credentials without a password separator", async () => {
+    vi.stubEnv("BRIGHT_DATA_BROWSER_AUTH", "missing-password");
 
-    const { env } = await import("../lib/env");
+    await expect(import("../lib/env")).rejects.toThrow(
+      "Invalid environment variables"
+    );
+  });
 
-    expect(env.KERNEL_PROXY_ID).toBe("proxy-us-residential");
+  it("rejects a Decodo URL without credentials", async () => {
+    vi.stubEnv("DECODO_PROXY_URL", "http://gate.decodo.com:7000");
+
+    await expect(import("../lib/env")).rejects.toThrow(
+      "Invalid environment variables"
+    );
   });
 
   it("provides the Google connector default without enabling Linq", async () => {
@@ -96,7 +103,7 @@ describe("environment", () => {
     );
   });
 
-  it.each(["DATABASE_URL", "KERNEL_API_KEY"])(
+  it.each(["DATABASE_URL", "BRIGHT_DATA_BROWSER_AUTH", "DECODO_PROXY_URL"])(
     "keeps %s required in local development",
     async (name) => {
       vi.stubEnv(name, "");
@@ -123,8 +130,9 @@ describe("environment", () => {
     ["AI_GATEWAY_API_KEY", "Invalid environment variables"],
     ["BETTER_AUTH_SECRET", "Invalid environment variables"],
     ["BETTER_AUTH_URL", "Invalid environment variables"],
+    ["BRIGHT_DATA_BROWSER_AUTH", "Invalid environment variables"],
     ["DATABASE_URL", "Invalid environment variables"],
-    ["KERNEL_API_KEY", "Invalid environment variables"],
+    ["DECODO_PROXY_URL", "Invalid environment variables"],
     ["SECRET_ENCRYPTION_KEY", "Invalid environment variables"],
   ])(
     "rejects a missing required %s value during import",

@@ -1,8 +1,9 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { kernel } from "@/lib/kernel";
+import { executePlaywrightCode } from "@/lib/browser";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
+import { withWorkerToolError } from "@/agent/lib/worker-tool-error";
 
 const inputSchema = z.object({
   code: z.string().min(1),
@@ -11,15 +12,16 @@ const inputSchema = z.object({
 
 export default defineTool({
   description:
-    'Execute Playwright/TypeScript automation code against an existing browser session with a 30-second ceiling. Batch related operations, use "domcontentloaded" or a precise locator with waits of at most five seconds except for one managed CAPTCHA wait of at most 20 seconds, and never wait for "networkidle" or use fixed multi-second sleeps. Does not create or delete browsers.',
+    'Execute Playwright/TypeScript automation code against an existing browser session with a 30-second ceiling. Batch related operations, use "domcontentloaded" or a precise locator with waits of at most five seconds except for one managed CAPTCHA wait of at most 20 seconds, and never wait for "networkidle" or use fixed multi-second sleeps. Does not create or delete browsers. `browser`, `page`, and `context` are in scope.',
   inputSchema,
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
     await requireOwnedBrowserSession(scope, input.session_id);
-    return kernel.browsers.playwright.execute(
+    return withWorkerToolError(
+      "execute_playwright_code",
       input.session_id,
-      { code: input.code, timeout_sec: 30 },
-      { signal: context.abortSignal }
+      () =>
+        executePlaywrightCode(input.session_id, input.code, context.abortSignal)
     );
   },
 });

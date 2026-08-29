@@ -8,7 +8,7 @@ import {
   MessageSquareIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import type { ManagerSnapshot } from "@/lib/manager";
@@ -64,9 +64,9 @@ export function WorkspaceManager({
                 {browserReady ? "Connected" : "Unavailable"}
               </span>
             }
-            description="Run isolated browsers in your Kernel account."
+            description="Hosted Chrome through Bright Data, with a Decodo residential exit."
             icon={<CloudIcon />}
-            label="Kernel browser"
+            label="Bright Data browser"
           />
           <ConnectorRow
             action={
@@ -204,7 +204,7 @@ function channelAvailabilityMessage({
   const messages = [
     browserReady
       ? "WebChat is ready."
-      : "KERNEL_API_KEY is required to enable WebChat.",
+      : "BRIGHT_DATA_BROWSER_AUTH is required to enable WebChat.",
     linqPhoneNumber
       ? `iMessage opens ${linqPhoneNumber}.`
       : "Set up Linq to enable iMessage.",
