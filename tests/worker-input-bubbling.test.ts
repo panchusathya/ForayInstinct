@@ -122,7 +122,9 @@ describe("worker input bubbling", () => {
     );
 
     expect(instructions).toContain("Never send raw JSON");
-    expect(instructions).toContain("one bullet per role");
+    expect(instructions).toContain(
+      "Roles from `find_goforay_roles` and `find_next_goforay_roles` are"
+    );
     expect(instructions).toContain(
       "dump `documents`, `form_answers`, `cards`, or `result`"
     );
