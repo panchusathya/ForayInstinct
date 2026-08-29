@@ -20,8 +20,11 @@ export default defineTool({
   description:
     'Click a visible checkbox CAPTCHA after Kernel reports it cannot auto-solve it (including the live-view message "visible hcaptcha could not be solved automatically"). Uses Kernel computer mouse control. Call immediately when that message or a checkbox hCaptcha appears; do not wait for Kernel\'s managed solver. Does not solve image puzzles, inject tokens, or create browsers.',
   inputSchema,
-  outputSchema: captchaSolveResultSchema,
-  async execute(input, context) {
+  outputSchema: z.toJSONSchema(captchaSolveResultSchema),
+  async execute(
+    input,
+    context
+  ): Promise<z.infer<typeof captchaSolveResultSchema>> {
     const scope = await requireWorkerScope(context);
     await requireOwnedBrowserSession(scope, input.session_id);
     const signal = context.abortSignal;

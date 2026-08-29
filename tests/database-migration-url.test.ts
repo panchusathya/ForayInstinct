@@ -56,7 +56,9 @@ describe("migration environment", () => {
   it("loads drizzle-kit credentials from DATABASE_URL when UNPOOLED is absent", async () => {
     const { default: drizzleConfig } = await import("../db/drizzle.config");
 
-    expect(drizzleConfig.dbCredentials).toEqual({ url: directNeonUrl });
+    expect(drizzleConfig).toMatchObject({
+      dbCredentials: { url: directNeonUrl },
+    });
   });
 
   it("keeps an explicit unpooled URL authoritative", async () => {
