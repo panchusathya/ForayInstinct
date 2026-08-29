@@ -123,11 +123,25 @@ describe("Kernel browser contract", () => {
         browser_live_view_url: "https://live.kernel.test/browser-1",
       },
     });
+    if (
+      typeof result !== "object" ||
+      !("next_actions" in result) ||
+      !Array.isArray(result.next_actions)
+    ) {
+      throw new Error("manage_browsers create must return next_actions.");
+    }
+    expect(
+      result.next_actions.some(
+        (action) =>
+          typeof action === "string" && action.includes("solve_captcha")
+      )
+    ).toBe(true);
 
     expect(mocks.createBrowser).toHaveBeenCalledExactlyOnceWith(
       {
         start_url: undefined,
         stealth: true,
+        telemetry: { enabled: true },
         timeout_seconds: 900,
         viewport: undefined,
       },
@@ -146,6 +160,7 @@ describe("Kernel browser contract", () => {
       {
         start_url: undefined,
         stealth: true,
+        telemetry: { enabled: true },
         timeout_seconds: 900,
         viewport: undefined,
         proxy: { id: "proxy-us-residential" },

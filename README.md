@@ -56,8 +56,9 @@ recruiter workspace reads the resulting conversation timeline through the
 signed service route, rather than copying this database.
 
 The application database schema and versioned migrations live in `db/`. The
-Drizzle application store uses `DATABASE_URL` for runtime queries; its migration
-commands require the direct `DATABASE_URL_UNPOOLED` connection. Run
+Drizzle application store uses `DATABASE_URL` for runtime queries; its
+migration commands prefer the direct `DATABASE_URL_UNPOOLED` connection and
+fall back to `DATABASE_URL` when Preview injects only the pooled URL. Run
 `pnpm db:migrate` before starting against a new or upgraded local database.
 Vercel uses Turbo to run the uncached migration task before its application
 build. See [`db/README.md`](db/README.md) for existing-database adoption,

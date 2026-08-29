@@ -58,6 +58,7 @@ describe("root and worker capability boundaries", () => {
       "fill_from_vault.ts",
       "list_vault.ts",
       "manage_browsers.ts",
+      "solve_captcha.ts",
       "stage_default_goforay_resume.ts",
       "stage_goforay_document.ts",
     ]);
@@ -78,6 +79,7 @@ describe("root and worker capability boundaries", () => {
       "computer_action",
       "execute_playwright_code",
       "manage_browsers",
+      "solve_captcha",
     ]) {
       const source = readFileSync(`${workerTools}/${tool}.ts`, "utf8");
       expect(source).toContain("defineTool(");
@@ -103,6 +105,7 @@ describe("root and worker capability boundaries", () => {
       "computer_action",
       "execute_playwright_code",
       "manage_browsers",
+      "solve_captcha",
     ]) {
       const source = readFileSync(`${workerTools}/${tool}.ts`, "utf8");
       expect(source).toContain('from "@/lib/kernel"');

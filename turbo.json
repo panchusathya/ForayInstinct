@@ -40,7 +40,7 @@
     },
     "db:migrate": {
       "cache": false,
-      "env": ["DATABASE_URL_UNPOOLED"],
+      "env": ["DATABASE_URL", "DATABASE_URL_UNPOOLED"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"]
     },
     "dev:app": {

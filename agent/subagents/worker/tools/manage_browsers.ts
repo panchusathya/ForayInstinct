@@ -61,6 +61,7 @@ export default defineTool({
             // settled page before its account chooser can be routed safely.
             start_url: isWorkday ? undefined : input.start_url,
             stealth: true,
+            telemetry: { enabled: true },
             timeout_seconds:
               input.timeout_seconds ?? browserTimeoutFloorSeconds,
             viewport: browserViewport(input),
@@ -255,6 +256,7 @@ function lifecycleResult(
         : []),
       `Use execute_playwright_code with session_id "${value.session_id}" for deterministic browser automation.`,
       `Use computer_action with session_id "${value.session_id}" for visual browser control.`,
+      `Use solve_captcha with session_id "${value.session_id}" immediately if Kernel reports visible hCaptcha could not be solved automatically or a checkbox hCaptcha remains.`,
       `Use manage_browsers with action "delete" and session_id "${value.session_id}" when finished.`,
     ],
     ...(workday === undefined ? {} : { workday }),
