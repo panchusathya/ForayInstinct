@@ -88,6 +88,26 @@ describe("worker input bubbling", () => {
     );
   });
 
+  it("keeps an ATS resume that is already attached", () => {
+    const workerInstructions = readFileSync(
+      "agent/subagents/worker/instructions.md",
+      "utf8"
+    );
+    const browserSkill = readFileSync(
+      "agent/subagents/worker/skills/browser-execution/SKILL.md",
+      "utf8"
+    );
+
+    expect(browserSkill).toContain("If one exists, keep it and continue");
+    expect(browserSkill).toContain("do not retry it");
+    expect(workerInstructions).toMatch(
+      /Keep an existing resume\s+and continue/
+    );
+    expect(workerInstructions).toContain(
+      "Do not retry a protected resume upload after a server error"
+    );
+  });
+
   it("forbids dumping tool or worker JSON to the user", () => {
     const instructions = readFileSync("agent/instructions.md", "utf8");
     const applicationTools = readFileSync(

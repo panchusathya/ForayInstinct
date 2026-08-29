@@ -32,7 +32,7 @@ describe("application fill handoff", () => {
     expect(rootInstructions).toContain("report_goforay_application_result");
     expect(applicationTools).toContain("createApplicationTask");
     expect(applicationTools).toContain("reportApplicationTask");
-    expect(workerInstructions).toContain("Do not wait for JuiceBox packaging");
+    expect(workerInstructions).toMatch(/Do not wait for JuiceBox\s+packaging/);
     expect(workerInstructions).toContain("stage_default_goforay_resume");
     expect(workerInstructions).toContain("stage_goforay_document");
     expect(browserSkill).toContain("do not wait for JuiceBox packaging");
