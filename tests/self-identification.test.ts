@@ -5,6 +5,14 @@ import {
   selfIdentificationSchema,
 } from "../lib/self-identification";
 
+const flat = (path: string) => readFileSync(path, "utf8").replace(/\s+/g, " ");
+
+const browserSkillText = () =>
+  flat("agent/subagents/worker/skills/browser-execution/SKILL.md");
+const workerInstructionsText = () =>
+  flat("agent/subagents/worker/instructions.md");
+const coordinatorText = () => flat("agent/instructions.md");
+
 describe("voluntary self-identification", () => {
   it("reports every unanswered field as declined", () => {
     expect(declinedSelfIdentificationFields({})).toEqual([
@@ -33,32 +41,39 @@ describe("voluntary self-identification", () => {
   });
 
   it("declines an unanswered EEO field instead of stalling the application", () => {
-    const browserSkill = readFileSync(
-      "agent/subagents/worker/skills/browser-execution/SKILL.md",
-      "utf8"
-    );
-    const workerInstructions = readFileSync(
-      "agent/subagents/worker/instructions.md",
-      "utf8"
-    );
-
-    for (const source of [browserSkill, workerInstructions]) {
+    for (const source of [browserSkillText(), workerInstructionsText()]) {
       expect(source).toMatch(/voluntary self-identification/i);
-      // The stall this replaces: the worker escalated a question the ATS
-      // never required, and the application stopped there.
-      expect(source).toContain("never a blocker");
       expect(source).toContain("decline option");
       expect(source).toMatch(/never infer (an answer|one) from/i);
     }
   });
 
-  it("sends stored answers with the assignment and never asks for them", () => {
-    const instructions = readFileSync("agent/instructions.md", "utf8");
+  it("asks rather than demanding a takeover when a field is forced", () => {
+    // A form that requires a gender selection and offers no decline option
+    // left the worker with no sanctioned escalation, so it asked the candidate
+    // to take over the application instead of asking the question.
+    for (const source of [browserSkillText(), workerInstructionsText()]) {
+      expect(source).toContain("never a takeover");
+      expect(source).toContain("required and");
+      expect(source).toContain("no decline option");
+      expect(source).toContain("`Needs user input:`");
+      expect(source).toContain("visible options");
+    }
+  });
+
+  it("sends stored answers with the assignment and resumes after asking", () => {
+    const instructions = coordinatorText();
 
     expect(instructions).toContain("`self_identification` with `get`");
+    expect(instructions).toContain("Never infer gender, race/ethnicity");
+    expect(instructions).toContain("tell it to decline");
+    // The candidate is asked, the answer is stored, and the same worker
+    // finishes the application rather than handing it back to them.
+    expect(instructions).toContain("required with no decline option");
+    expect(instructions).toContain("`self_identification` `save`");
     expect(instructions).toContain(
-      "Never ask the candidate for gender, race/ethnicity, veteran status, or"
+      "resume that worker with its `agentId` to finish the"
     );
-    expect(instructions).toContain("tell it to decline that field");
+    expect(instructions).toContain("Never turn that question into a takeover");
   });
 });

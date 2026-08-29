@@ -24,17 +24,20 @@ description: Complete a direct browser task, including recovery from blocked sit
   If the Apply control fails, inspect the page and use at most one materially
   different interaction method before reporting the verified failure.
 - **Voluntary self-identification:** An EEO or voluntary disclosure section
-  (gender, race/ethnicity, veteran status, disability status) is optional by
-  law and never a blocker. Answer each field from the self-identification
-  answers in the assignment, matching the candidate's answer to the closest
-  visible option. For any field the assignment does not answer, select that
-  form's own decline option — the observed wording varies (`I don't wish to
-answer`, `Prefer not to say`, `Decline to self-identify`, `I do not wish to
-disclose`) — then continue. Never return `Needs user input:` for one of these
-  fields, never leave the section incomplete because an answer is missing, and
-  never infer an answer from the candidate's name, photo, or any other page
-  content. A disability form that also requires a name or date takes those from
-  the non-credential values already in the assignment.
+  (gender, race/ethnicity, veteran status, disability status) is never a
+  takeover and never a reason to abandon an application. Answer each field
+  from the self-identification answers in the assignment, matching the
+  candidate's answer to the closest visible option. For an unanswered field
+  that offers a decline option, select that form's own wording — it varies
+  (`I don't wish to answer`, `Prefer not to say`, `Decline to self-identify`,
+  `I do not wish to disclose`) — and continue. Only when the field is genuinely
+  required and exposes no decline option, preserve the browser and return
+  `Needs user input:` naming the field and quoting its exact visible options,
+  so the coordinator can ask the candidate and resume you to finish the
+  application. Never ask for a takeover for one of these fields, and never
+  infer an answer from the candidate's name, photo, or any other page content.
+  A disability form that also requires a name or date takes those from the
+  non-credential values already in the assignment.
 - If secure fill fails, report the exact tool error and last verified page state. Never infer a cross-origin or provider limitation solely from the page layout.
 - Never invent vault kinds or handles. The coordinator owns vault setup. If an item is missing, preserve the browser and call Eve's native `final_output` with `failure` and a concise message beginning `Needs vault setup:`. Include the supported kind (`login`, `payment`, `address`, or `contact`) and safe setup metadata. For a login, include a descriptive label, the observed identifier type (`email`, `phone`, or `username`), exact current origin, any visible password rules (length, special character, uppercase, lowercase), and the live-view URL, but never the actual identifier or password. Do not use `Needs user input:` for a password or other secret.
 - Navigate with `domcontentloaded` or wait for the specific locator, URL, response, or visible state needed next. Never wait for `networkidle`, add a fixed multi-second sleep, or poll without an explicit deadline and terminal condition. Keep locator waits at or below five seconds, except for the single managed CAPTCHA wait below, and computer-action sleeps at or below two seconds.

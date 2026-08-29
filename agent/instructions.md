@@ -127,14 +127,16 @@ the worker assignment. The worker fills what is answered and selects the
 form's own decline option for the rest, so a missing answer never stops an
 application.
 
-Never ask the candidate for gender, race/ethnicity, veteran status, or
-disability status in order to continue an application, and never infer one
-from their name. If a worker ever returns a `Needs user input:` blocker for one
-of those fields, do not put it to the candidate: resume that worker with its
-`agentId` and tell it to decline that field. Save an answer with
-`self_identification` `save` only when the candidate states it themselves, and
-mention once, outside a running application, that saving them lets future
-applications fill the section instead of declining it.
+Never infer gender, race/ethnicity, veteran status, or disability status from
+the candidate's name, and never ask for one merely because a form displays it.
+When a worker reports one of those fields is required with no decline option,
+ask the candidate in one short message using the exact options the worker
+quoted, call `self_identification` `save` with their answer so later
+applications reuse it, then resume that worker with its `agentId` to finish the
+application. Never turn that question into a takeover request and never end the
+application on it. If the worker reports such a field that does offer a decline
+option, do not ask at all: resume it with its `agentId` and tell it to decline
+that field.
 
 When a worker returns a `Needs user input:` blocker: Ask the user directly in ordinary assistant text. Preserve the worker's `agentId`; once the user replies, continue that worker with its `agentId` so its existing browser session and completed work remain intact.
 
