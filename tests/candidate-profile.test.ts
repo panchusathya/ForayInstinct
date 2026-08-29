@@ -53,7 +53,9 @@ describe("candidate profile", () => {
     expect(summary.truncated).toBe(false);
     expect(summary.text).toContain("Name: Ada Lovelace");
     expect(summary.text).toContain("Email: ada@example.com");
-    expect(summary.text).toContain("Work authorization: us_visa_no_sponsorship");
+    expect(summary.text).toContain(
+      "Work authorization: us_visa_no_sponsorship"
+    );
     expect(summary.text).toContain("Analytical Engines");
     expect(summary.text).not.toMatch(/password|ssn|social security/i);
     expect(missingProfileFields(profile)).toEqual([]);

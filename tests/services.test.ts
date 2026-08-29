@@ -229,21 +229,21 @@ describe("database services", () => {
       import("@/db/services/workspaces"),
     ]);
     const alice = { userId: "alice", workspaceId: "workspace:alice" };
-    await scope.ensureScope(alice);
+    const orphan = { userId: "alice", workspaceId: "workspace:missing" };
 
-    const rejected = await candidateProfile.saveCandidateProfile(alice, {
+    const rejected = await candidateProfile.saveCandidateProfile(orphan, {
       legalFirstName: "Ada",
     });
     expect(rejected.stored).toBe(false);
     expect(rejected.profile.legalFirstName).toBe("Ada");
 
     const kernelRejected = await workspaces.saveWorkspaceKernelProfileId(
-      alice,
+      orphan,
       "profile-1"
     );
     expect(kernelRejected).toEqual({ stored: false });
 
-    await applyMigration(client, "0009_candidate_profile.sql");
+    await scope.ensureScope(alice);
     const accepted = await candidateProfile.saveCandidateProfile(alice, {
       legalFirstName: "Ada",
       legalLastName: "Lovelace",
@@ -254,10 +254,12 @@ describe("database services", () => {
     expect(await candidateProfile.readCandidateProfile(alice)).toEqual(
       accepted.profile
     );
-    expect(await workspaces.saveWorkspaceKernelProfileId(alice, "profile-1")).toEqual(
-      { stored: true }
+    expect(
+      await workspaces.saveWorkspaceKernelProfileId(alice, "profile-1")
+    ).toEqual({ stored: true });
+    expect(await workspaces.readWorkspaceKernelProfileId(alice)).toBe(
+      "profile-1"
     );
-    expect(await workspaces.readWorkspaceKernelProfileId(alice)).toBe("profile-1");
   }, 15_000);
 });
 
@@ -272,11 +274,6 @@ async function applyMigration(database: PGlite, name: string) {
 }
 
 async function applyInitialMigration(database: PGlite) {
-  const migration = await readFile(
-    new URL("../db/migrations/0000_fluffy_the_spike.sql", import.meta.url),
-    "utf8"
-  );
-  for (const statement of migration.split("--> statement-breakpoint")) {
-    if (statement.trim()) await database.exec(statement);
-  }
+  await applyMigration(database, "0000_fluffy_the_spike.sql");
+  await applyMigration(database, "0009_candidate_profile.sql");
 }

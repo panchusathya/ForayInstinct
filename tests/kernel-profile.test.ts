@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   deleteProfile: vi.fn<() => Promise<unknown>>(),
   readWorkspaceKernelProfileId: vi.fn<() => Promise<string>>(),
   saveWorkspaceKernelProfileId: vi.fn<() => Promise<{ stored: boolean }>>(),
-  ensureScope: vi.fn(async () => undefined),
+  ensureScope: vi.fn<() => Promise<void>>(async () => undefined),
 }));
 
 vi.mock("@/lib/kernel", () => ({
@@ -51,12 +51,16 @@ describe("Kernel browser profile", () => {
   it("fails closed when Kernel cannot delete the saved profile", async () => {
     mocks.deleteProfile.mockRejectedValue(new Error("kernel 500"));
 
-    await expect(deleteKernelBrowserProfile(scope)).rejects.toThrow("kernel 500");
+    await expect(deleteKernelBrowserProfile(scope)).rejects.toThrow(
+      "kernel 500"
+    );
     expect(mocks.saveWorkspaceKernelProfileId).not.toHaveBeenCalled();
   });
 
   it("clears the stored id after a 404 delete", async () => {
-    mocks.deleteProfile.mockRejectedValue(Object.assign(new Error("gone"), { status: 404 }));
+    mocks.deleteProfile.mockRejectedValue(
+      Object.assign(new Error("gone"), { status: 404 })
+    );
 
     await deleteKernelBrowserProfile(scope);
 

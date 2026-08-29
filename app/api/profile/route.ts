@@ -74,7 +74,9 @@ export async function POST(request: Request) {
   }
 }
 
-async function readProfileSnapshot(scope: Awaited<ReturnType<typeof requireRequestScope>>) {
+async function readProfileSnapshot(
+  scope: Awaited<ReturnType<typeof requireRequestScope>>
+) {
   await ensureScope(scope);
   const [profile, identity, kernelProfileId] = await Promise.all([
     readCandidateProfile(scope),

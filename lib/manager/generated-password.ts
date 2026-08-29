@@ -30,12 +30,11 @@ export function generatePassword(policy: PasswordPolicy = {}) {
   const requireDigit = policy.requireDigit !== false;
   const requireSymbol = policy.requireSymbol !== false;
 
-  const alphabet = [
-    ...(requireUppercase ? uppercase : ""),
-    ...(requireLowercase ? lowercase : ""),
-    ...(requireDigit ? digits : ""),
-    ...(requireSymbol ? symbols : ""),
-  ].join("");
+  const alphabet =
+    (requireUppercase ? uppercase : "") +
+    (requireLowercase ? lowercase : "") +
+    (requireDigit ? digits : "") +
+    (requireSymbol ? symbols : "");
   if (alphabet.length === 0) {
     throw new Error("Password policy left no allowed character classes.");
   }

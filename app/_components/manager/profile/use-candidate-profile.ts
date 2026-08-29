@@ -29,18 +29,22 @@ export function useCandidateProfile() {
 
   useEffect(() => {
     let active = true;
-    void load()
-      .then((next) => {
+
+    async function loadSnapshot() {
+      try {
+        const next = await load();
         if (active) setSnapshot(next);
-      })
-      .catch((refreshError: unknown) => {
+      } catch (refreshError: unknown) {
         if (active) {
           setError(
             errorSchema.safeParse(refreshError).data?.message ??
               "Profile request failed."
           );
         }
-      });
+      }
+    }
+
+    void loadSnapshot();
     return () => {
       active = false;
     };
@@ -58,7 +62,8 @@ export function useCandidateProfile() {
       const body = z.unknown().parse(await response.json());
       if (!response.ok) {
         throw new Error(
-          apiErrorSchema.safeParse(body).data?.error ?? "Could not save profile."
+          apiErrorSchema.safeParse(body).data?.error ??
+            "Could not save profile."
         );
       }
       setSnapshot(candidateProfileResponseSchema.parse(body));

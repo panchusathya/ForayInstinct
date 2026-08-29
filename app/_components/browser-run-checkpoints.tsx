@@ -83,10 +83,10 @@ export function BrowserRunCheckpoints() {
         </CardHeader>
         <CardContent>
           {error ? (
-            <p className="text-destructive type-supporting-body">{error}</p>
+            <p className="type-supporting-body text-destructive">{error}</p>
           ) : null}
           {!error && checkpoints.length === 0 && !loading ? (
-            <p className="text-muted-foreground type-supporting-body">
+            <p className="type-supporting-body text-muted-foreground">
               Browser activity will appear here after a run starts.
             </p>
           ) : null}
@@ -106,16 +106,16 @@ export function BrowserRunCheckpoints() {
                     <span className="type-label">{checkpoint.state}</span>
                   ) : null}
                   {checkpoint.attempt > 0 ? (
-                    <span className="text-muted-foreground type-caption">
+                    <span className="type-caption text-muted-foreground">
                       attempt {String(checkpoint.attempt)}
                     </span>
                   ) : null}
                 </div>
-                <p className="mt-2 break-all text-muted-foreground type-caption">
+                <p className="mt-2 type-caption break-all text-muted-foreground">
                   {checkpoint.page ?? checkpoint.sessionId}
                 </p>
                 {checkpoint.trace.length > 0 ? (
-                  <p className="mt-1 text-muted-foreground type-caption">
+                  <p className="mt-1 type-caption text-muted-foreground">
                     {checkpoint.trace.join(" → ")}
                   </p>
                 ) : null}

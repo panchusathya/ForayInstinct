@@ -61,13 +61,15 @@ export async function deleteKernelBrowserProfile(scope: AccessScope) {
   }
   const cleared = await saveWorkspaceKernelProfileId(scope, "");
   if (!cleared.stored) {
-    throw new Error("The browser profile was deleted but could not be cleared locally.");
+    throw new Error(
+      "The browser profile was deleted but could not be cleared locally."
+    );
   }
 }
 
 function isNotFound(error: unknown) {
   if (typeof error === "object" && error !== null && "status" in error) {
-    return (error as { status?: number }).status === 404;
+    return error.status === 404;
   }
   const message = error instanceof Error ? error.message : String(error);
   return /\b404\b|not found/i.test(message);

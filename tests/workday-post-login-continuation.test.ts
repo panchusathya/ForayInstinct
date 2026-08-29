@@ -12,11 +12,19 @@ describe("Workday post-login continuation", () => {
       "utf8"
     );
 
-    expect(workerInstructions).toContain("A successful ATS sign-in is not a stopping point");
+    expect(workerInstructions).toContain(
+      "A successful ATS sign-in is not a stopping point"
+    );
     expect(workerInstructions).toMatch(/primary\s+\*\*Apply\*\* control/);
     expect(browserSkill).toContain("Workday post-login continuation");
-    expect(browserSkill).toContain("primary control named **Apply** or **Apply Manually**");
-    expect(browserSkill).toContain("not a reason to ask the candidate for takeover");
-    expect(browserSkill).toContain('live-view overlay labelled "click to take control"');
+    expect(browserSkill).toContain(
+      "primary control named **Apply** or **Apply Manually**"
+    );
+    expect(browserSkill).toContain(
+      "not a reason to ask the candidate for takeover"
+    );
+    expect(browserSkill).toContain(
+      'live-view overlay labelled "click to take control"'
+    );
   });
 });

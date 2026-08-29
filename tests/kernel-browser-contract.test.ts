@@ -80,7 +80,7 @@ vi.mock("@/lib/kernel", () => ({
 }));
 
 vi.mock("@/db/services/scope", () => ({
-  ensureScope: vi.fn(async () => undefined),
+  ensureScope: vi.fn<() => Promise<void>>(async () => undefined),
 }));
 
 vi.mock("@/db/services/workspaces", () => ({
@@ -130,13 +130,13 @@ const toolContext = {} as never;
 
 const jobUrl = "https://tenant.myworkdayjobs.com/en-US/job/example";
 
-type StubDialog = {
+interface StubDialog {
   controls: string[];
   roleNames: string[];
   visible: boolean;
-};
+}
 
-type StubScene = {
+interface StubScene {
   bodyText?: string;
   clickFails?: string[];
   dialog?: StubDialog;
@@ -147,7 +147,7 @@ type StubScene = {
   tick?: number;
   url: string;
   visible?: string[];
-};
+}
 
 function isDialogSelector(selector: string) {
   return selector.includes('role="dialog"') || selector.includes("aria-modal");
@@ -336,7 +336,9 @@ describe("Kernel browser contract", () => {
   it("retrieves an existing Kernel profile when create collides on name", async () => {
     mocks.createProfile.mockRejectedValue(new Error("name already exists"));
     mocks.retrieveProfile.mockResolvedValue({ id: "retrieved-profile" });
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     const execute = manageBrowsers.execute;
 
     await execute({ action: "create" }, toolContext);
@@ -354,7 +356,9 @@ describe("Kernel browser contract", () => {
   it("creates a browser without a profile when Kernel profiles are unavailable", async () => {
     mocks.createProfile.mockRejectedValue(new Error("kernel down"));
     mocks.retrieveProfile.mockRejectedValue(new Error("kernel down"));
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     const execute = manageBrowsers.execute;
 
     await execute({ action: "create" }, toolContext);

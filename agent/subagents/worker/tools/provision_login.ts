@@ -23,7 +23,7 @@ const credentialsSurface = {
   ],
   id: "credentials",
   kind: "credentials",
-} as const;
+};
 
 export default defineTool({
   description:

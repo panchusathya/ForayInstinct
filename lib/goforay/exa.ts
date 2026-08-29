@@ -87,7 +87,9 @@ export async function searchExaRoles({
     .map((result) => ({
       company: companyFromUrl(result.url),
       location: location?.trim() || "See posting",
-      reasons: result.text ? [compact(result.text, 280)] : ["Found through public job search."],
+      reasons: result.text
+        ? [compact(result.text, 280)]
+        : ["Found through public job search."],
       title: roleTitle(result.title),
       url: result.url,
     }));

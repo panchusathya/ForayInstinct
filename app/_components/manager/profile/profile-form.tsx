@@ -1,12 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  PlusIcon,
-  Trash2Icon,
-} from "lucide-react";
+import { useState } from "react";
+import { ArrowDownIcon, ArrowUpIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,12 +16,10 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { VaultFormField } from "@/app/_components/manager/vault-form-field";
-import {
-  emptyCandidateProfile,
-  type CandidateProfile,
-  type EducationEntry,
-  type ProfileLink,
-  type WorkHistoryEntry,
+import type {
+  EducationEntry,
+  ProfileLink,
+  WorkHistoryEntry,
 } from "@/lib/candidate-profile";
 import { useCandidateProfile } from "./use-candidate-profile";
 
@@ -35,20 +28,59 @@ type Keyed<T> = { readonly key: string; value: T };
 export function CandidateProfileForm() {
   const { busy, error, save, signOutEverywhere, snapshot } =
     useCandidateProfile();
-  const [form, setForm] = useState<CandidateProfile>(emptyCandidateProfile);
-  const [workHistory, setWorkHistory] = useState<Keyed<WorkHistoryEntry>[]>([]);
-  const [education, setEducation] = useState<Keyed<EducationEntry>[]>([]);
-  const [links, setLinks] = useState<Keyed<ProfileLink>[]>([]);
+
+  if (!snapshot) {
+    return (
+      <main className="flex min-w-0 flex-col gap-8">
+        <h1 className="sr-only">Profile</h1>
+        {error ? (
+          <Alert variant="destructive">
+            <AlertTitle>Profile unavailable</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+      </main>
+    );
+  }
+
+  return (
+    <ProfileEditor
+      busy={busy}
+      error={error}
+      save={save}
+      signOutEverywhere={signOutEverywhere}
+      snapshot={snapshot}
+    />
+  );
+}
+
+function ProfileEditor({
+  busy,
+  error,
+  save,
+  signOutEverywhere,
+  snapshot,
+}: {
+  readonly busy: boolean;
+  readonly error?: string;
+  readonly save: ReturnType<typeof useCandidateProfile>["save"];
+  readonly signOutEverywhere: ReturnType<
+    typeof useCandidateProfile
+  >["signOutEverywhere"];
+  readonly snapshot: NonNullable<
+    ReturnType<typeof useCandidateProfile>["snapshot"]
+  >;
+}) {
+  const [form, setForm] = useState(snapshot.profile);
+  const [workHistory, setWorkHistory] = useState(() =>
+    withKeys(snapshot.profile.workHistory)
+  );
+  const [education, setEducation] = useState(() =>
+    withKeys(snapshot.profile.education)
+  );
+  const [links, setLinks] = useState(() => withKeys(snapshot.profile.links));
   const [skillDraft, setSkillDraft] = useState("");
   const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    if (!snapshot) return;
-    setForm(snapshot.profile);
-    setWorkHistory(withKeys(snapshot.profile.workHistory));
-    setEducation(withKeys(snapshot.profile.education));
-    setLinks(withKeys(snapshot.profile.links));
-  }, [snapshot]);
 
   const submit = async () => {
     setSaved(false);
@@ -434,7 +466,9 @@ function Section({
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="type-caption text-muted-foreground uppercase">{title}</h2>
+        <h2 className="type-caption text-muted-foreground uppercase">
+          {title}
+        </h2>
         {onAdd ? (
           <Button onClick={onAdd} size="sm" type="button" variant="ghost">
             <PlusIcon />
@@ -454,7 +488,10 @@ function KeyedList<T>({
 }: {
   readonly items: Keyed<T>[];
   readonly onChange: (items: Keyed<T>[]) => void;
-  readonly render: (entry: Keyed<T>, update: (value: T) => void) => React.ReactNode;
+  readonly render: (
+    entry: Keyed<T>,
+    update: (value: T) => void
+  ) => React.ReactNode;
 }) {
   return (
     <div className="divide-y divide-border/50 border-y border-border/50">

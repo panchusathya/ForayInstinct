@@ -60,10 +60,7 @@ export default defineTool({
         const isWorkday =
           input.start_url !== undefined &&
           isWorkdayApplicationUrl(input.start_url);
-        const profileId = await ensureKernelBrowserProfile(
-          scope,
-          signal
-        );
+        const profileId = await ensureKernelBrowserProfile(scope, signal);
         const browser = await kernel.browsers.create(
           {
             // Kernel start_url navigation is fire-and-forget. Workday needs a

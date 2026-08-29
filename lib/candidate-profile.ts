@@ -104,7 +104,7 @@ export const emptyCandidateProfile: CandidateProfile =
 export const candidateProfilePatchSchema = candidateProfileSchema.partial();
 export type CandidateProfilePatch = z.infer<typeof candidateProfilePatchSchema>;
 
-export const candidateContactIdentitySchema = z.object({
+const candidateContactIdentitySchema = z.object({
   email: z.string().optional(),
   name: z.string(),
   phone: z.string().optional(),
@@ -177,7 +177,11 @@ const maxDescription = 180;
 
 export function candidateProfileSummary(
   profile: CandidateProfile,
-  identity: { readonly email?: string; readonly name: string; readonly phone?: string },
+  identity: {
+    readonly email?: string;
+    readonly name: string;
+    readonly phone?: string;
+  },
   options: { readonly allPositions?: boolean } = {}
 ) {
   const positions = options.allPositions
@@ -214,7 +218,7 @@ export function candidateProfileSummary(
       ? `Willing to relocate: ${profile.willingToRelocate}`
       : undefined,
     profile.yearsExperience !== null
-      ? `Years of experience: ${profile.yearsExperience}`
+      ? `Years of experience: ${String(profile.yearsExperience)}`
       : undefined,
     profile.headline ? `Headline: ${profile.headline}` : undefined,
     profile.summary ? `Summary: ${clip(profile.summary, 400)}` : undefined,
@@ -258,14 +262,15 @@ function locationLine(profile: CandidateProfile) {
 }
 
 function compensationLine(profile: CandidateProfile) {
-  if (profile.salaryMin === null && profile.salaryMax === null) return undefined;
+  if (profile.salaryMin === null && profile.salaryMax === null)
+    return undefined;
   const currency = profile.salaryCurrency || "USD";
   const period = profile.salaryPeriod ? ` per ${profile.salaryPeriod}` : "";
   if (profile.salaryMin !== null && profile.salaryMax !== null) {
-    return `Compensation: ${currency} ${profile.salaryMin}–${profile.salaryMax}${period}`;
+    return `Compensation: ${currency} ${String(profile.salaryMin)}–${String(profile.salaryMax)}${period}`;
   }
   const amount = profile.salaryMin ?? profile.salaryMax;
-  return `Compensation: ${currency} ${amount}${period}`;
+  return `Compensation: ${currency} ${String(amount)}${period}`;
 }
 
 function formatWorkHistory(entry: WorkHistoryEntry) {
@@ -301,7 +306,7 @@ function formatDateRange(entry: {
 
 function formatMonthYear(month?: number, year?: number) {
   if (month === undefined || year === undefined) return "";
-  return `${String(month).padStart(2, "0")}/${year}`;
+  return `${String(month).padStart(2, "0")}/${String(year)}`;
 }
 
 function clip(value: string, max: number) {

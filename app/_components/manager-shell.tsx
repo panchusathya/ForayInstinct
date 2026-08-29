@@ -31,7 +31,12 @@ import { AccountControl } from "./account-control";
 const managerNavigation = [
   { href: "/", icon: PanelsTopLeftIcon, id: "workspace", label: "Workspace" },
   { href: "/vault", icon: KeyRoundIcon, id: "vault", label: "Vault" },
-  { href: "/profile", icon: CircleUserRoundIcon, id: "profile", label: "Profile" },
+  {
+    href: "/profile",
+    icon: CircleUserRoundIcon,
+    id: "profile",
+    label: "Profile",
+  },
   { href: "/chat", icon: MessageSquareIcon, id: "chat", label: "Chat" },
   { href: "/chats", icon: HistoryIcon, id: "chats", label: "All chats" },
 ] as const;
@@ -44,7 +49,13 @@ export function ManagerShell({
   active,
   children,
 }: {
-  readonly active: "chat" | "chats" | "profile" | "tasks" | "vault" | "workspace";
+  readonly active:
+    | "chat"
+    | "chats"
+    | "profile"
+    | "tasks"
+    | "vault"
+    | "workspace";
   readonly children: ReactNode;
 }) {
   if (active === "tasks") {

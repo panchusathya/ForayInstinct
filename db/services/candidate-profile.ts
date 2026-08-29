@@ -42,7 +42,7 @@ export async function saveCandidateProfile(
   const parsedPatch = candidateProfilePatchSchema.parse(patch);
   const merged = candidateProfileSchema.parse({
     ...stored,
-    ...omitUndefined(parsedPatch),
+    ...parsedPatch,
   });
   const now = new Date().toISOString();
   try {
@@ -124,12 +124,6 @@ function parseStoredProfile(row: typeof candidateProfiles.$inferSelect) {
     workHistory: row.workHistory,
     yearsExperience: row.yearsExperience,
   });
-}
-
-function omitUndefined<T extends object>(value: T) {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined)
-  ) as T;
 }
 
 function authUserId(userId: string) {

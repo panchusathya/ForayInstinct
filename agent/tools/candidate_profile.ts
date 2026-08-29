@@ -37,9 +37,7 @@ export default defineDynamic({
           async execute({ action, all_positions: allPositions, profile }) {
             const stored =
               action === "save"
-                ? (
-                    await saveCandidateProfile(scope, profile ?? {})
-                  ).profile
+                ? (await saveCandidateProfile(scope, profile ?? {})).profile
                 : await readCandidateProfile(scope);
             const identity = await readCandidateContactIdentity(scope);
             const summary = candidateProfileSummary(stored, identity, {

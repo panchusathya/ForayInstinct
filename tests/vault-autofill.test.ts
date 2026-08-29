@@ -179,11 +179,15 @@ describe("vault browser autofill", () => {
       "current-password": "correct horse",
       "new-password": "correct horse",
     });
-    const signupLeakBoundary = await provider.materializeClaims(scope, login.id, {
-      availableTokens: new Set(["email", "new-password", "confirm-password"]),
-      origin: "https://checkout.example",
-      surface: credentialsSurface,
-    });
+    const signupLeakBoundary = await provider.materializeClaims(
+      scope,
+      login.id,
+      {
+        availableTokens: new Set(["email", "new-password", "confirm-password"]),
+        origin: "https://checkout.example",
+        surface: credentialsSurface,
+      }
+    );
     expect(claimValues(signupLeakBoundary)).toEqual({
       "confirm-password": "correct horse",
       email: "ada@example.com",

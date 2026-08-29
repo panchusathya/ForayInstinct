@@ -124,9 +124,9 @@ describe("root and worker capability boundaries", () => {
     expect(readFileSync(`${workerTools}/list_vault.ts`, "utf8")).toContain(
       "requireWorkerScope(ctx)"
     );
-    expect(
-      readFileSync(`${workerTools}/provision_login.ts`, "utf8")
-    ).toContain("Username registration is not supported");
+    expect(readFileSync(`${workerTools}/provision_login.ts`, "utf8")).toContain(
+      "Username registration is not supported"
+    );
   });
 
   it("requires structured completion without a parent-supplied outputSchema", () => {

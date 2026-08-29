@@ -1,6 +1,6 @@
 import type { AutofillClaim } from "../vault-autofill-protocol";
 
-export const nativeLoginPurposes = ["sign_in", "sign_up"] as const;
+const nativeLoginPurposes = ["sign_in", "sign_up"] as const;
 export type NativeLoginPurpose = (typeof nativeLoginPurposes)[number];
 
 export const nativeLoginAutofillTokens = [

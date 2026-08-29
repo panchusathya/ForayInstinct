@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     }
     const { id } = requestSchema.parse(await request.json());
     const item = await readVaultItem(scope, id);
-    if (!item || item.kind !== "login") {
+    if (item?.kind !== "login") {
       return Response.json(
         { error: "That login was not found." },
         { status: 404 }
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     }
     const secret = await readSecret({ id, namespace: "vault", scope });
     const login = secret ? parseLoginVaultPayload(secret) : undefined;
-    if (!login || login.authentication.type !== "password") {
+    if (login?.authentication.type !== "password") {
       return Response.json(
         { error: "This login has no stored password." },
         { status: 404 }
@@ -53,8 +53,7 @@ export async function POST(request: Request) {
     if (error instanceof UnauthenticatedError) return unauthorizedResponse();
     return Response.json(
       {
-        error:
-          error instanceof Error ? error.message : "Vault reveal failed.",
+        error: error instanceof Error ? error.message : "Vault reveal failed.",
       },
       { status: 400 }
     );
