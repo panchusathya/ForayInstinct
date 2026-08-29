@@ -255,6 +255,7 @@ function lifecycleResult(
         : []),
       `Use execute_playwright_code with session_id "${value.session_id}" for deterministic browser automation.`,
       `Use computer_action with session_id "${value.session_id}" for visual browser control.`,
+      `Use solve_captcha with session_id "${value.session_id}" if a checkbox hCaptcha remains after Kernel's managed solver wait.`,
       `Use manage_browsers with action "delete" and session_id "${value.session_id}" when finished.`,
     ],
     ...(workday === undefined ? {} : { workday }),

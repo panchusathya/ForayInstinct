@@ -123,6 +123,19 @@ describe("Kernel browser contract", () => {
         browser_live_view_url: "https://live.kernel.test/browser-1",
       },
     });
+    if (
+      typeof result !== "object" ||
+      !("next_actions" in result) ||
+      !Array.isArray(result.next_actions)
+    ) {
+      throw new Error("manage_browsers create must return next_actions.");
+    }
+    expect(
+      result.next_actions.some(
+        (action) =>
+          typeof action === "string" && action.includes("solve_captcha")
+      )
+    ).toBe(true);
 
     expect(mocks.createBrowser).toHaveBeenCalledExactlyOnceWith(
       {
