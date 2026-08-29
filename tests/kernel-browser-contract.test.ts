@@ -143,6 +143,7 @@ describe("Kernel browser contract", () => {
   });
 
   it("routes Workday with a settled Playwright navigation instead of start_url", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const execute = manageBrowsers.execute;
 
     const input = {
@@ -167,5 +168,19 @@ describe("Kernel browser contract", () => {
     expect(result).toMatchObject({
       workday: { state: "email_login_ready" },
     });
+    expect(info).toHaveBeenCalledWith(
+      "[workday-router] browser created",
+      expect.objectContaining({
+        browser_session_id: "browser-1",
+        target: "https://tenant.myworkdayjobs.com/en-US/job/example",
+      })
+    );
+    expect(info).toHaveBeenCalledWith(
+      "[workday-router] route completed",
+      expect.objectContaining({
+        execution_success: true,
+        state: "email_login_ready",
+      })
+    );
   });
 });

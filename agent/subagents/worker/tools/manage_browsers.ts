@@ -78,16 +78,34 @@ export default defineTool({
             .catch(() => undefined);
           throw error;
         }
-        const workday =
-          isWorkday && input.start_url
-            ? normalizeWorkdayRouteResult(
-                await kernel.browsers.playwright.execute(
-                  browser.session_id,
-                  { code: workdayRouterCode(input.start_url), timeout_sec: 30 },
-                  { signal }
-                )
-              )
-            : undefined;
+        let workday: ReturnType<typeof normalizeWorkdayRouteResult> | undefined;
+        if (isWorkday && input.start_url) {
+          console.info("[workday-router] browser created", {
+            browser_session_id: browser.session_id,
+            target: safeWorkdayLocation(input.start_url),
+          });
+          try {
+            const response = await kernel.browsers.playwright.execute(
+              browser.session_id,
+              { code: workdayRouterCode(input.start_url), timeout_sec: 30 },
+              { signal }
+            );
+            workday = normalizeWorkdayRouteResult(response);
+            logWorkdayRoute({
+              applicationUrl: input.start_url,
+              browser,
+              response,
+              workday,
+            });
+          } catch (error) {
+            console.error("[workday-router] route request failed", {
+              browser_session_id: browser.session_id,
+              error_code: diagnosticErrorCode(error),
+              target: safeWorkdayLocation(input.start_url),
+            });
+            throw error;
+          }
+        }
         return lifecycleResult(browser, workday);
       }
       case "list": {
@@ -199,4 +217,50 @@ function lifecycleResult(
     ],
     ...(workday === undefined ? {} : { workday }),
   };
+}
+
+function logWorkdayRoute({
+  applicationUrl,
+  browser,
+  response,
+  workday,
+}: {
+  applicationUrl: string;
+  browser: KernelBrowser;
+  response: Awaited<ReturnType<typeof kernel.browsers.playwright.execute>>;
+  workday: ReturnType<typeof normalizeWorkdayRouteResult>;
+}) {
+  const detail = {
+    browser_session_id: browser.session_id,
+    execution_error: diagnosticErrorCode(response.error),
+    execution_success: response.success,
+    page: safeWorkdayLocation(workday.url),
+    state: workday.state,
+    target: safeWorkdayLocation(applicationUrl),
+    trace: workday.trace ?? [],
+  };
+  if (response.success) {
+    console.info("[workday-router] route completed", detail);
+  } else {
+    console.error("[workday-router] route execution failed", detail);
+  }
+}
+
+function diagnosticErrorCode(error: unknown) {
+  if (typeof error !== "string" && !(error instanceof Error)) return undefined;
+  const message = typeof error === "string" ? error : error.message;
+  if (/timeout/i.test(message)) return "timeout";
+  if (/chrome-error|net::/i.test(message)) return "navigation";
+  if (/selector|locator/i.test(message)) return "selector";
+  return "playwright_execution";
+}
+
+function safeWorkdayLocation(value: string | undefined) {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return undefined;
+  }
 }
