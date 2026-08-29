@@ -127,9 +127,9 @@ describe("checkbox CAPTCHA solver", () => {
       true
     );
 
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; execute only reads abortSignal after the mocked authorization boundary.
     const result = await solveCaptcha.execute(
       { session_id: "browser-1" },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; execute only reads abortSignal after the mocked authorization boundary.
       {} as never
     );
 

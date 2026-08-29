@@ -110,10 +110,20 @@ describe("Kernel browser contract", () => {
       browser: {
         browser_live_view_url: "https://live.kernel.test/browser-1",
       },
-      next_actions: expect.arrayContaining([
-        expect.stringContaining("solve_captcha"),
-      ]),
     });
+    if (
+      typeof result !== "object" ||
+      !("next_actions" in result) ||
+      !Array.isArray(result.next_actions)
+    ) {
+      throw new Error("manage_browsers create must return next_actions.");
+    }
+    expect(
+      result.next_actions.some(
+        (action) =>
+          typeof action === "string" && action.includes("solve_captcha")
+      )
+    ).toBe(true);
 
     expect(mocks.createBrowser).toHaveBeenCalledExactlyOnceWith(
       {
