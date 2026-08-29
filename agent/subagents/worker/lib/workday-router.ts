@@ -86,6 +86,10 @@ for (let attempt = 0; attempt < 4; attempt += 1) {
   if (await click("apply:adventure_button", page.locator('a[data-automation-id="adventureButton"], button[data-automation-id="adventureButton"]'))) continue;
   if (await click("apply:button", page.getByRole("button", { name: /^apply$/i }))) continue;
   if (await click("apply:link", page.getByRole("link", { name: /^apply$/i }))) continue;
+  // Intapp sometimes exposes only this initial account entry point on a job page.
+  // This fallback runs after every concrete application control has been checked.
+  if (await click("sign_in:initial_button", page.getByRole("button", { name: /^sign in$/i }))) continue;
+  if (await click("sign_in:initial_link", page.getByRole("link", { name: /^sign in$/i }))) continue;
   break;
 }
 
