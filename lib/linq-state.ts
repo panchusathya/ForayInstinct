@@ -28,10 +28,7 @@ interface QueueRow {
 export class PostgresStateAdapter implements StateAdapter {
   #connected = false;
 
-  constructor(
-    private readonly sql: Pool = pool,
-    private readonly namespace = ""
-  ) {}
+  constructor(private readonly sql: Pool = pool) {}
 
   async connect() {
     if (this.#connected) return;
@@ -51,7 +48,7 @@ export class PostgresStateAdapter implements StateAdapter {
       `INSERT INTO chat_state_subscriptions (thread_id)
        VALUES ($1)
        ON CONFLICT (thread_id) DO NOTHING`,
-      [this.#threadId(threadId)]
+      [threadId]
     );
   }
 
@@ -59,7 +56,7 @@ export class PostgresStateAdapter implements StateAdapter {
     this.#ensureConnected();
     await this.sql.query(
       "DELETE FROM chat_state_subscriptions WHERE thread_id = $1",
-      [this.#threadId(threadId)]
+      [threadId]
     );
   }
 
@@ -67,7 +64,7 @@ export class PostgresStateAdapter implements StateAdapter {
     this.#ensureConnected();
     const result = await this.sql.query(
       "SELECT 1 FROM chat_state_subscriptions WHERE thread_id = $1",
-      [this.#threadId(threadId)]
+      [threadId]
     );
     return (result.rowCount ?? 0) > 0;
   }
@@ -82,7 +79,7 @@ export class PostgresStateAdapter implements StateAdapter {
          SET token = EXCLUDED.token, expires_at = EXCLUDED.expires_at
          WHERE chat_state_locks.expires_at <= now()
        RETURNING token, EXTRACT(EPOCH FROM expires_at) * 1000 AS "expiresAt"`,
-      [this.#threadId(threadId), token, ttlMs]
+      [threadId, token, ttlMs]
     );
     const row = result.rows[0];
     return row
@@ -93,7 +90,7 @@ export class PostgresStateAdapter implements StateAdapter {
   async forceReleaseLock(threadId: string) {
     this.#ensureConnected();
     await this.sql.query("DELETE FROM chat_state_locks WHERE thread_id = $1", [
-      this.#threadId(threadId),
+      threadId,
     ]);
   }
 
@@ -101,7 +98,7 @@ export class PostgresStateAdapter implements StateAdapter {
     this.#ensureConnected();
     await this.sql.query(
       "DELETE FROM chat_state_locks WHERE thread_id = $1 AND token = $2",
-      [this.#threadId(lock.threadId), lock.token]
+      [lock.threadId, lock.token]
     );
   }
 
@@ -111,7 +108,7 @@ export class PostgresStateAdapter implements StateAdapter {
       `UPDATE chat_state_locks
        SET expires_at = now() + ($3::bigint * interval '1 millisecond')
        WHERE thread_id = $1 AND token = $2 AND expires_at > now()`,
-      [this.#threadId(lock.threadId), lock.token, ttlMs]
+      [lock.threadId, lock.token, ttlMs]
     );
     return (result.rowCount ?? 0) > 0;
   }
@@ -125,7 +122,7 @@ export class PostgresStateAdapter implements StateAdapter {
     const result = await this.sql.query<StateRow>(
       `SELECT value FROM chat_state_values
        WHERE key = $1 AND (expires_at IS NULL OR expires_at > now())`,
-      [this.#key(key)]
+      [key]
     );
     const value = result.rows[0]?.value;
     return value === undefined ? null : (value as T);
@@ -143,7 +140,7 @@ export class PostgresStateAdapter implements StateAdapter {
        )
        ON CONFLICT (key) DO UPDATE
          SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at`,
-      [this.#key(key), JSON.stringify(value), ttlMs ?? null]
+      [key, JSON.stringify(value), ttlMs ?? null]
     );
   }
 
@@ -162,16 +159,14 @@ export class PostgresStateAdapter implements StateAdapter {
          WHERE chat_state_values.expires_at IS NOT NULL
            AND chat_state_values.expires_at <= now()
        RETURNING key`,
-      [this.#key(key), JSON.stringify(value), ttlMs ?? null]
+      [key, JSON.stringify(value), ttlMs ?? null]
     );
     return (result.rowCount ?? 0) > 0;
   }
 
   async delete(key: string) {
     this.#ensureConnected();
-    await this.sql.query("DELETE FROM chat_state_values WHERE key = $1", [
-      this.#key(key),
-    ]);
+    await this.sql.query("DELETE FROM chat_state_values WHERE key = $1", [key]);
   }
 
   async appendToList(
@@ -183,7 +178,7 @@ export class PostgresStateAdapter implements StateAdapter {
     await this.#transaction(async (client) => {
       const current = await client.query<StateRow>(
         "SELECT value FROM chat_state_values WHERE key = $1 FOR UPDATE",
-        [this.#key(key)]
+        [key]
       );
       // JSON arrays are the only list representation the Chat SDK writes.
       // `Array.from` copies it before appending so the cached row stays pure.
@@ -208,7 +203,7 @@ export class PostgresStateAdapter implements StateAdapter {
          )
          ON CONFLICT (key) DO UPDATE
            SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at`,
-        [this.#key(key), JSON.stringify(values), options?.ttlMs ?? null]
+        [key, JSON.stringify(values), options?.ttlMs ?? null]
       );
     });
   }
@@ -225,11 +220,11 @@ export class PostgresStateAdapter implements StateAdapter {
       // Serialize queue writes for this provider thread without holding a
       // global lock. The queue API is only used for overlap handling.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
-        `chat-state-queue:${this.#threadId(threadId)}`,
+        `chat-state-queue:${threadId}`,
       ]);
       await client.query(
         "INSERT INTO chat_state_queue (thread_id, entry) VALUES ($1, $2::jsonb)",
-        [this.#threadId(threadId), JSON.stringify(entry)]
+        [threadId, JSON.stringify(entry)]
       );
       await client.query(
         `DELETE FROM chat_state_queue
@@ -238,11 +233,11 @@ export class PostgresStateAdapter implements StateAdapter {
            WHERE thread_id = $1
            ORDER BY sequence DESC OFFSET $2
          )`,
-        [this.#threadId(threadId), maxSize]
+        [threadId, maxSize]
       );
       const depth = await client.query<{ count: string }>(
         "SELECT count(*) FROM chat_state_queue WHERE thread_id = $1",
-        [this.#threadId(threadId)]
+        [threadId]
       );
       return Number(depth.rows[0]?.count ?? 0);
     });
@@ -260,7 +255,7 @@ export class PostgresStateAdapter implements StateAdapter {
          LIMIT 1
        )
        RETURNING entry`,
-      [this.#threadId(threadId)]
+      [threadId]
     );
     return result.rows[0]?.entry ?? null;
   }
@@ -269,7 +264,7 @@ export class PostgresStateAdapter implements StateAdapter {
     this.#ensureConnected();
     const result = await this.sql.query<{ count: string }>(
       "SELECT count(*) FROM chat_state_queue WHERE thread_id = $1",
-      [this.#threadId(threadId)]
+      [threadId]
     );
     return Number(result.rows[0]?.count ?? 0);
   }
@@ -296,16 +291,8 @@ export class PostgresStateAdapter implements StateAdapter {
       );
     }
   }
-
-  #key(key: string) {
-    return this.namespace ? `${this.namespace}:${key}` : key;
-  }
-
-  #threadId(threadId: string) {
-    return this.#key(threadId);
-  }
 }
 
-export function createPostgresState(namespace?: string) {
-  return new PostgresStateAdapter(pool, namespace);
+export function createPostgresState() {
+  return new PostgresStateAdapter();
 }

@@ -3,8 +3,7 @@ import { z } from "zod";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { candidateDefaultResume } from "@/lib/goforay/bridge";
-import { withWorkerToolError } from "@/agent/lib/worker-tool-error";
-import { writeBrowserFile } from "@/lib/browser";
+import { kernel } from "@/lib/kernel";
 
 const inputSchema = z.object({
   session_id: z.string().min(1),
@@ -23,22 +22,14 @@ export default defineTool({
   outputSchema,
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
-    return withWorkerToolError(
-      "stage_default_goforay_resume",
-      input.session_id,
-      async () => {
-        await requireOwnedBrowserSession(scope, input.session_id);
-        const document = await candidateDefaultResume(scope);
-        const filename = safeFilename(document.filename);
-        const path = `/tmp/goforay-default-resume-${filename}`;
-        await writeBrowserFile(
-          input.session_id,
-          path,
-          new Uint8Array(document.bytes)
-        );
-        return { filename, path };
-      }
-    );
+    await requireOwnedBrowserSession(scope, input.session_id);
+    const document = await candidateDefaultResume(scope);
+    const filename = safeFilename(document.filename);
+    const path = `/tmp/goforay-default-resume-${filename}`;
+    await kernel.browsers.fs.writeFile(input.session_id, document.bytes, {
+      path,
+    });
+    return { filename, path };
   },
 });
 

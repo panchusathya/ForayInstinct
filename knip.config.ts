@@ -4,7 +4,6 @@ export default {
   entry: [
     "agent/channels/**/*.ts",
     "agent/hooks/**/*.ts",
-    "agent/schedules/**/*.ts",
     "agent/subagents/**/*.ts",
     "agent/tools/**/*.ts",
     "db/drizzle.config.ts",

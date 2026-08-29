@@ -4,8 +4,8 @@ const requiredEnvironment = {
   BETTER_AUTH_SECRET: "test-auth-secret",
   BETTER_AUTH_URL: "https://example.com",
   AI_GATEWAY_API_KEY: "test-ai-gateway-key",
-  BRIGHT_DATA_BROWSER_AUTH: "brd-customer-test-zone-browser:test-password",
   DATABASE_URL: "postgresql://user:password@example.com/database",
+  KERNEL_API_KEY: "test-kernel-key",
   SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
 };
 
@@ -16,6 +16,7 @@ describe("environment", () => {
     for (const [name, value] of Object.entries(requiredEnvironment)) {
       vi.stubEnv(name, value);
     }
+    vi.stubEnv("KERNEL_PROXY_ID", "");
     vi.stubEnv("LINQ_CONNECTOR", "");
     vi.stubEnv("LINQ_API_KEY", "");
     vi.stubEnv("LINQ_WEBHOOK_SECRET", "");
@@ -31,14 +32,15 @@ describe("environment", () => {
     const { env } = await import("../lib/env");
 
     expect(env).toMatchObject(requiredEnvironment);
+    expect(env.KERNEL_PROXY_ID).toBeUndefined();
   });
 
-  it("rejects Bright Data credentials without a password separator", async () => {
-    vi.stubEnv("BRIGHT_DATA_BROWSER_AUTH", "missing-password");
+  it("accepts a configured Kernel proxy id", async () => {
+    vi.stubEnv("KERNEL_PROXY_ID", "proxy-us-residential");
 
-    await expect(import("../lib/env")).rejects.toThrow(
-      "Invalid environment variables"
-    );
+    const { env } = await import("../lib/env");
+
+    expect(env.KERNEL_PROXY_ID).toBe("proxy-us-residential");
   });
 
   it("provides the Google connector default without enabling Linq", async () => {
@@ -94,7 +96,7 @@ describe("environment", () => {
     );
   });
 
-  it.each(["DATABASE_URL", "BRIGHT_DATA_BROWSER_AUTH"])(
+  it.each(["DATABASE_URL", "KERNEL_API_KEY"])(
     "keeps %s required in local development",
     async (name) => {
       vi.stubEnv(name, "");
@@ -121,8 +123,8 @@ describe("environment", () => {
     ["AI_GATEWAY_API_KEY", "Invalid environment variables"],
     ["BETTER_AUTH_SECRET", "Invalid environment variables"],
     ["BETTER_AUTH_URL", "Invalid environment variables"],
-    ["BRIGHT_DATA_BROWSER_AUTH", "Invalid environment variables"],
     ["DATABASE_URL", "Invalid environment variables"],
+    ["KERNEL_API_KEY", "Invalid environment variables"],
     ["SECRET_ENCRYPTION_KEY", "Invalid environment variables"],
   ])(
     "rejects a missing required %s value during import",

@@ -34,9 +34,6 @@ const cancelledWorkerTaskSchema = z.object({
 const workerCancellationsSchema = z.array(
   z.object({ sourceMessageId: z.string(), taskId: z.string() })
 );
-// Advancing this namespace starts Linq with clean durable state without
-// changing the public webhook route or retaining a failed worker checkpoint.
-const linqStateNamespace = "linq-v3";
 
 // Linq keeps a durable session for the whole iMessage thread. Supplying this on
 // every turn lets an updated deployment supersede stale behavior in an older
@@ -60,7 +57,7 @@ const { bot, channel, send } = chatSdkChannel({
   // still works. Postgres state keeps a provider thread's continuation,
   // worker checkpoint, dedupe records, and locks across Vercel instances.
   routes: { linq: "/eve/v1/linq" },
-  state: createPostgresState(linqStateNamespace),
+  state: createPostgresState(),
   streaming: false,
   turnPolicy: "steer",
   userName: "Foray",
@@ -113,7 +110,7 @@ const { bot, channel, send } = chatSdkChannel({
         return;
       }
 
-      const cancelledTaskId = await consumeWorkerCancellationTurn(
+      const cancelledTaskId = consumeWorkerCancellationTurn(
         session.session.id,
         event.turnId
       );
@@ -182,13 +179,9 @@ function linqAdapterConfig(): Parameters<typeof createLinqAdapter>[0] {
       webhookVerifier: credentials.webhookVerifier,
     };
   }
-  return {
-    credentials: async () => {
-      throw new Error(
-        "Configure LINQ_API_KEY and LINQ_WEBHOOK_SECRET or LINQ_CONNECTOR."
-      );
-    },
-  };
+  throw new Error(
+    "Configure LINQ_API_KEY and LINQ_WEBHOOK_SECRET or LINQ_CONNECTOR."
+  );
 }
 
 async function dispatchLinqMessage(thread: Thread, message: Message) {

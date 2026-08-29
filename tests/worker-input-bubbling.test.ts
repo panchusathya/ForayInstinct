@@ -59,10 +59,7 @@ describe("worker input bubbling", () => {
       "utf8"
     );
 
-    expect(instructions).toContain("Quote the worker `Error:` text");
-    expect(instructions).toContain(
-      "Never invent “failed before returning a verifiable result.”"
-    );
+    expect(instructions).toContain("Never send raw JSON");
     expect(instructions).toContain("one bullet per role");
     expect(instructions).toContain(
       "dump `documents`, `form_answers`, `cards`, or `result`"

@@ -6,21 +6,21 @@ import {
 
 export default defineHook({
   events: {
-    async "message.received"(event, ctx) {
-      await recordWorkerCancellationTurn(
+    "message.received"(event, ctx) {
+      recordWorkerCancellationTurn(
         ctx.session.id,
         event.data.turnId,
         event.data.message
       );
     },
-    async "turn.cancelled"(event, ctx) {
-      await clearWorkerCancellationTurn(ctx.session.id, event.data.turnId);
+    "turn.cancelled"(event, ctx) {
+      clearWorkerCancellationTurn(ctx.session.id, event.data.turnId);
     },
-    async "turn.completed"(event, ctx) {
-      await clearWorkerCancellationTurn(ctx.session.id, event.data.turnId);
+    "turn.completed"(event, ctx) {
+      clearWorkerCancellationTurn(ctx.session.id, event.data.turnId);
     },
-    async "turn.failed"(event, ctx) {
-      await clearWorkerCancellationTurn(ctx.session.id, event.data.turnId);
+    "turn.failed"(event, ctx) {
+      clearWorkerCancellationTurn(ctx.session.id, event.data.turnId);
     },
   },
 });

@@ -1,10 +1,10 @@
-import { and, eq, gt, isNull, or } from "drizzle-orm";
-import { z } from "zod";
-import { chatStateValues, db } from "@/db";
+const runtime = globalThis as typeof globalThis & {
+  openInstinctWorkerCancellationTurns?: Map<string, string>;
+};
+const cancellationTurns = (runtime.openInstinctWorkerCancellationTurns ??=
+  new Map<string, string>());
 
-const cancellationTtlMs = 60 * 60 * 1000;
-
-export async function recordWorkerCancellationTurn(
+export function recordWorkerCancellationTurn(
   sessionId: string,
   turnId: string,
   message: string
@@ -12,54 +12,23 @@ export async function recordWorkerCancellationTurn(
   const taskId = /^Background task (\S+) \(worker\) is cancelled\.$/u.exec(
     message
   )?.[1];
-  if (!taskId) return;
-  const key = turnKey(sessionId, turnId);
-  const expiresAt = new Date(Date.now() + cancellationTtlMs);
-  await db
-    .insert(chatStateValues)
-    .values({ expiresAt, key, value: { taskId } })
-    .onConflictDoUpdate({
-      target: chatStateValues.key,
-      set: { expiresAt, value: { taskId } },
-    });
+  if (taskId) cancellationTurns.set(turnKey(sessionId, turnId), taskId);
 }
 
-export async function consumeWorkerCancellationTurn(
+export function consumeWorkerCancellationTurn(
   sessionId: string,
   turnId: string
 ) {
   const key = turnKey(sessionId, turnId);
-  const rows = await db
-    .select({ value: chatStateValues.value })
-    .from(chatStateValues)
-    .where(
-      and(
-        eq(chatStateValues.key, key),
-        or(
-          isNull(chatStateValues.expiresAt),
-          gt(chatStateValues.expiresAt, new Date())
-        )
-      )
-    )
-    .limit(1);
-  await db.delete(chatStateValues).where(eq(chatStateValues.key, key));
-  const parsed = cancellationValueSchema.safeParse(rows[0]?.value);
-  return parsed.success ? parsed.data.taskId : undefined;
+  const taskId = cancellationTurns.get(key);
+  cancellationTurns.delete(key);
+  return taskId;
 }
 
-export async function clearWorkerCancellationTurn(
-  sessionId: string,
-  turnId: string
-) {
-  await db
-    .delete(chatStateValues)
-    .where(eq(chatStateValues.key, turnKey(sessionId, turnId)));
+export function clearWorkerCancellationTurn(sessionId: string, turnId: string) {
+  cancellationTurns.delete(turnKey(sessionId, turnId));
 }
 
 function turnKey(sessionId: string, turnId: string) {
-  return `worker-cancel:${sessionId}:${turnId}`;
+  return `${sessionId}:${turnId}`;
 }
-
-const cancellationValueSchema = z.object({
-  taskId: z.string().min(1),
-});
