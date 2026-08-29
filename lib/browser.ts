@@ -54,13 +54,16 @@ export function browserCdpUrl(sessionId: string) {
  * password.
  */
 export function normalizeBrightDataBrowserAuth(value: string) {
-  const match = value
-    .trim()
-    .match(/^(?:wss:\/\/)?([^:]+):(.+?)@brd\.superproxy\.io(?::9222)?\/?$/i);
+  const match =
+    /^(?:wss:\/\/)?([^:]+):(.+?)@brd\.superproxy\.io(?::9222)?\/?$/i.exec(
+      value.trim()
+    );
 
-  return match
-    ? `${decodeURIComponent(match[1]!)}:${decodeURIComponent(match[2]!)}`
-    : value;
+  if (!match) return value;
+  const [, username, password] = match;
+  if (typeof username !== "string" || typeof password !== "string")
+    return value;
+  return `${decodeURIComponent(username)}:${decodeURIComponent(password)}`;
 }
 
 export function decodoProxyForSession(sessionId: string) {
@@ -454,6 +457,26 @@ async function restoreSessionIfNeeded(page: Page, sessionId: string) {
       .addCookies(stored.cookies)
       .catch(() => undefined);
   }
+  if (stored.origins.length > 0 || stored.sessionStorage) {
+    await page.context().addInitScript(
+      ({ origins, sessionStorage }) => {
+        const localStorage = origins.find(
+          (origin) => origin.origin === window.location.origin
+        )?.localStorage;
+        for (const { name, value } of localStorage ?? []) {
+          window.localStorage.setItem(name, value);
+        }
+        if (sessionStorage?.origin !== window.location.origin) return;
+        for (const [name, value] of sessionStorage.entries) {
+          window.sessionStorage.setItem(name, value);
+        }
+      },
+      {
+        origins: stored.origins,
+        sessionStorage: stored.sessionStorage,
+      }
+    );
+  }
   if (stored.lastUrl && isHttpUrl(stored.lastUrl)) {
     await page
       .goto(stored.lastUrl, {
@@ -489,11 +512,19 @@ async function snapshotSession(page: Page, sessionId: string) {
     .context()
     .storageState()
     .catch(() => undefined);
+  const sessionStorage = await page
+    .evaluate(() => ({
+      entries: Object.entries(window.sessionStorage),
+      origin: window.location.origin,
+    }))
+    .catch(() => undefined);
   await upsertStateValue(
     `${browserStorageKeyPrefix}${sessionId}`,
     {
       cookies: state?.cookies ?? [],
       lastUrl: page.url(),
+      origins: state?.origins ?? [],
+      sessionStorage,
     },
     browserStateTtlMs
   );
@@ -732,7 +763,26 @@ const cookieSchema = z.object({
   value: z.string(),
 });
 
+const storageEntrySchema = z.object({
+  name: z.string(),
+  value: z.string(),
+});
+
+const sessionStorageSchema = z.object({
+  entries: z.array(z.tuple([z.string(), z.string()])),
+  origin: z.string(),
+});
+
 const browserStorageSchema = z.object({
   cookies: z.array(cookieSchema),
   lastUrl: z.string().optional(),
+  origins: z
+    .array(
+      z.object({
+        localStorage: z.array(storageEntrySchema),
+        origin: z.string(),
+      })
+    )
+    .default([]),
+  sessionStorage: sessionStorageSchema.optional(),
 });

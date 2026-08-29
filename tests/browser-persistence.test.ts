@@ -84,11 +84,14 @@ describe("Bright Data session persistence", () => {
     touch.connectOverCDP.mockReset();
   });
 
-  it("keeps cookies and tabs in chat state instead of Playwright newContext", () => {
+  it("keeps browser state in chat state instead of Playwright newContext", () => {
     const source = readFileSync("lib/browser.ts", "utf8");
     expect(source).toContain("browser-storage:");
     expect(source).toContain("keepAliveUntil");
     expect(source).toContain("disposeOnDetach: false");
+    expect(source).toContain("origins: state?.origins ?? []");
+    expect(source).toContain("sessionStorage");
+    expect(source).toContain("addInitScript");
     expect(source).not.toContain("browser.newContext(");
     expect(source).not.toContain("disposeOnDetach: true");
   });
