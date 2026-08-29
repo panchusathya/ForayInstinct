@@ -149,7 +149,10 @@ describe("migration deployment policy", () => {
     expect(packageManifest.devDependencies).not.toHaveProperty("dotenv-cli");
     expect(turbo.tasks["build:vercel"].dependsOn).toContain("db:migrate");
     expect(turbo.tasks["db:migrate"].cache).toBe(false);
-    expect(turbo.tasks["db:migrate"].env).toEqual(["DATABASE_URL_UNPOOLED"]);
+    expect(turbo.tasks["db:migrate"].env).toEqual([
+      "DATABASE_URL",
+      "DATABASE_URL_UNPOOLED",
+    ]);
     expect(vercel.buildCommand).toBe("pnpm turbo run build:vercel");
   });
 
