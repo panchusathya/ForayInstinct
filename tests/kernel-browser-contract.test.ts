@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import manageBrowsers from "../agent/subagents/worker/tools/manage_browsers";
 import {
+  workdayApplyControlName,
+  workdayRestoreCode,
   workdayRouterCode,
   workdayRouteStrategies,
   workdayRouteTimeoutSec,
@@ -104,49 +106,107 @@ const toolContext = {} as never;
 
 const jobUrl = "https://tenant.myworkdayjobs.com/en-US/job/example";
 
-function stubPage({
-  bodyText = "",
-  redirectTo,
-  url,
-  visible = [],
-}: {
+type StubDialog = {
+  controls: string[];
+  roleNames: string[];
+  visible: boolean;
+};
+
+type StubScene = {
   bodyText?: string;
+  clickFails?: string[];
+  dialog?: StubDialog;
+  onClick?: (selector: string, scopedToDialog: boolean) => void;
   redirectTo?: string;
+  revealAtTick?: number;
+  roleNames?: string[];
+  tick?: number;
   url: string;
   visible?: string[];
-}) {
-  let current = url;
-  const shown = (selector: string) =>
-    visible.some((entry) => selector.includes(entry));
-  const locator = (selector: string) => {
+};
+
+function isDialogSelector(selector: string) {
+  return selector.includes('role="dialog"') || selector.includes("aria-modal");
+}
+
+function stubPage(scene: StubScene) {
+  let current = scene.url;
+  const locator = (
+    selector: string,
+    options?: { name?: RegExp; scopedToDialog?: boolean }
+  ) => {
+    const scopedToDialog =
+      options?.scopedToDialog ?? isDialogSelector(selector);
+    const name = options?.name;
     const self = {
-      click: async () => undefined,
+      click: async () => {
+        const haystack = `${selector} ${name?.source ?? ""}`;
+        if (scene.clickFails?.some((entry) => haystack.includes(entry))) {
+          throw new Error("Timeout 5000ms exceeded");
+        }
+        scene.onClick?.(selector, scopedToDialog);
+      },
+      evaluate: async (fn: () => unknown) => fn(),
       evaluateAll: async () => [],
       first: () => self,
-      innerText: async () => (selector === "body" ? bodyText : ""),
-      isVisible: async () => shown(selector),
+      getByRole: (_role: string, roleOptions?: { name?: RegExp }) =>
+        locator(String(roleOptions?.name ?? ""), {
+          name: roleOptions?.name,
+          scopedToDialog,
+        }),
+      innerText: async () =>
+        selector === "body" ? (scene.bodyText ?? "") : "",
+      isVisible: async () => {
+        if (isDialogSelector(selector)) return Boolean(scene.dialog?.visible);
+        if (name) {
+          const roleNames = scopedToDialog
+            ? (scene.dialog?.roleNames ?? [])
+            : (scene.roleNames ?? []);
+          if (roleNames.some((label) => name.test(label))) return true;
+        }
+        const controls = scopedToDialog
+          ? (scene.dialog?.controls ?? [])
+          : (scene.visible ?? []);
+        return controls.some((entry) => selector.includes(entry));
+      },
+      locator: (child: string) =>
+        locator(child, {
+          scopedToDialog: scopedToDialog || isDialogSelector(selector),
+        }),
       waitFor: async () => {
-        if (!shown(selector)) throw new Error(`not visible: ${selector}`);
+        if (!(await self.isVisible())) {
+          throw new Error(`not visible: ${selector}`);
+        }
       },
     };
     return self;
   };
   return {
+    evaluate: async (fn: () => unknown) => fn(),
     getByRole: (_role: string, options?: { name?: RegExp }) =>
-      locator(String(options?.name ?? "")),
+      locator(String(options?.name ?? ""), { name: options?.name }),
     goto: async (target: string) => {
-      current = redirectTo ?? target;
+      current = scene.redirectTo ?? target;
       return {};
     },
     locator,
     reload: async () => ({}),
     url: () => current,
     waitForLoadState: async () => undefined,
-    waitForTimeout: async () => undefined,
+    waitForTimeout: async () => {
+      scene.tick = (scene.tick ?? 0) + 1;
+      if (
+        scene.revealAtTick !== undefined &&
+        scene.tick >= scene.revealAtTick
+      ) {
+        scene.visible = [...(scene.visible ?? []), 'input[type="password"]'];
+      }
+    },
+    waitForURL: async () => undefined,
   };
 }
 
-async function routeAgainst(page: Parameters<typeof stubPage>[0]) {
+async function routeAgainst(page: StubScene) {
   const code = workdayRouterCode(page.url);
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- runInThisContext compiles the snippet Kernel runs, so its type is only knowable here.
   const run = runInThisContext(`(page) => (async () => {${code}})()`) as (
@@ -308,7 +368,7 @@ describe("Kernel browser contract", () => {
       {} as never
     );
 
-    expect(mocks.executePlaywright).toHaveBeenCalledTimes(3);
+    expect(mocks.executePlaywright).toHaveBeenCalledTimes(4);
     expect(
       mocks.executePlaywright.mock.calls.map(([, input]) => input)
     ).toEqual(
@@ -317,6 +377,11 @@ describe("Kernel browser contract", () => {
         expect.objectContaining({ code: expect.stringContaining('"reload"') }),
         expect.objectContaining({
           code: expect.stringContaining("autofillWithResume"),
+        }),
+        expect.objectContaining({
+          code: workdayRestoreCode(
+            "https://tenant.myworkdayjobs.com/en-US/job/example"
+          ),
         }),
       ])
     );
@@ -479,7 +544,106 @@ describe("Kernel browser contract", () => {
     // shell was what produced traces with no observed actions at all.
     expect(code).toContain("hydration:ready");
     expect(code).toContain("budget:exhausted");
+    expect(code).toContain("inWallPhase");
+    expect(code).not.toContain("attempt < 6");
     // The create-account panel must never be reported as a fillable login form.
     expect(code).toContain("verifyPassword");
+  });
+
+  it("matches Apply Now without taking Apply with LinkedIn", () => {
+    expect(workdayApplyControlName.test("Apply")).toBe(true);
+    expect(workdayApplyControlName.test("Apply Now")).toBe(true);
+    expect(workdayApplyControlName.test("Apply for this job")).toBe(true);
+    expect(workdayApplyControlName.test("Apply with LinkedIn")).toBe(false);
+  });
+
+  it("opens Apply on the posting then signs in on the wall", async () => {
+    const scene: StubScene = {
+      dialog: { controls: [], roleNames: [], visible: false },
+      onClick: (selector) => {
+        if (selector.includes("adventureButton")) {
+          scene.dialog = {
+            controls: ["SignInWithEmailButton"],
+            roleNames: ["Sign in with email"],
+            visible: true,
+          };
+          scene.roleNames = [];
+          scene.visible = [];
+        }
+        if (selector.includes("SignInWithEmailButton")) {
+          scene.dialog = { controls: [], roleNames: [], visible: false };
+          scene.visible = ['input[type="password"]'];
+        }
+      },
+      roleNames: ["Apply Now"],
+      url: jobUrl,
+      visible: ["adventureButton"],
+    };
+
+    const state = await routeAgainst(scene);
+    expect(state).toMatchObject({
+      state: "email_login_ready",
+      trace: expect.arrayContaining([
+        "apply:adventure_button",
+        "email_route:automation_id",
+      ]),
+    });
+  });
+
+  it("scopes wall clicks to the dialog when it covers the posting Apply", async () => {
+    const scene: StubScene = {
+      clickFails: ["apply(?:\\s+now", "adventureButton"],
+      dialog: {
+        controls: ["SignInWithEmailButton"],
+        roleNames: ["Sign in with email"],
+        visible: true,
+      },
+      onClick: (selector, scopedToDialog) => {
+        if (scopedToDialog && selector.includes("SignInWithEmailButton")) {
+          scene.dialog = { controls: [], roleNames: [], visible: false };
+          scene.visible = ['input[type="password"]'];
+        }
+      },
+      roleNames: ["Apply Now"],
+      url: jobUrl,
+      visible: ["adventureButton"],
+    };
+
+    const state = await routeAgainst(scene);
+    expect(state).toMatchObject({
+      state: "email_login_ready",
+      trace: expect.arrayContaining(["email_route:automation_id"]),
+    });
+    expect(
+      (state as { trace?: string[] }).trace?.includes("apply:adventure_button")
+    ).toBe(false);
+    expect(
+      (state as { trace?: string[] }).trace?.includes("apply:button")
+    ).toBe(false);
+  });
+
+  it("does not click Apply with LinkedIn", async () => {
+    const state = await routeAgainst({
+      roleNames: ["Apply with LinkedIn"],
+      url: jobUrl,
+    });
+
+    expect(state).toMatchObject({ state: "route_incomplete" });
+    expect(state).toMatchObject({
+      trace: expect.not.arrayContaining(["apply:button", "apply:link"]),
+    });
+  });
+
+  it("keeps waiting on a slow tenant past the old six-attempt cap", async () => {
+    const state = await routeAgainst({
+      revealAtTick: 7,
+      url: jobUrl,
+      visible: [],
+    });
+
+    expect(state).toMatchObject({
+      state: "email_login_ready",
+      trace: expect.arrayContaining(["await:rerender"]),
+    });
   });
 });

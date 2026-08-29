@@ -26,12 +26,21 @@ export interface WorkdayRouteResult {
 }
 
 /**
+ * Matches Workday's Apply / Apply Now / Apply for this job labels without
+ * taking "Apply with LinkedIn" or other social apply controls.
+ */
+export const workdayApplyControlName =
+  /^apply(?:\s+now|\s+for this job)?$/i;
+
+/**
  * The router script must finish inside its own budget and return a structured
  * state. Kernel killing the execution instead yields no trace at all, which is
  * why the in-script deadline is shorter than the request timeout.
  */
 const routeBudgetMs = 55_000;
 export const workdayRouteTimeoutSec = 75;
+const maxRouteClicks = 8;
+const maxRouteIterations = 24;
 
 const routeStateRank: Record<WorkdayRouteState, number> = {
   email_login_ready: 5,
@@ -80,27 +89,60 @@ const deadline = Date.now() + ${JSON.stringify(routeBudgetMs)};
 const remaining = () => Math.max(0, deadline - Date.now());
 // Every wait is clamped to the budget so one slow step cannot starve the rest.
 const cap = (ms) => Math.max(250, Math.min(ms, remaining()));
+const applyName = ${workdayApplyControlName};
 const trace = [];
 const tried = new Set();
+const failedOnce = new Set();
 const availableActions = async () => page.locator("a, button").evaluateAll((nodes) => nodes
   .map((node) => (node.innerText || node.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim())
   .filter((label) => /apply|continue|sign in|create account/i.test(label))
   .slice(0, 12)
 ).catch(() => []);
 const visible = async (locator) => locator.first().isVisible().catch(() => false);
+const dialogLocator = () => page.locator('[role="dialog"], [aria-modal="true"]');
+const scopedRoot = async () => (await visible(dialogLocator()) ? dialogLocator() : page);
+const settleAfterClick = async () => {
+  const started = page.url();
+  // Workday is a SPA: domcontentloaded never fires on a view swap, so race a
+  // URL change or dialog appearance against a short timeout instead.
+  await Promise.race([
+    page.waitForURL((url) => String(url) !== started, { timeout: cap(1500) }).catch(() => undefined),
+    dialogLocator().first().waitFor({ state: "visible", timeout: cap(1500) }).catch(() => undefined),
+    page.waitForTimeout(cap(1500)),
+  ]);
+};
 const click = async (step, locator) => {
-  // A control that did not advance the page stays clicked; re-clicking it only
-  // burned the attempt budget and left the router reporting no progress.
+  // Only a click that actually landed is burned. An intercepted or timed-out
+  // click gets one retry; a success that did not advance still must not repeat.
   if (tried.has(step)) return false;
   if (!(await visible(locator))) return false;
-  tried.add(step);
   const clicked = await locator.first().click({ timeout: cap(5000) }).then(() => true).catch(() => false);
-  if (!clicked) return false;
-  await page.waitForLoadState("domcontentloaded", { timeout: cap(3000) }).catch(() => undefined);
+  if (!clicked) {
+    if (failedOnce.has(step)) tried.add(step);
+    else failedOnce.add(step);
+    return false;
+  }
+  tried.add(step);
+  await settleAfterClick();
   trace.push(step);
   return true;
 };
 const signupOnly = async () => visible(page.locator('input[data-automation-id="verifyPassword"], input[data-automation-id="verifyNewPassword"]'));
+const postingApplyVisible = async () => (
+  await visible(page.locator('a[data-automation-id="adventureButton"], button[data-automation-id="adventureButton"]'))
+  || await visible(page.locator('[data-automation-id="applyManually"]'))
+  || await visible(page.getByRole("button", { name: /^apply manually$/i }))
+  || await visible(page.getByRole("link", { name: /^apply manually$/i }))
+  || await visible(page.getByRole("button", { name: /^continue application$/i }))
+  || await visible(page.getByRole("link", { name: /^continue application$/i }))
+  || await visible(page.getByRole("button", { name: applyName }))
+  || await visible(page.getByRole("link", { name: applyName }))
+);
+const inWallPhase = async () => {
+  if (await visible(dialogLocator())) return true;
+  if (await signupOnly()) return true;
+  return !(await postingApplyVisible());
+};
 const jobsHost = new URL(applicationUrl).hostname;
 const offTenantOutage = (value) => {
   try {
@@ -148,8 +190,11 @@ trace.push(hydrated ? "hydration:ready" : "hydration:unconfirmed");
 // Cookie banners are optional and never determine whether routing succeeded.
 await click("cookie:accepted", page.getByRole("button", { name: /accept cookies|accept all/i })).catch(() => undefined);
 
+let clicks = 0;
+let iterations = 0;
 let waited = false;
-for (let attempt = 0; attempt < 6; attempt += 1) {
+while (clicks < ${JSON.stringify(maxRouteClicks)} && iterations < ${JSON.stringify(maxRouteIterations)}) {
+  iterations += 1;
   if (remaining() <= 2000) {
     trace.push("budget:exhausted");
     break;
@@ -157,32 +202,36 @@ for (let attempt = 0; attempt < 6; attempt += 1) {
   const state = await currentState();
   if (state) return state;
 
-  // The account wall can open on Create Account; switch it to the sign-in panel
-  // rather than reporting a form the vault must not fill.
-  if (await signupOnly()) {
-    if (await click("account_wall:sign_in_automation_id", page.locator('[data-automation-id="signInLink"]'))) continue;
-    if (await click("account_wall:sign_in_link", page.getByRole("link", { name: /^sign in$/i }))) continue;
-    if (await click("account_wall:sign_in_button", page.getByRole("button", { name: /^sign in$/i }))) continue;
+  const root = await scopedRoot();
+  let advanced = false;
+  if (await inWallPhase()) {
+    // Sign-in is preferred over create-account. Scope clicks to an open
+    // dialog so a posting Apply behind the modal cannot intercept them.
+    if (await click("email_route:automation_id", root.locator('button[data-automation-id="SignInWithEmailButton"]'))) advanced = true;
+    else if (await click("email_route:button", root.getByRole("button", { name: /^sign in with email(?: address)?$/i }))) advanced = true;
+    else if (await click("account_wall:sign_in_automation_id", root.locator('[data-automation-id="signInLink"]'))) advanced = true;
+    else if (await click("account_wall:sign_in_link", root.getByRole("link", { name: /^sign in$/i }))) advanced = true;
+    else if (await click("account_wall:sign_in_button", root.getByRole("button", { name: /^sign in$/i }))) advanced = true;
+  } else {
+    if (await click("continue_application:button", page.getByRole("button", { name: /^continue application$/i }))) advanced = true;
+    else if (await click("continue_application:link", page.getByRole("link", { name: /^continue application$/i }))) advanced = true;
+    else if (await click("apply_manually:automation_id", page.locator('[data-automation-id="applyManually"]'))) advanced = true;
+    else if (await click("apply_manually:button", page.getByRole("button", { name: /^apply manually$/i }))) advanced = true;
+    else if (await click("apply_manually:link", page.getByRole("link", { name: /^apply manually$/i }))) advanced = true;
+    else if (await click("apply:adventure_button", page.locator('a[data-automation-id="adventureButton"], button[data-automation-id="adventureButton"]'))) advanced = true;
+    else if (await click("apply:button", page.getByRole("button", { name: applyName }))) advanced = true;
+    else if (await click("apply:link", page.getByRole("link", { name: applyName }))) advanced = true;
+    else if (await click("sign_in:initial_button", page.getByRole("button", { name: /^sign in$/i }))) advanced = true;
+    else if (await click("sign_in:initial_link", page.getByRole("link", { name: /^sign in$/i }))) advanced = true;
   }
 
-  // This exact route avoids the unrelated global/header Sign In control.
-  if (await click("continue_application:button", page.getByRole("button", { name: /^continue application$/i }))) continue;
-  if (await click("continue_application:link", page.getByRole("link", { name: /^continue application$/i }))) continue;
-  if (await click("apply_manually:automation_id", page.locator('[data-automation-id="applyManually"]'))) continue;
-  if (await click("apply_manually:button", page.getByRole("button", { name: /^apply manually$/i }))) continue;
-  if (await click("apply_manually:link", page.getByRole("link", { name: /^apply manually$/i }))) continue;
-  if (await click("email_route:automation_id", page.locator('button[data-automation-id="SignInWithEmailButton"]'))) continue;
-  if (await click("email_route:button", page.getByRole("button", { name: /^sign in with email(?: address)?$/i }))) continue;
-  if (await click("apply:adventure_button", page.locator('a[data-automation-id="adventureButton"], button[data-automation-id="adventureButton"]'))) continue;
-  if (await click("apply:button", page.getByRole("button", { name: /^apply$/i }))) continue;
-  if (await click("apply:link", page.getByRole("link", { name: /^apply$/i }))) continue;
-  // Intapp sometimes exposes only this initial account entry point on a job page.
-  // This fallback runs after every concrete application control has been checked.
-  if (await click("sign_in:initial_button", page.getByRole("button", { name: /^sign in$/i }))) continue;
-  if (await click("sign_in:initial_link", page.getByRole("link", { name: /^sign in$/i }))) continue;
+  if (advanced) {
+    clicks += 1;
+    continue;
+  }
 
-  // Nothing matched. A slow tenant may still be rendering, so give the app one
-  // bounded chance to paint before declaring the route incomplete.
+  // Nothing matched. A slow tenant may still be rendering, so keep waiting
+  // against the budget instead of giving up after a fixed number of loops.
   if (remaining() > 4000) {
     if (!waited) trace.push("await:rerender");
     waited = true;
@@ -205,6 +254,10 @@ function workdayRouteUrl(
   const url = new URL(applicationUrl);
   url.pathname = `${url.pathname.replace(/\/$/u, "")}/apply/autofillWithResume`;
   return url.toString();
+}
+
+export function workdayRestoreCode(applicationUrl: string) {
+  return `await page.goto(${JSON.stringify(applicationUrl)}, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => undefined);`;
 }
 
 export function normalizeWorkdayRouteResult(

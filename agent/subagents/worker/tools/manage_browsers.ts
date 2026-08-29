@@ -20,6 +20,7 @@ import {
   isResolvedWorkdayRoute,
   isWorkdayApplicationUrl,
   normalizeWorkdayRouteResult,
+  workdayRestoreCode,
   workdayRouterCode,
   workdayRouteRank,
   workdayRouteStrategies,
@@ -92,12 +93,14 @@ export default defineTool({
           state: "created",
         });
         let workday: ReturnType<typeof normalizeWorkdayRouteResult> | undefined;
+        let attemptedAutofillPath = false;
         if (isWorkday && input.start_url) {
           console.info("[workday-router] browser created", {
             browser_session_id: browser.session_id,
             target: safeWorkdayLocation(input.start_url),
           });
           for (const [index, strategy] of workdayRouteStrategies.entries()) {
+            if (strategy === "autofill_path") attemptedAutofillPath = true;
             const attempt = index + 1;
             let candidate: ReturnType<typeof normalizeWorkdayRouteResult>;
             try {
@@ -162,6 +165,29 @@ export default defineTool({
               workday = candidate;
             }
             if (isResolvedWorkdayRoute(candidate.state)) break;
+          }
+          if (
+            attemptedAutofillPath &&
+            workday !== undefined &&
+            !isResolvedWorkdayRoute(workday.state)
+          ) {
+            try {
+              await kernel.browsers.playwright.execute(
+                browser.session_id,
+                {
+                  code: workdayRestoreCode(input.start_url),
+                  timeout_sec: 20,
+                },
+                { signal }
+              );
+            } catch (error) {
+              if (signal.aborted) throw error;
+              console.error("[workday-router] autofill path restore failed", {
+                browser_session_id: browser.session_id,
+                error_code: diagnosticErrorCode(error),
+                target: safeWorkdayLocation(input.start_url),
+              });
+            }
           }
         }
         return lifecycleResult(browser, workday);
@@ -348,6 +374,9 @@ function diagnosticErrorCode(error: unknown) {
   if (typeof error !== "string" && !(error instanceof Error)) return undefined;
   const message = typeof error === "string" ? error : error.message;
   if (/timeout/i.test(message)) return "timeout";
+  if (/407|proxy.*auth|wrong_password|auth failed/i.test(message)) {
+    return "proxy_auth";
+  }
   if (/chrome-error|net::/i.test(message)) return "navigation";
   if (/selector|locator/i.test(message)) return "selector";
   return "playwright_execution";
