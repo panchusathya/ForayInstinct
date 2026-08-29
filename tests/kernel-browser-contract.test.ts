@@ -141,6 +141,7 @@ describe("Kernel browser contract", () => {
       {
         start_url: undefined,
         stealth: true,
+        telemetry: { enabled: true },
         timeout_seconds: 900,
         viewport: undefined,
       },
@@ -159,6 +160,7 @@ describe("Kernel browser contract", () => {
       {
         start_url: undefined,
         stealth: true,
+        telemetry: { enabled: true },
         timeout_seconds: 900,
         viewport: undefined,
         proxy: { id: "proxy-us-residential" },

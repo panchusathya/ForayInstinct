@@ -8,14 +8,33 @@ const captchaKindSchema = z.enum([
   "turnstile",
 ]);
 
+const clickSchema = z.object({
+  kind: z.enum(["hcaptcha", "incapsula", "turnstile"]),
+  x: z.number(),
+  y: z.number(),
+});
+
+export const captchaInspectResultSchema = z.object({
+  clicked: clickSchema.optional(),
+  kernelDeclined: z.boolean(),
+  kernelMessages: z.array(z.string()),
+  kinds: z.array(captchaKindSchema),
+  token: z.boolean(),
+  url: z.string().optional(),
+});
+
+export const captchaSettleResultSchema = z.object({
+  challenge: z.boolean(),
+  kinds: z.array(captchaKindSchema),
+  token: z.boolean(),
+  url: z.string().optional(),
+});
+
 export const captchaSolveResultSchema = z.object({
-  clicked: z
-    .object({
-      kind: z.enum(["hcaptcha", "incapsula", "turnstile"]),
-      x: z.number(),
-      y: z.number(),
-    })
-    .optional(),
+  clicked: clickSchema.optional(),
+  clickSource: z.enum(["computer", "none"]).optional(),
+  kernelDeclined: z.boolean().optional(),
+  kernelMessages: z.array(z.string()).optional(),
   kinds: z.array(captchaKindSchema),
   state: z.enum([
     "already_solved",
@@ -28,15 +47,15 @@ export const captchaSolveResultSchema = z.object({
   url: z.string().optional(),
 });
 
-/**
- * Checkbox CAPTCHAs (hCaptcha, Imperva/Incapsula interstitials, uncleared
- * Turnstile) need a trusted CDP mouse event. Playwright locator clicks set
- * isTrusted=false and fail those widgets. Kernel's managed solver covers
- * reCAPTCHA and many Cloudflare challenges; this script is the checkbox
- * fallback after that wait.
- */
-export const captchaSolverCode = `
+const captchaHelpers = `
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const kernelMessages = [];
+page.on("console", (msg) => {
+  const text = String(msg.text() || "");
+  if (/hcaptcha|captcha|could not be solved/i.test(text)) {
+    kernelMessages.push(text.slice(0, 300));
+  }
+});
 
 const classify = (value) => {
   const haystack = String(value || "").toLowerCase();
@@ -113,47 +132,52 @@ const tokenPresent = async () => page.evaluate(() => {
   return [...nodes].some((node) => "value" in node && String(node.value || "").trim().length > 20);
 }).catch(() => false);
 
+const frameText = async () => {
+  const chunks = [];
+  for (const frame of page.frames()) {
+    const text = await frame.locator("body").innerText({ timeout: 1000 }).catch(() => "");
+    if (text) chunks.push(text);
+  }
+  return chunks.join("\\n");
+};
+
+const kernelDeclinedFrom = (value) =>
+  /visible hcaptcha could not be solved automatically/i.test(String(value || ""));
+
 const detect = async () => {
   const widgets = await collectWidgets(page);
   const kinds = [...new Set(widgets.map((widget) => widget.kind))];
-  return { kinds, token: await tokenPresent(), widgets };
+  const pageText = await frameText();
+  const kernelDeclined =
+    kernelDeclinedFrom(pageText) ||
+    kernelMessages.some((message) => kernelDeclinedFrom(message));
+  return {
+    kernelDeclined,
+    kernelMessages: kernelMessages.slice(-8),
+    kinds,
+    token: await tokenPresent(),
+    widgets,
+  };
 };
+`;
 
-const dispatchTrustedClick = async (x, y) => {
-  let session;
-  try {
-    session = await context.newCDPSession(page);
-    await session.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-    await sleep(40);
-    await session.send("Input.dispatchMouseEvent", {
-      button: "left",
-      clickCount: 1,
-      type: "mousePressed",
-      x,
-      y,
-    });
-    await sleep(32);
-    await session.send("Input.dispatchMouseEvent", {
-      button: "left",
-      clickCount: 1,
-      type: "mouseReleased",
-      x,
-      y,
-    });
-  } finally {
-    if (session) await session.detach().catch(() => undefined);
-  }
-};
-
+/**
+ * Kernel's default stealth solver covers reCAPTCHA and Cloudflare. Visible
+ * hCaptcha is a separate beta and, when it is not enabled, Kernel logs
+ * "visible hcaptcha could not be solved automatically" and leaves the widget.
+ * Inspect only locates the checkbox; the tool clicks with Kernel computer
+ * controls so the event is a trusted OS-level mouse action.
+ */
+export const captchaInspectCode = `${captchaHelpers}
 const before = await detect();
 if (before.token && !before.kinds.includes("hcaptcha_challenge")) {
-  return { kinds: before.kinds, state: "already_solved", url: page.url() };
-}
-if (before.widgets.length === 0) {
-  return { kinds: [], state: "not_found", url: page.url() };
-}
-if (before.kinds.includes("hcaptcha_challenge") && !before.kinds.includes("hcaptcha")) {
-  return { kinds: before.kinds, state: "challenge_required", url: page.url() };
+  return {
+    kernelDeclined: before.kernelDeclined,
+    kernelMessages: before.kernelMessages,
+    kinds: before.kinds,
+    token: true,
+    url: page.url(),
+  };
 }
 
 const checkbox = await checkboxBox();
@@ -163,7 +187,13 @@ const target =
   before.widgets.find((widget) => widget.kind === "turnstile") ??
   before.widgets.find((widget) => widget.kind === "incapsula");
 if (!target || target.kind === "hcaptcha_challenge") {
-  return { kinds: before.kinds, state: "challenge_required", url: page.url() };
+  return {
+    kernelDeclined: before.kernelDeclined,
+    kernelMessages: before.kernelMessages,
+    kinds: before.kinds,
+    token: false,
+    url: page.url(),
+  };
 }
 
 const point = checkbox
@@ -172,45 +202,50 @@ const point = checkbox
       y: Math.round(checkbox.box.y + checkbox.box.height / 2),
     }
   : clickPoint(target.box, target.kind);
-const clicked = { kind: target.kind, x: point.x, y: point.y };
+return {
+  clicked: { kind: target.kind, x: point.x, y: point.y },
+  kernelDeclined: before.kernelDeclined,
+  kernelMessages: before.kernelMessages,
+  kinds: before.kinds,
+  token: false,
+  url: page.url(),
+};
+`;
 
-try {
-  await dispatchTrustedClick(point.x, point.y);
-} catch {
-  await page.mouse.click(point.x, point.y, { delay: 32 });
-}
-
+export const captchaSettleCode = `${captchaHelpers}
 const deadline = Date.now() + 12000;
 while (Date.now() < deadline) {
   await page.waitForLoadState("domcontentloaded", { timeout: 2000 }).catch(() => undefined);
   const after = await detect();
   if (after.token || after.widgets.length === 0) {
-    return { clicked, kinds: after.kinds.length > 0 ? after.kinds : before.kinds, state: "solved", url: page.url() };
+    return { challenge: false, kinds: after.kinds, token: after.token || after.widgets.length === 0, url: page.url() };
   }
   if (after.kinds.includes("hcaptcha_challenge")) {
-    return { clicked, kinds: after.kinds, state: "challenge_required", url: page.url() };
+    return { challenge: true, kinds: after.kinds, token: false, url: page.url() };
   }
   await sleep(300);
 }
-
 const final = await detect();
 return {
-  clicked,
+  challenge: final.kinds.includes("hcaptcha_challenge"),
   kinds: final.kinds,
-  state: final.token || final.widgets.length === 0 ? "solved" : "unsolved",
+  token: final.token || final.widgets.length === 0,
   url: page.url(),
 };
 `;
 
-export function normalizeCaptchaSolveResult(
+export function normalizeCaptchaInspectResult(
   response: PlaywrightExecuteResponse
-): z.infer<typeof captchaSolveResultSchema> {
-  if (!response.success) {
-    return { kinds: [], state: "execution_failed" };
-  }
-  const parsed = captchaSolveResultSchema.safeParse(response.result);
-  if (!parsed.success) {
-    return { kinds: [], state: "execution_failed" };
-  }
-  return parsed.data;
+): z.infer<typeof captchaInspectResultSchema> | undefined {
+  if (!response.success) return undefined;
+  const parsed = captchaInspectResultSchema.safeParse(response.result);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function normalizeCaptchaSettleResult(
+  response: PlaywrightExecuteResponse
+): z.infer<typeof captchaSettleResultSchema> | undefined {
+  if (!response.success) return undefined;
+  const parsed = captchaSettleResultSchema.safeParse(response.result);
+  return parsed.success ? parsed.data : undefined;
 }
