@@ -1,7 +1,14 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { db, goforayConversations, goforayLinks } from "@/db";
+import {
+  db,
+  goforayConversations,
+  goforayLinks,
+  goforayPresentedPostings,
+  goforaySyncOutbox,
+  user,
+} from "@/db";
 import { env } from "@/lib/env";
 import type { AccessScope } from "@/lib/access-scope";
 import { searchExaRoles, type ExaRoleCard } from "./exa";
@@ -159,9 +166,11 @@ export function verifyBridgeToken(
 export async function linkCandidate({
   userId,
   identities,
+  name = "",
 }: {
   userId: string;
   identities: Identity[];
+  name?: string;
 }) {
   const { apiUrl } = configured();
   const email =
@@ -182,6 +191,7 @@ export async function linkCandidate({
       },
       body: JSON.stringify({
         external_user_id: externalUserId(userId),
+        name,
         email,
         phone,
       }),
@@ -316,16 +326,53 @@ export async function goforayJobFeed(
     query = "",
     location = "",
     limit = 5,
-  }: { query?: string; location?: string; limit?: number } = {}
+    excludePostingIds = [],
+  }: {
+    query?: string;
+    location?: string;
+    limit?: number;
+    excludePostingIds?: string[];
+  } = {}
 ) {
   const params = new URLSearchParams({
     q: query,
     location,
     limit: String(limit),
   });
+  for (const postingId of excludePostingIds.slice(0, 100)) {
+    params.append("exclude_posting_id", postingId);
+  }
   return jobFeedSchema.parse(
     await juiceboxRequest(scope, `/v1/internal/openinstinct/job-feed?${params}`)
   );
+}
+
+/** Candidate-authorized PNG from JuiceBox's canonical job-card renderer. */
+export async function goforayJobCardPng(
+  scope: AccessScope,
+  postingId: string,
+  index: number,
+  total: number
+) {
+  const link = await linkedCandidate(scope);
+  if (!link)
+    throw new Error("Link your GoForay account before loading a job card.");
+  const { apiUrl } = configured();
+  const response = await fetch(
+    `${apiUrl}/v1/internal/openinstinct/job-cards/${encodeURIComponent(postingId)}?index=${index}&total=${total}`,
+    {
+      headers: {
+        Authorization: `Bearer ${createBridgeToken({
+          audience: juiceboxAudience,
+          subject: externalUserId(scope.userId),
+          orgId: link.orgId,
+          candidateId: link.candidateId,
+        })}`,
+      },
+    }
+  );
+  if (!response.ok) throw new Error("JuiceBox job card is unavailable.");
+  return Buffer.from(await response.arrayBuffer());
 }
 
 /**
@@ -343,7 +390,10 @@ export async function findGoforayRoles(
   const limit = input.limit ?? 5;
   try {
     const feed = await goforayJobFeed(scope, { ...input, limit });
-    if (feed.cards.length) return { ...feed, source: "juicebox" };
+    if (feed.cards.length) {
+      await rememberPresentedRoles(scope, feed.cards);
+      return { ...feed, source: "juicebox" };
+    }
   } catch {
     // A new candidate has no JuiceBox link yet; public discovery can still help.
   }
@@ -482,6 +532,7 @@ export async function recordConversationMessage({
   channel,
   direction,
   body,
+  sourceMessageId,
   url = "",
 }: {
   scope: AccessScope;
@@ -489,38 +540,185 @@ export async function recordConversationMessage({
   channel: string;
   direction: "inbound" | "outbound";
   body: string;
+  /** Stable channel/provider id. Required for retry-safe mirroring. */
+  sourceMessageId?: string;
   url?: string;
 }) {
   const link = await linkedCandidate(scope);
-  if (!link || !body.trim()) return;
+  if (!body.trim()) return;
   const existing = await db.query.goforayConversations.findFirst({
     where: eq(goforayConversations.id, conversationId),
   });
   const entry = {
-    id: randomUUID(),
+    id: sourceMessageId?.slice(0, 300) || randomUUID(),
     direction,
     body: body.slice(0, 20_000),
     created_at: new Date().toISOString(),
   };
+  const alreadyRecorded = existing?.messages.some(
+    (message) => message.id === entry.id
+  );
   if (!existing) {
     await db.insert(goforayConversations).values({
       id: conversationId,
       userId: authUserId(scope.userId),
-      candidateId: link.candidateId,
+      candidateId: link?.candidateId,
       channel,
       url,
       messages: [entry],
     });
-    return;
+  } else if (!alreadyRecorded) {
+    await db
+      .update(goforayConversations)
+      .set({
+        messages: [...existing.messages, entry],
+        updatedAt: new Date(),
+        ...(url ? { url } : {}),
+      })
+      .where(eq(goforayConversations.id, conversationId));
   }
   await db
-    .update(goforayConversations)
-    .set({
-      messages: [...existing.messages, entry],
-      updatedAt: new Date(),
-      ...(url ? { url } : {}),
+    .insert(goforaySyncOutbox)
+    .values({
+      id: entry.id,
+      userId: authUserId(scope.userId),
+      candidateId: link?.candidateId,
+      conversationId,
+      channel,
+      direction,
+      body: entry.body,
     })
-    .where(eq(goforayConversations.id, conversationId));
+    .onConflictDoNothing();
+  // The local conversation and outbox are committed before the bridge call.
+  // Do not make a web or iMessage reply wait for JuiceBox to be reachable.
+  void syncConversationEvent(entry.id);
+}
+
+async function candidateProfile(userId: string) {
+  const account = await db.query.user.findFirst({ where: eq(user.id, userId) });
+  if (!account) return { name: "", identities: [] as Identity[] };
+  const identities: Identity[] = [];
+  if (account.emailVerified && account.email) {
+    identities.push({ kind: "email", value: account.email, verified: true });
+  }
+  if (account.phoneNumberVerified && account.phoneNumber) {
+    identities.push({
+      kind: "phone",
+      value: account.phoneNumber,
+      verified: true,
+    });
+  }
+  return { name: account.name, identities };
+}
+
+async function syncConversationEvent(id: string) {
+  const item = await db.query.goforaySyncOutbox.findFirst({
+    where: eq(goforaySyncOutbox.id, id),
+  });
+  if (!item || item.sentAt) return;
+  try {
+    const profile = await candidateProfile(item.userId);
+    if (!profile.identities.length)
+      throw new Error("No verified candidate identity available.");
+    const { apiUrl } = configured();
+    const response = await fetch(
+      `${apiUrl}/v1/internal/openinstinct/conversation-events`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${createBridgeToken({
+            audience: juiceboxAudience,
+            subject: externalUserId(item.userId),
+            ...(item.candidateId ? { candidateId: item.candidateId } : {}),
+            identities: profile.identities,
+          })}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          conversation_id: item.conversationId,
+          provider_native_id: item.id,
+          direction: item.direction,
+          body: item.body,
+          channel: item.channel,
+          display_name: profile.name,
+        }),
+      }
+    );
+    if (!response.ok) {
+      const payload = bridgeErrorResponseSchema.safeParse(
+        await response.json()
+      ).data;
+      throw new Error(
+        payload?.detail ?? `JuiceBox mirror failed (${response.status}).`
+      );
+    }
+    await db
+      .update(goforaySyncOutbox)
+      .set({
+        sentAt: new Date(),
+        lastError: "",
+        attempts: sql`${goforaySyncOutbox.attempts} + 1`,
+      })
+      .where(eq(goforaySyncOutbox.id, item.id));
+  } catch (error) {
+    await db
+      .update(goforaySyncOutbox)
+      .set({
+        attempts: sql`${goforaySyncOutbox.attempts} + 1`,
+        lastError:
+          error instanceof Error
+            ? error.message.slice(0, 1_000)
+            : "JuiceBox mirror failed.",
+      })
+      .where(eq(goforaySyncOutbox.id, item.id));
+  }
+}
+
+/** Fresh, curated roles after a candidate starts an application. Never falls back to Exa. */
+export async function nextGoforayRoles(scope: AccessScope, limit = 5) {
+  const userId = authUserId(scope.userId);
+  const shown = await db
+    .select({ postingId: goforayPresentedPostings.postingId })
+    .from(goforayPresentedPostings)
+    .where(eq(goforayPresentedPostings.userId, userId))
+    .orderBy(desc(goforayPresentedPostings.createdAt))
+    .limit(100);
+  const feed = await goforayJobFeed(scope, {
+    limit: Math.min(limit, 5),
+    excludePostingIds: shown.map((row) => row.postingId),
+  });
+  await rememberPresentedRoles(scope, feed.cards);
+  return feed;
+}
+
+async function rememberPresentedRoles(
+  scope: AccessScope,
+  cards: z.infer<typeof jobFeedSchema>["cards"]
+) {
+  const userId = authUserId(scope.userId);
+  await Promise.all(
+    cards.map((card) =>
+      db
+        .insert(goforayPresentedPostings)
+        .values({
+          id: `${userId}:${card.posting_id}`,
+          userId,
+          postingId: card.posting_id,
+        })
+        .onConflictDoNothing()
+    )
+  );
+}
+
+/** Retry durable conversation events without delaying an active candidate turn. */
+export async function flushConversationSyncOutbox(limit = 50) {
+  const rows = await db
+    .select({ id: goforaySyncOutbox.id })
+    .from(goforaySyncOutbox)
+    .where(isNull(goforaySyncOutbox.sentAt))
+    .orderBy(asc(goforaySyncOutbox.createdAt))
+    .limit(limit);
+  await Promise.all(rows.map((row) => syncConversationEvent(row.id)));
 }
 
 export async function conversationsForCandidate(candidateId: string) {

@@ -24,13 +24,23 @@ export default defineHook({
         sessionId: ctx.session.id,
       });
       if (typeof event.data?.message === "string") {
-        await recordWebMessage(ctx, "inbound", event.data.message);
+        await recordWebMessage(
+          ctx,
+          "inbound",
+          event.data.message,
+          event.meta.id
+        );
       }
     },
     async "message.completed"(event, ctx) {
       if (event.data.finishReason === "tool-calls" || !event.data.message)
         return;
-      await recordWebMessage(ctx, "outbound", event.data.message);
+      await recordWebMessage(
+        ctx,
+        "outbound",
+        event.data.message,
+        event.meta.id
+      );
     },
   },
 });
@@ -38,7 +48,8 @@ export default defineHook({
 async function recordWebMessage(
   ctx: HookContext,
   direction: "inbound" | "outbound",
-  body: string
+  body: string,
+  sourceMessageId: string
 ) {
   const initiator = ctx.session.auth.initiator;
   // Linq uses the shared Chat SDK channel, whose runtime kind is `chat-sdk`
@@ -55,6 +66,7 @@ async function recordWebMessage(
       channel: "web",
       direction,
       body,
+      sourceMessageId,
       url: new URL(
         `/chat/${encodeURIComponent(ctx.session.id)}`,
         env.BETTER_AUTH_URL

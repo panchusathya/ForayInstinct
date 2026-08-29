@@ -1,23 +1,23 @@
 /* oxlint-disable typescript/no-unsafe-type-assertion -- Eve's Linq adapter exposes the handler context through a transitive Chat SDK `any`; the fixture supplies only the fields exercised here. */
-import type * as LinqModule from "eve/channels/linq";
+import type { chatSdkChannel } from "eve/channels/chat-sdk";
 import { describe, expect, it, vi } from "vitest";
 import workerCancellationHook from "../agent/hooks/worker-cancellation-delivery";
 
-const linqChannelCapture = vi.hoisted(() => ({ config: undefined as unknown }));
-vi.mock("eve/channels/linq", async (importOriginal) => {
-  const original = await importOriginal<typeof LinqModule>();
-  return {
-    ...original,
-    linqChannel(config: unknown) {
-      linqChannelCapture.config = config;
-      return config;
-    },
-  };
-});
+const channelCapture = vi.hoisted(() => ({ config: undefined as unknown }));
+vi.mock("eve/channels/chat-sdk", () => ({
+  chatSdkChannel(config: unknown) {
+    channelCapture.config = config;
+    return {
+      bot: { onDirectMessage: vi.fn(), onNewMessage: vi.fn() },
+      channel: {},
+      send: vi.fn(),
+    };
+  },
+}));
 await import("../agent/channels/linq-v2");
 
 const channelEvents = (
-  linqChannelCapture.config as LinqModule.LinqChannelConfig
+  channelCapture.config as Parameters<typeof chatSdkChannel>[0]
 ).events;
 const trackWorkerCancellation = channelEvents?.["action.result"];
 const deliverCompletedMessage = channelEvents?.["message.completed"];
@@ -43,10 +43,12 @@ describe("Linq message delivery", () => {
       sessionContext()
     );
 
-    expect(post).toHaveBeenCalledExactlyOnceWith({ markdown: message });
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      markdown: message.toLowerCase(),
+    });
   });
 
-  it("suppresses intermediate tool-call messages", async () => {
+  it("suppresses intermediate tool-call messages without a generic reaction", async () => {
     const { addReaction, context, post, state } = handlerContext();
 
     await deliverCompletedMessage(
@@ -59,11 +61,7 @@ describe("Linq message delivery", () => {
     );
 
     expect(post).not.toHaveBeenCalled();
-    expect(addReaction).toHaveBeenCalledExactlyOnceWith(
-      "linq:dm:chat-1",
-      "message-1",
-      "thumbs_up"
-    );
+    expect(addReaction).not.toHaveBeenCalled();
     expect(state.pendingToolCallMessage).toBe("Checking the checkout");
   });
 
@@ -113,9 +111,9 @@ describe("Linq message delivery", () => {
 
     expect(post).toHaveBeenCalledTimes(2);
     expect(post).toHaveBeenNthCalledWith(1, {
-      markdown: "What should I check instead?",
+      markdown: "what should i check instead?",
     });
-    expect(post).toHaveBeenNthCalledWith(2, { markdown: "A later reply" });
+    expect(post).toHaveBeenNthCalledWith(2, { markdown: "a later reply" });
   });
 
   it("does not suppress an interleaved task result", async () => {
@@ -149,7 +147,7 @@ describe("Linq message delivery", () => {
     );
 
     expect(post).toHaveBeenCalledExactlyOnceWith({
-      markdown: "A different worker completed successfully.",
+      markdown: "a different worker completed successfully.",
     });
   });
 
@@ -177,7 +175,7 @@ describe("Linq message delivery", () => {
     );
 
     expect(newer.post).toHaveBeenCalledExactlyOnceWith({
-      markdown: "User-authored follow-up",
+      markdown: "user-authored follow-up",
     });
   });
 

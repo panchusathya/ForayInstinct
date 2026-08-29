@@ -43,6 +43,20 @@
       "when": 1787969200000,
       "tag": "0005_browser_run_checkpoints",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788040000000,
+      "tag": "0006_goforay_sync_outbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788040100000,
+      "tag": "0007_goforay_unlinked_outbox",
+      "breakpoints": true
     }
   ]
 }
