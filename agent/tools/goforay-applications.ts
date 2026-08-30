@@ -26,7 +26,7 @@ export default defineDynamic({
       return {
         find_goforay_roles: defineTool({
           description:
-            "Immediately find roles whenever the user asks to find roles, show openings, or suggest jobs. This is JuiceBox's job book: curated matches first, and if the book is empty JuiceBox queues the same Exa discovery the messaging bot uses. Never search Exa yourself and never call web_search for this. Present cards to the user as short bullets only when the channel did not already deliver them; never paste this object. If `searching` is true and cards are empty, say JuiceBox is looking now. If `unavailable` is set, say role search is down.",
+            "Immediately find roles whenever the user asks to find roles, show openings, or suggest jobs. This is JuiceBox's job book: curated matches first, and if the book is empty JuiceBox queues the same Exa discovery the messaging bot uses. Never search Exa yourself and never call web_search for this. Present cards to the user as short bullets only when the channel did not already deliver them; never paste this object. If `searching` is true and cards are empty, say JuiceBox is looking now. If discovery is empty, say no matching opening is available right now. If `unavailable` is set, say role search is down and preserve its reason.",
           inputSchema: z.object({
             query: z.string().max(120).optional(),
             location: z.string().max(120).optional(),

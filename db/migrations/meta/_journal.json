@@ -85,6 +85,27 @@
       "when": 1788040500000,
       "tag": "0011_candidate_documents",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788050000000,
+      "tag": "0012_phone_workspaces",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788050100000,
+      "tag": "0013_pending_role_searches",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1788050200000,
+      "tag": "0014_phone_conversation_sync",
+      "breakpoints": true
     }
   ]
 }

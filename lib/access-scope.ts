@@ -29,6 +29,23 @@ export function accessScopeForUser(userId: string): AccessScope {
   };
 }
 
+/**
+ * A phone is the candidate's durable identity across iMessage and the web.
+ * Keep the value out of both database ids and logs: only its stable digest is
+ * ever persisted as the workspace/user id.
+ */
+export function accessScopeForPhone(phoneNumber: string): AccessScope {
+  const normalizedPhoneNumber = phoneNumber.trim();
+  if (!/^\+[1-9]\d{6,14}$/u.test(normalizedPhoneNumber)) {
+    throw new Error("A normalized phone number is required.");
+  }
+  const digest = createHash("sha256")
+    .update(normalizedPhoneNumber)
+    .digest("hex")
+    .slice(0, 32);
+  return { userId: `phone:${digest}`, workspaceId: `phone:${digest}` };
+}
+
 export function scopeFromPrincipal(
   input: SessionAuthContext | Extract<ConnectionPrincipal, { type: "user" }>
 ) {

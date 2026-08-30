@@ -7,7 +7,13 @@ import type { Message, Thread } from "chat";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
-import { accessScopeForUser, scopeFromPrincipal } from "@/lib/access-scope";
+import {
+  accessScopeForPhone,
+  accessScopeForUser,
+  scopeFromPrincipal,
+} from "@/lib/access-scope";
+import { adoptLegacyWorkspace } from "@/db/services/adopt-legacy-workspace";
+import { rememberLinqRoleSearchThread } from "@/db/services/pending-role-searches";
 import { env } from "@/lib/env";
 import { formatCandidateDelivery } from "@/lib/goforay/delivery";
 import {
@@ -258,6 +264,7 @@ bot.onDirectMessage(dispatchLinqMessage);
 bot.onNewMessage(/[\s\S]/u, dispatchLinqMessage);
 
 export default channel;
+export { channel };
 
 function linqAdapterConfig(): Parameters<typeof createLinqAdapter>[0] {
   const apiKey = env.LINQ_API_KEY;
@@ -285,7 +292,7 @@ function linqAdapterConfig(): Parameters<typeof createLinqAdapter>[0] {
 async function dispatchLinqMessage(thread: Thread, message: Message) {
   if (message.author.isBot) return;
 
-  const inbound = await prepareInboundMessage(message);
+  const inbound = await prepareInboundMessage(message, thread.id);
 
   try {
     await bot.getAdapter("linq").markRead(thread.id, message.id);
@@ -302,7 +309,7 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
   );
 }
 
-async function prepareInboundMessage(message: Message) {
+async function prepareInboundMessage(message: Message, threadId: string) {
   const auth = defaultLinqAuth(message);
   const authorUserName: unknown = message.author.userName;
   const phoneNumber =
@@ -312,14 +319,27 @@ async function prepareInboundMessage(message: Message) {
   const verifiedUser = phoneNumber
     ? await findVerifiedAuthUserIdByPhoneNumber(phoneNumber)
     : undefined;
-  if (verifiedUser && phoneNumber) {
+  const legacyScope = accessScopeForUser(auth.principalId);
+  // A Linq text is possession of the phone number. Do not split storage based
+  // on whether the optional web account happened to be found this turn.
+  const scope = phoneNumber ? accessScopeForPhone(phoneNumber) : legacyScope;
+  if (phoneNumber) {
+    await adoptLegacyWorkspace(scope, [
+      legacyScope,
+      ...(verifiedUser
+        ? [accessScopeForUser(`better-auth:${verifiedUser.id}`)]
+        : []),
+    ]);
+  }
+  await rememberLinqRoleSearchThread(scope, threadId, phoneNumber);
+  if (phoneNumber) {
     try {
       await linkCandidate({
-        userId: verifiedUser.id,
-        name: verifiedUser.name ?? "",
+        scope,
+        name: verifiedUser?.name ?? "",
         identities: [
           { kind: "phone", value: phoneNumber, verified: true },
-          ...(verifiedUser.emailVerified && verifiedUser.email
+          ...(verifiedUser?.emailVerified && verifiedUser.email
             ? [
                 {
                   kind: "email" as const,
@@ -334,10 +354,6 @@ async function prepareInboundMessage(message: Message) {
       // A missing or ambiguous CRM candidate must not block a normal text.
     }
   }
-  const principalId = verifiedUser
-    ? `better-auth:${verifiedUser.id}`
-    : auth.principalId;
-  const scope = accessScopeForUser(principalId);
   const importedResumes = await importLinqResumes(message, scope);
   const body = messageText(message);
   if (body) {
@@ -353,9 +369,14 @@ async function prepareInboundMessage(message: Message) {
   return {
     context: [
       CURRENT_FORAY_POLICY,
-      ...(importedResumes.length
+      ...(importedResumes.uploaded.length
         ? [
-            `The candidate attached a document. It is stored in this workspace (${importedResumes.join(", ")}). Use it for applications and do not ask them to upload it again or expose the file contents.`,
+            `The candidate attached a document. It is stored in this workspace (${importedResumes.uploaded.join(", ")}). Use it for applications and do not ask them to upload it again or expose the file contents.`,
+          ]
+        : []),
+      ...(importedResumes.failures.length
+        ? [
+            `A resume attachment could not be stored: ${importedResumes.failures.join("; ")}. Explain the exact attachment problem and ask the candidate to resend it once; do not claim that a previously stored resume is missing.`,
           ]
         : []),
     ],
@@ -365,7 +386,7 @@ async function prepareInboundMessage(message: Message) {
         ...auth.attributes,
         workspaceId: scope.workspaceId,
       },
-      principalId,
+      principalId: auth.principalId,
     },
   };
 }
@@ -408,9 +429,10 @@ async function importLinqResumes(
   scope: ReturnType<typeof accessScopeForUser>
 ) {
   const parsed = linqAttachmentSchema.safeParse(message);
-  if (!parsed.success) return [];
+  if (!parsed.success) return { uploaded: [], failures: [] };
 
   const uploaded: string[] = [];
+  const failures: string[] = [];
   for (const attachment of parsed.data.attachments ?? []) {
     const filename = attachment.name ?? filenameFromUrl(attachment.url);
     const mimeType = attachment.mimeType ?? "";
@@ -418,7 +440,10 @@ async function importLinqResumes(
 
     try {
       const response = await fetch(attachment.url);
-      if (!response.ok) continue;
+      if (!response.ok) {
+        failures.push(`${filename}: download failed (${response.status})`);
+        continue;
+      }
       const bytes = Buffer.from(await response.arrayBuffer());
       const result = await saveCandidateDocument(scope, {
         bytes,
@@ -429,13 +454,19 @@ async function importLinqResumes(
         source: "linq",
       });
       uploaded.push(result.document.filename);
-    } catch {
-      // A malformed or expired attachment cannot interrupt the conversation.
-      // The model still sees the normal attachment marker and can ask once for
-      // a fresh PDF/DOCX if the candidate meant to provide a resume.
+    } catch (error) {
+      failures.push(
+        `${filename}: ${error instanceof Error ? error.message : "import failed"}`
+      );
     }
   }
-  return uploaded;
+  if (failures.length) {
+    console.warn("[linq-resume] attachment import failed", {
+      failures: failures.map((failure) => failure.slice(0, 300)),
+      workspaceId: scope.workspaceId,
+    });
+  }
+  return { uploaded, failures };
 }
 
 function isResumeAttachment(filename: string, mimeType: string) {
