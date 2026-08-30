@@ -70,6 +70,27 @@ export async function searchGmail(
   });
 }
 
+export async function downloadGmailAttachment(
+  ctx: ToolContext,
+  messageId: string,
+  attachmentId: string
+) {
+  return withGmail(ctx, async (client) => {
+    const { data } = await client.users.messages.attachments.get(
+      {
+        id: attachmentId,
+        messageId,
+        userId: "me",
+      },
+      { signal: ctx.abortSignal }
+    );
+    if (!data.data) {
+      throw new Error("Gmail did not return that attachment.");
+    }
+    return Buffer.from(data.data, "base64url");
+  });
+}
+
 export async function readGmailThread(ctx: ToolContext, threadId: string) {
   return withGmail(ctx, async (client) => {
     const { data: thread } = await client.users.threads.get(

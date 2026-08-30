@@ -22,6 +22,10 @@ import {
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import {
+  inferCandidateDocumentKind,
+  isCandidateDocumentFile,
+} from "@/lib/candidate-documents";
 import { summarizeChatUsage } from "@/app/_lib/chat-usage";
 import { getLatestTurnFailure } from "@/app/_lib/turn-failure";
 import { useDurableEveSession } from "@/app/_hooks/use-durable-eve-session";
@@ -201,13 +205,15 @@ export function AgentChat({
       pendingChatTitle.current = title;
     }
 
-    const resumeFiles = message.files.filter(isResumeFile);
-    const otherFiles = message.files.filter((file) => !isResumeFile(file));
+    const resumeFiles = message.files.filter(isWorkspaceDocumentFile);
+    const otherFiles = message.files.filter(
+      (file) => !isWorkspaceDocumentFile(file)
+    );
     let resumeNotice = "";
     if (resumeFiles.length) {
       try {
         const uploads = await Promise.all(resumeFiles.map(uploadResume));
-        resumeNotice = `Resume upload accepted (${uploads.map((upload) => upload.filename).join(", ")}). It is being parsed in your GoForay profile; do not ask the candidate to upload it again.`;
+        resumeNotice = `Resume saved to this workspace (${uploads.map((upload) => upload.filename).join(", ")}). It is the default application file; do not ask the candidate to upload it again.`;
       } catch (error) {
         setCancellationError(toErrorMessage(error));
         return;
@@ -336,17 +342,12 @@ export function AgentChat({
   );
 }
 
-function isResumeFile(file: PromptInputMessage["files"][number]) {
-  return (
-    file.mediaType === "application/pdf" ||
-    file.mediaType ===
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-    /\.(pdf|docx)$/iu.test(file.filename ?? "")
-  );
+function isWorkspaceDocumentFile(file: PromptInputMessage["files"][number]) {
+  return isCandidateDocumentFile(file.filename ?? "", file.mediaType ?? "");
 }
 
 async function uploadResume(file: PromptInputMessage["files"][number]) {
-  const response = await fetch("/api/goforay/resume", {
+  const response = await fetch("/api/documents", {
     body: await resumeFormData(file),
     method: "POST",
   });
@@ -382,6 +383,8 @@ async function resumeFormData(file: PromptInputMessage["files"][number]) {
       type: file.mediaType,
     })
   );
+  form.set("kind", inferCandidateDocumentKind(file.filename ?? "resume"));
+  form.set("setDefault", "true");
   return form;
 }
 
