@@ -1,5 +1,5 @@
 import { headers } from "next/headers";
-import { auth } from "@/auth";
+import { getAuthSession } from "@/auth/session";
 import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
 import { accessScopeForPhone } from "@/lib/access-scope";
 import { linkCandidate } from "@/lib/goforay/bridge";
@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 
 /** Links this signed-in candidate to one JuiceBox candidate by verified contact. */
 export async function POST() {
-  const session = await auth.api.getSession({ headers: await headers() });
+  const session = await getAuthSession(await headers());
   if (!session)
     return Response.json({ error: "Sign in to continue." }, { status: 401 });
 

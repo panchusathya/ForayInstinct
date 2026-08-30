@@ -45,6 +45,11 @@ export default defineTool({
         { cause: error }
       );
     }
+    if (!document) {
+      throw new Error(
+        "No resume is on file in this workspace. Ask the candidate to attach a PDF or DOCX, or save one from Gmail."
+      );
+    }
     const filename = safeFilename(document.filename);
     const path = `/tmp/goforay-default-resume-${filename}`;
     await kernel.browsers.fs.writeFile(input.session_id, document.bytes, {

@@ -265,5 +265,16 @@ describe("self-hosted manager", () => {
         })
       )
     ).toBe(false);
+    expect(
+      isSameOrigin(
+        new Request("http://internal.example:3000/api/manager", {
+          headers: {
+            host: "internal.example:3000",
+            "x-forwarded-host": "assistant.example.com",
+            "x-forwarded-proto": "https",
+          },
+        })
+      )
+    ).toBe(false);
   });
 });

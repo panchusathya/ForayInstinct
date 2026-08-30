@@ -11,7 +11,15 @@ import {
   candidateDocuments,
   candidateProfiles,
   chats,
+  chatStateLocks,
+  chatStateQueue,
+  chatStateSubscriptions,
+  chatStateValues,
   encryptedSecrets,
+  goforayConversations,
+  goforayLinks,
+  goforayPresentedPostings,
+  goforaySyncOutbox,
   session,
   settings,
   user,
@@ -62,6 +70,30 @@ describe("database schema", () => {
       "session",
       "account",
       "verification",
+    ]);
+  });
+
+  it("owns the GoForay bridge and Chat SDK state tables", () => {
+    expect(
+      [
+        goforayLinks,
+        goforayConversations,
+        goforaySyncOutbox,
+        goforayPresentedPostings,
+        chatStateSubscriptions,
+        chatStateLocks,
+        chatStateValues,
+        chatStateQueue,
+      ].map((table) => getTableConfig(table).name)
+    ).toEqual([
+      "goforay_links",
+      "goforay_conversations",
+      "goforay_sync_outbox",
+      "goforay_presented_postings",
+      "chat_state_subscriptions",
+      "chat_state_locks",
+      "chat_state_values",
+      "chat_state_queue",
     ]);
   });
 

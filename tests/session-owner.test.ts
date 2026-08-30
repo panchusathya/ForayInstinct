@@ -112,4 +112,20 @@ describe("session ownership hook", () => {
       error
     );
   });
+
+  it("claims the session as soon as it starts", async () => {
+    const handler = sessionOwner.events?.["session.started"];
+    expect(handler).toBeDefined();
+
+    // oxlint-disable typescript/no-unsafe-type-assertion -- The handler only
+    // reads the session identity fields supplied by this focused unit test.
+    await handler?.(
+      {} as Parameters<NonNullable<typeof handler>>[0],
+      context as unknown as Parameters<NonNullable<typeof handler>>[1]
+    );
+    // oxlint-enable typescript/no-unsafe-type-assertion
+
+    expect(mocks.ensureScope).toHaveBeenCalledWith(scope);
+    expect(mocks.claimSession).toHaveBeenCalledWith(scope, "session-1");
+  });
 });

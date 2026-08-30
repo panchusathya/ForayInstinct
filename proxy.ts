@@ -1,17 +1,20 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getAuthSession } from "@/auth/session";
 
-export async function proxy(request: NextRequest) {
-  const pathname = request.nextUrl.pathname;
-  if (
+/** Cookie-free entrypoints. Each handler still enforces its own credential. */
+export function isPublicPath(pathname: string) {
+  return (
     pathname === "/sign-in" ||
     pathname.startsWith("/api/auth/") ||
-    pathname === "/eve/v1/health" ||
-    // These are authenticated by their own webhook signature or bridge JWT,
-    // not a browser session. The proxy must let them reach those handlers.
-    pathname === "/eve/v1/linq" ||
+    // Eve service routes authenticate their own signed webhook requests.
+    pathname.startsWith("/eve/v1/") ||
     pathname === "/api/goforay/conversations"
-  ) {
+  );
+}
+
+export async function proxy(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+  if (isPublicPath(pathname)) {
     return NextResponse.next();
   }
 
