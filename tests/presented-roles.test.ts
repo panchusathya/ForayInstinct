@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { accessScopeForUser, type AccessScope } from "@/lib/access-scope";
 import type { GoForayJobCard } from "@/lib/goforay/job-cards";
 import { resolvePresentedRole } from "@/lib/goforay/presented-roles";
 
@@ -21,7 +22,13 @@ const cards: GoForayJobCard[] = [
 ];
 
 const juiceboxMocks = vi.hoisted(() => ({
-  createApplicationTask: vi.fn(),
+  createApplicationTask:
+    vi.fn<
+      (
+        scope: AccessScope,
+        postingId: string
+      ) => Promise<{ apply_url: string; id: string }>
+    >(),
 }));
 
 vi.mock("@/lib/goforay/bridge", () => ({
@@ -66,18 +73,19 @@ describe("presented role resolution", () => {
   });
 });
 
+const scope = accessScopeForUser("candidate");
+
 describe("start presented application", () => {
   afterEach(() => {
     juiceboxMocks.createApplicationTask.mockReset();
   });
 
   it("returns the Exa apply URL without creating a JuiceBox task", async () => {
-    const { startPresentedApplication } = await import(
-      "@/lib/goforay/start-application"
-    );
+    const { startPresentedApplication } =
+      await import("@/lib/goforay/start-application");
 
     const result = await startPresentedApplication(
-      { kind: "user", userId: "candidate" } as never,
+      scope,
       { selection: 1 },
       cards
     );
@@ -96,18 +104,17 @@ describe("start presented application", () => {
       apply_url: "https://jobs.example.co/ml-engineer",
       id: "task-1",
     });
-    const { startPresentedApplication } = await import(
-      "@/lib/goforay/start-application"
-    );
+    const { startPresentedApplication } =
+      await import("@/lib/goforay/start-application");
 
     const result = await startPresentedApplication(
-      { kind: "user", userId: "candidate" } as never,
+      scope,
       { selection: 2 },
       cards
     );
 
     expect(juiceboxMocks.createApplicationTask).toHaveBeenCalledWith(
-      { kind: "user", userId: "candidate" },
+      scope,
       "11111111-1111-4111-8111-111111111111"
     );
     expect(result).toEqual({

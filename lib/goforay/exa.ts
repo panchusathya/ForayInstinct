@@ -9,7 +9,7 @@ const listingRootPattern = /^\/(?:careers|jobs|job|search)?$/iu;
 
 function roleTitle(value: string) {
   const first = value.split(/[|—–-]/u, 1)[0]?.trim() ?? "";
-  return first || "Open role";
+  return first === "" ? "Open role" : first;
 }
 
 function companyFromUrl(value: string) {
@@ -32,7 +32,8 @@ export function isLikelyJobPostingUrl(value: string) {
     const segments = pathSegments(url.pathname);
     if (path === "/" || listingRootPattern.test(path)) return false;
     if (atsHostPattern.test(host) && segments.length >= 1) return true;
-    if (postingPathPattern.test(`${path}/`) && segments.length >= 2) return true;
+    if (postingPathPattern.test(`${path}/`) && segments.length >= 2)
+      return true;
     if (/^jobs\./iu.test(host) && segments.length >= 1) return true;
     return false;
   } catch {
@@ -53,9 +54,10 @@ function toRoleCard(
   result: { text: string; title: string; url: string },
   location?: string
 ): GoForayJobCard {
+  const placed = location?.trim() ?? "";
   return {
     company: companyFromUrl(result.url),
-    location: location?.trim() || "See posting",
+    location: placed === "" ? "See posting" : placed,
     reasons: result.text
       ? [compactText(result.text, 280)]
       : ["Found through public job search."],
@@ -78,14 +80,17 @@ export async function searchExaRoles({
   location?: string;
   limit: number;
 }): Promise<GoForayJobCard[]> {
-  const focus = query?.trim() || "current open professional roles";
+  const trimmed = query?.trim() ?? "";
+  const named = trimmed === "" ? "current open professional roles" : trimmed;
   const where = location?.trim() ? ` in ${location.trim()}` : "";
   const results = await exaSearch({
-    query: `${focus}${where} current job posting apply now`,
+    query: `${named}${where} current job posting apply now`,
     limit: Math.min(Math.max(limit * 2, limit), 10),
   });
 
-  const postings = results.filter((result) => isLikelyJobPostingUrl(result.url));
+  const postings = results.filter((result) =>
+    isLikelyJobPostingUrl(result.url)
+  );
   const fallback = results.filter((result) => isNotBareListingPage(result.url));
   const picked = (postings.length ? postings : fallback).slice(0, limit);
 

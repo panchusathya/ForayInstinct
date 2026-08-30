@@ -19,7 +19,7 @@ export function renderGoForayJobCard(
   total: number
 ) {
   const heading = [
-    `${index}/${total}  ${card.title} · ${card.company}`,
+    `${String(index)}/${String(total)}  ${card.title} · ${card.company}`,
     card.location,
     ...card.reasons.slice(0, 2).map((reason) => `· ${reason}`),
   ]
@@ -28,7 +28,7 @@ export function renderGoForayJobCard(
     .replaceAll("—", "-")
     .replaceAll("–", "-")
     .toLowerCase();
-  return [heading, card.url, `reply "apply ${index}" to apply`]
+  return [heading, card.url, `reply "apply ${String(index)}" to apply`]
     .filter(Boolean)
     .join("\n");
 }

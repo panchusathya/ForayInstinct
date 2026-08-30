@@ -6,12 +6,12 @@ const presentedRoles = defineState(
   (): GoForayJobCard[] => []
 );
 
-export type ApplicationTargetInput = {
+export interface ApplicationTargetInput {
   apply_url?: string;
   job_posting_id?: string;
   query?: string;
   selection?: number;
-};
+}
 
 /** Last numbered batch shown this session. `apply 2` and "the toro one" resolve against it. */
 export function storePresentedRoles(cards: GoForayJobCard[]) {

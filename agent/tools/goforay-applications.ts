@@ -37,10 +37,10 @@ const applicationTargetSchema = z
   .refine(
     (value) =>
       Boolean(
-        value.apply_url ||
-          value.job_posting_id ||
-          value.query ||
-          value.selection
+        value.apply_url ??
+        value.job_posting_id ??
+        value.query ??
+        value.selection
       ),
     { message: "Pass job_posting_id, apply_url, selection, or query." }
   );

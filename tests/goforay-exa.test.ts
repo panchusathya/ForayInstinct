@@ -94,9 +94,7 @@ describe("Exa role discovery", () => {
       )
     ).toBe(true);
     expect(
-      isLikelyJobPostingUrl(
-        "https://boards.greenhouse.io/acme/jobs/123"
-      )
+      isLikelyJobPostingUrl("https://boards.greenhouse.io/acme/jobs/123")
     ).toBe(true);
     expect(isLikelyJobPostingUrl("https://www.toro.com/careers")).toBe(false);
     expect(isLikelyJobPostingUrl("https://www.toro.com/")).toBe(false);
