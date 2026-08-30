@@ -6,7 +6,13 @@ import {
   searchGoogleContacts,
 } from "@/agent/lib/google-workspace/calendar";
 import { withGoogleAuth } from "@/agent/lib/google-workspace/client";
-import { sendGmail } from "@/agent/lib/google-workspace/gmail";
+import { buildEmailOtpSearchQuery } from "@/agent/lib/google-workspace/email-otp";
+import {
+  readGmailThread,
+  searchGmail,
+  sendGmail,
+  waitForEmailOtp,
+} from "@/agent/lib/google-workspace/gmail";
 
 interface RequestOptions {
   signal: AbortSignal;
@@ -89,6 +95,198 @@ describe("generated Google Workspace clients", () => {
       { requestBody: { raw }, userId: "me" },
       { signal: ctx.abortSignal }
     );
+  });
+
+  it("redacts six-digit codes in ordinary Gmail search and thread reads", async () => {
+    const ctx = toolContext();
+    const list = vi
+      .fn<
+        (
+          request: unknown,
+          options: RequestOptions
+        ) => Promise<{ data: { messages?: { id: string }[] } }>
+      >()
+      .mockResolvedValue({ data: { messages: [{ id: "m1" }] } });
+    const get = vi
+      .fn<
+        (
+          request: unknown,
+          options: RequestOptions
+        ) => Promise<{ data: Record<string, unknown> }>
+      >()
+      .mockResolvedValue({
+        data: {
+          id: "m1",
+          payload: {
+            headers: [
+              { name: "From", value: "Workday <noreply@myworkday.com>" },
+              { name: "Subject", value: "Verification" },
+            ],
+          },
+          snippet: "Your code is 123456",
+        },
+      });
+    const threadGet = vi
+      .fn<
+        (
+          request: unknown,
+          options: RequestOptions
+        ) => Promise<{ data: { id: string; messages: unknown[] } }>
+      >()
+      .mockResolvedValue({
+        data: {
+          id: "t1",
+          messages: [
+            {
+              id: "m1",
+              payload: {
+                body: {
+                  data: Buffer.from("Your code is 123456", "utf8").toString(
+                    "base64url"
+                  ),
+                },
+                headers: [
+                  { name: "From", value: "Workday <noreply@myworkday.com>" },
+                  { name: "Subject", value: "Verification" },
+                ],
+                mimeType: "text/plain",
+              },
+              snippet: "Your code is 123456",
+            },
+          ],
+        },
+      });
+    googleClients({
+      gmail: {
+        users: { messages: { get, list }, threads: { get: threadGet } },
+      },
+    });
+
+    await expect(searchGmail(ctx, "newer_than:1d", 10)).resolves.toEqual([
+      expect.objectContaining({
+        snippet: "Your code is [six-digit code redacted]",
+      }),
+    ]);
+    await expect(readGmailThread(ctx, "t1")).resolves.toEqual({
+      id: "t1",
+      messages: [
+        expect.objectContaining({
+          body: "Your code is [six-digit code redacted]",
+        }),
+      ],
+    });
+  });
+
+  it("returns an unredacted structured email OTP without the message body", async () => {
+    const ctx = toolContext();
+    const list = vi
+      .fn<
+        (
+          request: unknown,
+          options: RequestOptions
+        ) => Promise<{ data: { messages?: { id: string }[] } }>
+      >()
+      .mockResolvedValue({ data: { messages: [{ id: "m1" }] } });
+    const get = vi
+      .fn<
+        (
+          request: unknown,
+          options: RequestOptions
+        ) => Promise<{ data: Record<string, unknown> }>
+      >()
+      .mockResolvedValue({
+        data: gmailOtpMessage("Your verification code is 123456"),
+      });
+    googleClients({ gmail: { users: { messages: { get, list } } } });
+
+    await expect(
+      waitForEmailOtp(
+        ctx,
+        { fromHint: "noreply@myworkday.com" },
+        { timeoutMs: 0 }
+      )
+    ).resolves.toEqual({
+      code: "123456",
+      from: "Workday <noreply@myworkday.com>",
+      receivedAt: "Fri, 29 Aug 2026 06:00:00 +0000",
+      status: "found",
+      subject: "Your verification code",
+    });
+    expect(list).toHaveBeenCalledWith(
+      {
+        maxResults: 5,
+        q: buildEmailOtpSearchQuery({ fromHint: "noreply@myworkday.com" }),
+        userId: "me",
+      },
+      { signal: ctx.abortSignal }
+    );
+    expect(ctx.requireAuth).not.toHaveBeenCalled();
+  });
+
+  it("polls until a verification email arrives", async () => {
+    const ctx = toolContext();
+    const list = vi
+      .fn<
+        (
+          request: unknown,
+          options: RequestOptions
+        ) => Promise<{ data: { messages?: { id: string }[] } }>
+      >()
+      .mockResolvedValueOnce({ data: { messages: [] } })
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } });
+    const get = vi
+      .fn<
+        (
+          request: unknown,
+          options: RequestOptions
+        ) => Promise<{ data: Record<string, unknown> }>
+      >()
+      .mockResolvedValue({
+        data: gmailOtpMessage("Your verification code is 123456"),
+      });
+    const sleep = vi.fn<(ms: number, signal: AbortSignal) => Promise<void>>();
+    googleClients({ gmail: { users: { messages: { get, list } } } });
+
+    await expect(
+      waitForEmailOtp(
+        ctx,
+        {},
+        { pollIntervalMs: 1_000, sleep, timeoutMs: 10_000 }
+      )
+    ).resolves.toMatchObject({ code: "123456", status: "found" });
+    expect(sleep).toHaveBeenCalledOnce();
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("times out when no verification email arrives", async () => {
+    const ctx = toolContext();
+    const list = vi
+      .fn<
+        (
+          request: unknown,
+          options: RequestOptions
+        ) => Promise<{ data: { messages?: { id: string }[] } }>
+      >()
+      .mockResolvedValue({ data: { messages: [] } });
+    googleClients({ gmail: { users: { messages: { list } } } });
+
+    await expect(
+      waitForEmailOtp(ctx, {}, { timeoutMs: 0 })
+    ).resolves.toMatchObject({ status: "timeout" });
+  });
+
+  it("does not start Gmail consent when the mailbox is disconnected", async () => {
+    const ctx = toolContext();
+    ctx.getToken.mockRejectedValue(
+      Object.assign(new Error("No Google grant for this user."), {
+        name: "ConnectionAuthorizationRequiredError",
+      })
+    );
+
+    await expect(waitForEmailOtp(ctx, {})).resolves.toMatchObject({
+      status: "disconnected",
+    });
+    expect(ctx.requireAuth).not.toHaveBeenCalled();
   });
 
   it("recovers a duplicate Calendar insert using the stable event ID", async () => {
@@ -206,4 +404,20 @@ class GoogleApiError extends Error {
     super(`Google API returned ${String(status)}`);
     this.response = { status };
   }
+}
+
+function gmailOtpMessage(body: string) {
+  return {
+    id: "m1",
+    internalDate: String(Date.now()),
+    payload: {
+      body: { data: Buffer.from(body, "utf8").toString("base64url") },
+      headers: [
+        { name: "From", value: "Workday <noreply@myworkday.com>" },
+        { name: "Subject", value: "Your verification code" },
+        { name: "Date", value: "Fri, 29 Aug 2026 06:00:00 +0000" },
+      ],
+      mimeType: "text/plain",
+    },
+  };
 }

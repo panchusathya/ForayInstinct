@@ -64,6 +64,7 @@ describe("root and worker capability boundaries", () => {
       "google_workspace_write.ts",
       "request_vault_setup.ts",
       "self_identification.ts",
+      "wait_for_email_otp.ts",
       "web_search.ts",
     ]);
     expect(existsSync(`${rootTools}/sendMessage.ts`)).toBe(false);

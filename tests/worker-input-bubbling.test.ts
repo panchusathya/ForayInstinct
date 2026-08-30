@@ -41,7 +41,7 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain("never put an identifier");
     expect(instructions).toContain("raw HTTPS setup URL on its own line");
     expect(instructions).toContain(
-      "structured `Needs user input:` or `Needs vault setup:` failure"
+      "structured `Needs user input:`, `Needs vault setup:`, or `Needs email OTP:` failure"
     );
     expect(workerInstructions).toContain("Needs vault setup:");
     expect(workerInstructions).toContain(
@@ -55,6 +55,40 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain("timeout_seconds` of at least 1800");
     expect(workerInstructions).toContain("timeout_seconds` of at least 1800");
     expect(browserSkill).toContain("twenty-five minutes");
+  });
+
+  it("reads email OTP from Gmail instead of asking the candidate", () => {
+    const instructions = readFileSync("agent/instructions.md", "utf8");
+    const workerInstructions = readFileSync(
+      "agent/subagents/worker/instructions.md",
+      "utf8"
+    );
+    const browserSkill = readFileSync(
+      "agent/subagents/worker/skills/browser-execution/SKILL.md",
+      "utf8"
+    );
+    const otpTool = readFileSync("agent/tools/wait_for_email_otp.ts", "utf8");
+
+    expect(instructions).toContain("returns a `Needs email OTP:` blocker");
+    expect(instructions).toContain("call `wait_for_email_otp`");
+    expect(instructions).toContain("do not print the code to the user");
+    expect(instructions).toContain("Never print an email OTP to the user");
+    expect(instructions).toContain("including SMS OTP and 3-D Secure");
+    expect(workerInstructions).toContain("Needs email OTP:");
+    expect(workerInstructions).toContain(
+      "Do not use `Needs user input:` for email"
+    );
+    expect(workerInstructions).toContain(
+      "SMS OTP and 3-D Secure still use `Needs user input:`"
+    );
+    expect(workerInstructions).toContain(
+      "`fill_from_vault` cannot fill one-time-code fields"
+    );
+    expect(browserSkill).toContain("Needs email OTP:");
+    expect(browserSkill).toContain("3-D Secure or SMS OTP require human");
+    expect(browserSkill).not.toContain("3-D Secure or OTP require human");
+    expect(otpTool).toContain("waitForEmailOtp");
+    expect(otpTool).not.toContain("redactGoogleText");
   });
 
   it("submits a completed ATS login without inspecting injected credentials", () => {
