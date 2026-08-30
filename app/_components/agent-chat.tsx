@@ -28,6 +28,7 @@ import { useDurableEveSession } from "@/app/_hooks/use-durable-eve-session";
 import type { ChatUsage } from "@/lib/chat";
 import { cn } from "@/lib/utils";
 import { AgentMessage } from "./agent-message";
+import { attachmentParts } from "@/app/_lib/attachment-parts";
 import { collectSubagentSessions } from "@/app/_lib/subagent-sessions";
 import { SubagentPanel } from "./subagent-panel";
 
@@ -231,13 +232,11 @@ export function AgentChat({
     if (prompt.length > 0) {
       parts.push({ text: prompt, type: "text" });
     }
-    for (const file of otherFiles) {
-      parts.push({
-        data: file.url,
-        filename: file.filename,
-        mediaType: file.mediaType,
-        type: "file",
-      });
+    try {
+      parts.push(...(await attachmentParts(otherFiles)));
+    } catch (error) {
+      setCancellationError(toErrorMessage(error));
+      return;
     }
 
     await agent.send(parts, options);
