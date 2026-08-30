@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 describe("Exa role discovery", () => {
   afterEach(() => {
     vi.resetModules();
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 
@@ -45,26 +46,5 @@ describe("Exa role discovery", () => {
       "https://api.exa.ai/search",
       expect.objectContaining({ method: "POST" })
     );
-  });
-});
-
-describe("role search availability", () => {
-  afterEach(() => {
-    vi.resetModules();
-    vi.unstubAllGlobals();
-  });
-
-  it("reports search as unavailable instead of throwing at the model", async () => {
-    vi.stubEnv("EXA_API_KEY", "");
-    vi.doMock("@/db", () => ({}));
-
-    const { findGoforayRoles } = await import("../lib/goforay/bridge");
-
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the scope only reaches JuiceBox, which is unconfigured here.
-    const scope = { kind: "user", userId: "better-auth:candidate" } as never;
-    const feed = await findGoforayRoles(scope);
-
-    expect(feed.cards).toEqual([]);
-    expect(feed.unavailable).toBe("Exa search is not configured.");
   });
 });

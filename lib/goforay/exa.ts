@@ -1,4 +1,15 @@
-import { compactText, exaSearch } from "@/lib/exa";
+import { z } from "zod";
+import { env } from "@/lib/env";
+
+const exaResponseSchema = z.object({
+  results: z.array(
+    z.object({
+      title: z.string().catch(""),
+      url: z.string().url(),
+      text: z.string().catch(""),
+    })
+  ),
+});
 
 export type ExaRoleCard = {
   company: string;
@@ -7,6 +18,13 @@ export type ExaRoleCard = {
   title: string;
   url: string;
 };
+
+function compact(value: string, maximum: number) {
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  return normalized.length <= maximum
+    ? normalized
+    : `${normalized.slice(0, maximum - 1).trimEnd()}…`;
+}
 
 function roleTitle(value: string) {
   const first = value.split(/[|—–-]/u, 1)[0]?.trim() ?? "";
@@ -33,20 +51,46 @@ export async function searchExaRoles({
   location?: string;
   limit: number;
 }): Promise<ExaRoleCard[]> {
+  if (!env.EXA_API_KEY) {
+    throw new Error("Exa role discovery is not configured.");
+  }
+
   const focus = query?.trim() || "current open professional roles";
   const where = location?.trim() ? ` in ${location.trim()}` : "";
-  const results = await exaSearch({
-    query: `${focus}${where} jobs careers apply`,
-    limit,
+  const response = await fetch("https://api.exa.ai/search", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": env.EXA_API_KEY,
+    },
+    body: JSON.stringify({
+      query: `${focus}${where} jobs careers apply`,
+      type: "auto",
+      numResults: limit,
+      contents: { text: { maxCharacters: 1_500 } },
+    }),
   });
+  if (!response.ok) {
+    throw new Error(`Exa role discovery failed (${response.status}).`);
+  }
 
-  return results.map((result) => ({
-    company: companyFromUrl(result.url),
-    location: location?.trim() || "See posting",
-    reasons: result.text
-      ? [compactText(result.text, 280)]
-      : ["Found through public job search."],
-    title: roleTitle(result.title),
-    url: result.url,
-  }));
+  const payload = exaResponseSchema.parse(await response.json());
+  const seen = new Set<string>();
+  return payload.results
+    .filter((result) => {
+      const key = result.url.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit)
+    .map((result) => ({
+      company: companyFromUrl(result.url),
+      location: location?.trim() || "See posting",
+      reasons: result.text
+        ? [compact(result.text, 280)]
+        : ["Found through public job search."],
+      title: roleTitle(result.title),
+      url: result.url,
+    }));
 }
