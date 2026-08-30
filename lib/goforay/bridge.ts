@@ -386,6 +386,7 @@ export async function findGoforayRoles(
 ): Promise<{
   cards: (z.infer<typeof jobFeedSchema>["cards"][number] | ExaRoleCard)[];
   source: "juicebox" | "exa";
+  unavailable?: string;
 }> {
   const limit = input.limit ?? 5;
   try {
@@ -397,10 +398,21 @@ export async function findGoforayRoles(
   } catch {
     // A new candidate has no JuiceBox link yet; public discovery can still help.
   }
-  return {
-    cards: await searchExaRoles({ ...input, limit }),
-    source: "exa",
-  };
+  try {
+    return {
+      cards: await searchExaRoles({ ...input, limit }),
+      source: "exa",
+    };
+  } catch (error) {
+    // Both sources are down. Report that plainly instead of throwing, so the
+    // assistant says search is unavailable rather than surfacing a raw error.
+    return {
+      cards: [],
+      source: "exa",
+      unavailable:
+        error instanceof Error ? error.message : "Role search is unavailable.",
+    };
+  }
 }
 
 export async function applicationTask(scope: AccessScope, taskId: string) {
