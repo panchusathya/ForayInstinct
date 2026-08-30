@@ -273,10 +273,11 @@ describe("database services", () => {
     const database = pgliteDatabase as unknown as typeof db;
     vi.doMock("@/db", () => ({ ...schema, db: database }));
 
-    const [scope, documents, memories] = await Promise.all([
+    const [scope, documents, memories, capture] = await Promise.all([
       import("@/db/services/scope"),
       import("@/db/services/candidate-documents"),
       import("@/db/services/workspace-memories"),
+      import("@/db/services/workspace-memory-capture"),
     ]);
     const alice = { userId: "alice", workspaceId: "workspace:alice" };
     await scope.ensureScope(alice);
@@ -299,12 +300,55 @@ describe("database services", () => {
     expect(defaultResume?.bytes.equals(saved.document.bytes)).toBe(true);
 
     await memories.saveWorkspaceMemory(alice, "target_role", "Staff engineer");
-    expect(await memories.listWorkspaceMemories(alice)).toEqual([
-      expect.objectContaining({
-        key: "target_role",
-        value: "Staff engineer",
-      }),
-    ]);
+    expect(
+      await capture.observeWorkspaceConversation(
+        alice,
+        [
+          {
+            content:
+              "My name is Ada Lovelace. I live in Austin, Texas and I can start ASAP.",
+            role: "user",
+          },
+        ],
+        "op-1"
+      )
+    ).toEqual({ captured: 3, replayed: false });
+    expect(
+      await capture.observeWorkspaceConversation(
+        alice,
+        [{ content: "I live in Boston", role: "user" }],
+        "op-1"
+      )
+    ).toEqual({ captured: 0, replayed: true });
+    expect(await memories.listWorkspaceMemories(alice)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "target_role",
+          value: "Staff engineer",
+        }),
+        expect.objectContaining({
+          key: "stated_name",
+          value: "Ada Lovelace",
+        }),
+        expect.objectContaining({
+          key: "location",
+          value: "Austin, Texas",
+        }),
+        expect.objectContaining({
+          key: "earliest_start",
+          value: "immediately",
+        }),
+        expect.objectContaining({
+          key: "capture.operation",
+          value: "op-1",
+        }),
+      ])
+    );
+    expect(await memories.listWorkspaceMemories(alice)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "location", value: "Boston" }),
+      ])
+    );
   }, 15_000);
 
   it("hands the latest undelivered confirmation screenshot to the next consumer", async () => {
