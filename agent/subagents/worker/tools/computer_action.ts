@@ -266,7 +266,11 @@ export default defineTool({
       });
     }
     return toolOutput.content([
-      toolOutputPart.text(output.message),
+      toolOutputPart.text(
+        output.data === undefined
+          ? output.message
+          : `${output.message}\n${JSON.stringify(output.data)}`
+      ),
       toolOutputPart.file(output.screenshotBase64, {
         mediaType: output.mimeType ?? "image/png",
       }),

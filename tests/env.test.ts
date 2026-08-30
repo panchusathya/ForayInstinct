@@ -21,6 +21,9 @@ describe("environment", () => {
     vi.stubEnv("LINQ_API_KEY", "");
     vi.stubEnv("LINQ_WEBHOOK_SECRET", "");
     vi.stubEnv("LINQ_PHONE_NUMBER", "");
+    vi.stubEnv("JUICEBOX_API_URL", "");
+    vi.stubEnv("OPENINSTINCT_SHARED_SECRET", "");
+    vi.stubEnv("EXA_API_KEY", "");
   });
 
   afterEach(() => {
@@ -218,6 +221,14 @@ describe("environment", () => {
 
     await expect(import("../lib/env")).rejects.toThrow(
       "LINQ_API_KEY and LINQ_WEBHOOK_SECRET must be configured together"
+    );
+  });
+
+  it("requires both GoForay bridge credentials", async () => {
+    vi.stubEnv("JUICEBOX_API_URL", "https://api.goforay.io");
+
+    await expect(import("../lib/env")).rejects.toThrow(
+      "JUICEBOX_API_URL and OPENINSTINCT_SHARED_SECRET must be configured together"
     );
   });
 

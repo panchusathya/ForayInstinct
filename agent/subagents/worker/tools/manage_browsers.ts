@@ -228,12 +228,13 @@ export default defineTool({
         );
         const offset = input.offset ?? 0;
         const limit = input.limit ?? 100;
+        const items = browsers.filter((browser) => browser !== null);
+        const page = items.slice(offset, offset + limit);
+        const nextOffset = offset + page.length;
         return {
-          has_more: false,
-          items: browsers
-            .filter((browser) => browser !== null)
-            .slice(offset, offset + limit),
-          next_offset: null,
+          has_more: nextOffset < items.length,
+          items: page,
+          next_offset: nextOffset < items.length ? nextOffset : null,
         };
       }
       case "get": {

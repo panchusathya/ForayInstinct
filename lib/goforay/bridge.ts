@@ -528,49 +528,54 @@ export async function recordConversationMessage({
 }) {
   const link = await linkedCandidate(scope);
   if (!body.trim()) return;
-  const existing = await db.query.goforayWorkspaceConversations.findFirst({
-    where: eq(goforayWorkspaceConversations.id, conversationId),
-  });
+  const sourceId = sourceMessageId?.slice(0, 300);
   const entry = {
-    id: sourceMessageId?.slice(0, 300) || randomUUID(),
+    id: sourceId ?? randomUUID(),
     direction,
     body: body.slice(0, 20_000),
     created_at: new Date().toISOString(),
   };
-  const alreadyRecorded = existing?.messages.some(
-    (message) => message.id === entry.id
-  );
-  if (!existing) {
-    await db.insert(goforayWorkspaceConversations).values({
-      id: conversationId,
-      workspaceId: scope.workspaceId,
-      candidateId: link?.candidateId,
-      channel,
-      url,
-      messages: [entry],
-    });
-  } else if (!alreadyRecorded) {
-    await db
-      .update(goforayWorkspaceConversations)
-      .set({
-        messages: [...existing.messages, entry],
-        updatedAt: new Date(),
-        ...(url ? { url } : {}),
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(goforayWorkspaceConversations)
+      .values({
+        id: conversationId,
+        workspaceId: scope.workspaceId,
+        candidateId: link?.candidateId,
+        channel,
+        url,
+        messages: [entry],
       })
-      .where(eq(goforayWorkspaceConversations.id, conversationId));
-  }
-  await db
-    .insert(goforayWorkspaceSyncOutbox)
-    .values({
-      id: entry.id,
-      workspaceId: scope.workspaceId,
-      candidateId: link?.candidateId,
-      conversationId,
-      channel,
-      direction,
-      body: entry.body,
-    })
-    .onConflictDoNothing();
+      .onConflictDoNothing();
+    const [existing] = await tx
+      .select()
+      .from(goforayWorkspaceConversations)
+      .where(eq(goforayWorkspaceConversations.id, conversationId))
+      .for("update");
+    if (!existing) return;
+    if (!existing.messages.some((message) => message.id === entry.id)) {
+      await tx
+        .update(goforayWorkspaceConversations)
+        .set({
+          messages: [...existing.messages, entry],
+          updatedAt: new Date(),
+          ...(url ? { url } : {}),
+        })
+        .where(eq(goforayWorkspaceConversations.id, conversationId));
+    }
+    await tx
+      .insert(goforayWorkspaceSyncOutbox)
+      .values({
+        id: entry.id,
+        workspaceId: scope.workspaceId,
+        candidateId: link?.candidateId,
+        conversationId,
+        channel,
+        direction,
+        body: entry.body,
+      })
+      .onConflictDoNothing();
+  });
   // The local conversation and outbox are committed before the bridge call.
   // Do not make a web or iMessage reply wait for JuiceBox to be reachable.
   void syncConversationEvent(entry.id);
