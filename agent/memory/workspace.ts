@@ -1,8 +1,14 @@
-import { defineMemory, type MemoryOperationContext } from "eve/memory";
+import {
+  defineMemory,
+  type MemoryOperationContext,
+  type MemoryTurnCompletedContext,
+} from "eve/memory";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { scopeFromPrincipal } from "@/lib/access-scope";
 import { buildWorkspaceContextRecall } from "../lib/workspace-context";
+import { observeWorkspaceConversation } from "@/db/services/workspace-memory-capture";
+import { isInternalMemoryKey } from "@/lib/workspace-memory-capture";
 import {
   deleteWorkspaceMemory,
   saveWorkspaceMemory,
@@ -49,6 +55,23 @@ export default defineMemory({
       "turn.started": recall,
       "compaction.completed": recall,
     },
+    capture: {
+      async "turn.completed"(ctx: MemoryTurnCompletedContext) {
+        const caller = ctx.session.auth.current ?? ctx.session.auth.initiator;
+        if (!caller) return;
+        try {
+          await observeWorkspaceConversation(
+            scopeFromPrincipal(caller),
+            ctx.messages,
+            ctx.operationId
+          );
+        } catch (error) {
+          console.error("[workspace-memory] capture failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      },
+    },
     async tools(ctx) {
       const caller = ctx.session.auth.current ?? ctx.session.auth.initiator;
       if (!caller) return null;
@@ -62,6 +85,7 @@ export default defineMemory({
             value: z.string().min(1).max(2_000),
           }),
           async execute({ key, value }) {
+            assertPublicMemoryKey(key);
             return saveWorkspaceMemory(scope, key, value);
           },
         }),
@@ -71,6 +95,7 @@ export default defineMemory({
             key: z.string().min(1).max(80),
           }),
           async execute({ key }) {
+            assertPublicMemoryKey(key);
             await deleteWorkspaceMemory(scope, key);
             return { forgotten: key };
           },
@@ -79,3 +104,9 @@ export default defineMemory({
     },
   },
 });
+
+function assertPublicMemoryKey(key: string) {
+  if (isInternalMemoryKey(key.trim().toLowerCase())) {
+    throw new Error("That memory key is reserved.");
+  }
+}

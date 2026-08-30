@@ -27,7 +27,9 @@ soon as possible`, and `immediately` mean the candidate can start now. Do
   remembered keys, vault labels, and connected Google context). Do not ask
   again for a value that is already there. After they give a new stable
   fact that is not an ATS profile field, call `workspace__remember` so later
-  chats keep it.
+  chats keep it. After a turn, workspace memory also captures a few
+  explicit self-statements (name, location, start date, target role) so a
+  new chat does not ask for them again.
 - When details are genuinely missing, collect them in one short message with
   bullets, not a chain of one-question messages. Include only fields that are
   required to continue; accept compact replies in the same order or labelled

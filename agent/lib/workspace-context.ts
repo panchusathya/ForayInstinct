@@ -13,6 +13,7 @@ import { readSelfIdentification } from "@/db/services/self-identification";
 import { listVaultItems } from "@/db/services/vault";
 import { listWorkspaceMemories } from "@/db/services/workspace-memories";
 import { prefetchGoogleWorkspaceContext } from "@/lib/google-workspace/prefetch";
+import { isInternalMemoryKey } from "@/lib/workspace-memory-capture";
 import { declinedSelfIdentificationFields } from "@/lib/self-identification";
 
 const resumeTextBudget = 4_000;
@@ -64,11 +65,12 @@ export async function buildWorkspaceContextRecall(scope: AccessScope) {
     });
   }
 
-  if (memories.length > 0) {
+  const stated = memories.filter((entry) => !isInternalMemoryKey(entry.key));
+  if (stated.length > 0) {
     messages.push({
       content: [
         "Facts remembered across conversations. Do not re-ask these.",
-        ...memories.map((entry) => `• ${entry.key}: ${entry.value}`),
+        ...stated.map((entry) => `• ${entry.key}: ${entry.value}`),
       ].join("\n"),
       id: "workspace-facts",
     });

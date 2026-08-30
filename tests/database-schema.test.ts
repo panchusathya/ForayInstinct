@@ -190,6 +190,7 @@ describe("migration deployment policy", () => {
         "settings",
         "vault",
         "workspace-memories",
+        "workspace-memory-capture",
       ].map(
         async (name) =>
           await readFile(

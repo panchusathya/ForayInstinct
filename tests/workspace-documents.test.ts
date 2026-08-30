@@ -5,6 +5,11 @@ import {
   isCandidateDocumentFile,
 } from "../lib/candidate-documents";
 import { extractDocumentText } from "../lib/document-text";
+import {
+  extractStatedFacts,
+  isInternalMemoryKey,
+  userMessageTexts,
+} from "../lib/workspace-memory-capture";
 
 describe("candidate documents", () => {
   it("classifies resumes, cover letters, and other files", () => {
@@ -39,6 +44,33 @@ describe("candidate documents", () => {
     ).toContain("Ada Lovelace");
   });
 
+  it("captures explicit self-statements without inferring EEO answers", () => {
+    expect(
+      extractStatedFacts(
+        "My name is Ada Lovelace. I live in Austin, Texas and I can start ASAP. I'm looking for a staff engineer role and targeting $180k."
+      )
+    ).toEqual([
+      { key: "stated_name", value: "Ada Lovelace" },
+      { key: "location", value: "Austin, Texas" },
+      { key: "earliest_start", value: "immediately" },
+      { key: "target_role", value: "staff engineer role" },
+      { key: "compensation_target", value: "$180k" },
+    ]);
+    expect(extractStatedFacts("I prefer not to say my gender.")).toEqual([]);
+    expect(isInternalMemoryKey("capture.operation")).toBe(true);
+    expect(isInternalMemoryKey("location")).toBe(false);
+    expect(
+      userMessageTexts([
+        { content: "I live in Austin", role: "user" },
+        { content: "Noted.", role: "assistant" },
+        {
+          content: [{ text: "Call me Ada", type: "text" }],
+          role: "user",
+        },
+      ])
+    ).toEqual(["I live in Austin", "Call me Ada"]);
+  });
+
   it("stores documents locally and recalls them instead of JuiceBox parsing", () => {
     const instructions = readFileSync("agent/instructions.md", "utf8");
     const memory = readFileSync("agent/memory/workspace.ts", "utf8");
@@ -47,6 +79,8 @@ describe("candidate documents", () => {
 
     expect(memory).toContain("defineMemory(");
     expect(memory).toContain("buildWorkspaceContextRecall");
+    expect(memory).toContain('"turn.completed"');
+    expect(memory).toContain("observeWorkspaceConversation");
     expect(instructions).toContain("workspace__remember");
     expect(instructions).toContain("save_email_attachment");
     expect(instructions).toContain("stage_workspace_document");
