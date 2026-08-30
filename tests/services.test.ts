@@ -261,6 +261,63 @@ describe("database services", () => {
       "profile-1"
     );
   }, 15_000);
+
+  it("hands the latest undelivered confirmation screenshot to the next consumer", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0010_application_submission_screenshots.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, screenshots] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/application-submission-screenshots"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    const bob = { userId: "bob", workspaceId: "workspace:bob" };
+    await scope.ensureScope(alice);
+    await scope.ensureScope(bob);
+
+    await screenshots.saveApplicationSubmissionScreenshot(
+      alice,
+      "browser-old",
+      { png: Buffer.from("older") }
+    );
+    await screenshots.saveApplicationSubmissionScreenshot(
+      alice,
+      "browser-new",
+      { page: "https://example.com/confirmation", png: Buffer.from("newer") }
+    );
+    await screenshots.saveApplicationSubmissionScreenshot(bob, "browser-bob", {
+      png: Buffer.from("other-workspace"),
+    });
+
+    await expect(
+      screenshots.consumeLatestApplicationSubmissionScreenshot(alice)
+    ).resolves.toEqual({
+      mimeType: "image/png",
+      png: Buffer.from("newer"),
+    });
+    await expect(
+      screenshots.consumeLatestApplicationSubmissionScreenshot(alice)
+    ).resolves.toEqual({
+      mimeType: "image/png",
+      png: Buffer.from("older"),
+    });
+    await expect(
+      screenshots.consumeLatestApplicationSubmissionScreenshot(alice)
+    ).resolves.toBeUndefined();
+    await expect(
+      screenshots.consumeLatestApplicationSubmissionScreenshot(bob)
+    ).resolves.toEqual({
+      mimeType: "image/png",
+      png: Buffer.from("other-workspace"),
+    });
+  }, 15_000);
 });
 
 async function applyMigration(database: PGlite, name: string) {

@@ -6,6 +6,14 @@ import {
 } from "../lib/browser-submission";
 
 const mocks = vi.hoisted(() => ({
+  captureScreenshot:
+    vi.fn<
+      (
+        _sessionId: string,
+        _input: unknown,
+        _options: unknown
+      ) => Promise<{ arrayBuffer: () => Promise<ArrayBuffer> }>
+    >(),
   executePlaywright:
     vi.fn<
       (
@@ -25,6 +33,14 @@ const mocks = vi.hoisted(() => ({
   requireOwnedBrowserSession:
     vi.fn<(_scope: unknown, _sessionId: string) => Promise<unknown>>(),
   requireWorkerScope: vi.fn<(_context: unknown) => Promise<unknown>>(),
+  saveApplicationSubmissionScreenshot:
+    vi.fn<
+      (
+        _scope: unknown,
+        _sessionId: string,
+        _screenshot: unknown
+      ) => Promise<void>
+    >(),
   snapshotKernelPage:
     vi.fn<(_input: unknown) => Promise<{ body: string; url: string }>>(),
 }));
@@ -41,16 +57,22 @@ vi.mock("@/db/services/browser-run-checkpoints", () => ({
   recordBrowserRunCheckpoint: mocks.recordBrowserRunCheckpoint,
 }));
 
+vi.mock("@/db/services/application-submission-screenshots", () => ({
+  saveApplicationSubmissionScreenshot:
+    mocks.saveApplicationSubmissionScreenshot,
+}));
+
 vi.mock("@/lib/kernel", () => ({
   kernel: {
     browsers: {
+      computer: { captureScreenshot: mocks.captureScreenshot },
       playwright: { execute: mocks.executePlaywright },
     },
   },
 }));
 
 vi.mock("@/lib/manager/server/kernel-native-autofill", () => ({
-  currentKernelPageUrl: vi.fn(async () => undefined),
+  currentKernelPageUrl: vi.fn<() => Promise<undefined>>(async () => undefined),
   snapshotKernelPage: mocks.snapshotKernelPage,
 }));
 
@@ -167,9 +189,13 @@ describe("playwright checkpoints observe a submission without final_output", () 
       sessionId: "browser-1",
     });
     mocks.recordBrowserRunCheckpoint.mockResolvedValue();
+    mocks.saveApplicationSubmissionScreenshot.mockResolvedValue();
     mocks.executePlaywright.mockResolvedValue({
       result: { success: true },
       success: true,
+    });
+    mocks.captureScreenshot.mockResolvedValue({
+      arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer,
     });
     mocks.snapshotKernelPage.mockResolvedValue({
       body: "Thank you. We have received your application.",
@@ -197,5 +223,44 @@ describe("playwright checkpoints observe a submission without final_output", () 
         state: "submission_observed",
       })
     );
+    expect(mocks.captureScreenshot).toHaveBeenCalledWith(
+      "browser-1",
+      {},
+      expect.objectContaining({})
+    );
+    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      "browser-1",
+      {
+        page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/applicationSubmitted",
+        png: Buffer.from([137, 80, 78, 71]),
+      }
+    );
+  });
+
+  it("does not capture a confirmation screenshot when the ATS page is not a submission", async () => {
+    mocks.snapshotKernelPage.mockResolvedValue({
+      body: "Continue application",
+      url: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role",
+    });
+    const { default: executePlaywrightCode } =
+      await import("../agent/subagents/worker/tools/execute_playwright_code");
+
+    await executePlaywrightCode.execute(
+      { code: "await page.click('text=Continue')", session_id: "browser-1" },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(mocks.recordBrowserRunCheckpoint).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      "browser-1",
+      expect.objectContaining({
+        phase: "playwright",
+        state: "completed",
+      })
+    );
+    expect(mocks.captureScreenshot).not.toHaveBeenCalled();
+    expect(mocks.saveApplicationSubmissionScreenshot).not.toHaveBeenCalled();
   });
 });

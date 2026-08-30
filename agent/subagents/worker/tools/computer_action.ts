@@ -4,6 +4,7 @@ import { kernel } from "@/lib/kernel";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/browser-run-evidence";
+import { maskVaultFields } from "@/agent/subagents/worker/lib/kernel-screenshot";
 
 const actionSchema = z.object({
   type: z.enum([
@@ -291,43 +292,4 @@ function diagnosticErrorCode(error: unknown) {
   }
   if (/chrome-error|net::/i.test(message)) return "navigation";
   return "computer_action";
-}
-
-async function maskVaultFields(sessionId: string, signal?: AbortSignal) {
-  const styleId = "vault-screenshot-mask";
-  const selector = '[data-vault-secret="true"]';
-  const addCode = `
-for (const currentContext of browser.contexts()) {
-  for (const currentPage of currentContext.pages()) {
-    for (const frame of currentPage.frames()) {
-      await frame.evaluate(({ styleId, selector }) => {
-        if (document.getElementById(styleId)) return;
-        const style = document.createElement("style");
-        style.id = styleId;
-        style.textContent = selector + " { color: transparent !important; text-shadow: 0 0 8px black !important; -webkit-text-security: disc !important; }";
-        document.documentElement.append(style);
-      }, ${JSON.stringify({ selector, styleId })}).catch(() => undefined);
-    }
-  }
-}
-return true;`;
-  await kernel.browsers.playwright.execute(
-    sessionId,
-    { code: addCode, timeout_sec: 10 },
-    { signal }
-  );
-  return async () => {
-    const removeCode = `
-for (const currentContext of browser.contexts()) {
-  for (const currentPage of currentContext.pages()) {
-    for (const frame of currentPage.frames()) {
-      await frame.evaluate((styleId) => document.getElementById(styleId)?.remove(), ${JSON.stringify(styleId)}).catch(() => undefined);
-    }
-  }
-}
-return true;`;
-    await kernel.browsers.playwright
-      .execute(sessionId, { code: removeCode, timeout_sec: 10 }, { signal })
-      .catch(() => undefined);
-  };
 }
