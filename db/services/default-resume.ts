@@ -13,20 +13,16 @@ export async function readOrImportDefaultResume(scope: AccessScope) {
   const stored = await readDefaultResume(scope);
   if (stored) return stored;
 
-  try {
-    const remote = await candidateDefaultResume(scope);
-    const imported = await saveCandidateDocument(scope, {
-      bytes: Buffer.from(remote.bytes),
-      filename: remote.filename,
-      kind: "resume",
-      mimeType: filenameMimeType(remote.filename),
-      setDefault: true,
-      source: "goforay",
-    });
-    return imported.document;
-  } catch {
-    return;
-  }
+  const remote = await candidateDefaultResume(scope);
+  const imported = await saveCandidateDocument(scope, {
+    bytes: Buffer.from(remote.bytes),
+    filename: remote.filename,
+    kind: "resume",
+    mimeType: filenameMimeType(remote.filename),
+    setDefault: true,
+    source: "goforay",
+  });
+  return imported.document;
 }
 
 function filenameMimeType(filename: string) {

@@ -216,7 +216,7 @@ async function documentCount(scope: AccessScope) {
   return rows[0]?.count ?? 0;
 }
 
-async function hasDefaultResume(scope: AccessScope) {
+export async function hasDefaultResume(scope: AccessScope) {
   const rows = await db
     .select({ id: candidateDocuments.id })
     .from(candidateDocuments)

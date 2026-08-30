@@ -72,7 +72,7 @@
     "boundaries": "turbo boundaries",
     "build": "turbo run build:app",
     "build:app": "next build",
-    "build:vercel": "next build",
+    "build:vercel": "node scripts/vercel-build.mjs",
     "check": "turbo run lint:app types:check:app test:app format:check knip && turbo boundaries",
     "db:check": "drizzle-kit check --config db/drizzle.config.ts",
     "db:generate": "drizzle-kit generate --config db/drizzle.config.ts",

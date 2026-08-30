@@ -96,8 +96,8 @@ describe("web search routing", () => {
       expect(source).toContain("not the route to a role or an application");
       expect(source).toContain("`find_goforay_roles`");
     }
-    expect(instructions).toContain(
-      "Never call\n  `web_search` for the candidate's own openings"
+    expect(instructions).toMatch(
+      /Never call\s+`web_search` for the candidate's own openings/u
     );
   });
 
