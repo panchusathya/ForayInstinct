@@ -44,23 +44,6 @@ const resumeUploadSchema = z.object({
   status: z.string(),
 });
 
-const bridgeTaskSchema = z.object({
-  application_id: z.string(),
-  apply_url: z.string(),
-  documents: z.array(
-    z.object({
-      content_type: z.string(),
-      download_url: z.string(),
-      filename: z.string(),
-      id: z.string(),
-    })
-  ),
-  form_answers: z.array(z.record(z.string(), z.unknown())),
-  id: z.string(),
-  result: z.record(z.string(), z.unknown()),
-  status: z.string(),
-});
-
 const jobFeedSchema = z.object({
   cards: z.array(
     z.object({
@@ -97,7 +80,7 @@ function base64url(value: string | Buffer) {
   return Buffer.from(value).toString("base64url");
 }
 
-export function createBridgeToken({
+function createBridgeToken({
   audience,
   subject,
   candidateId,
@@ -226,7 +209,7 @@ export async function linkCandidate({
   return { org_id: payload.org_id, candidate_id: payload.candidate_id };
 }
 
-export async function linkedCandidate(scope: AccessScope) {
+async function linkedCandidate(scope: AccessScope) {
   return db.query.goforayLinks.findFirst({
     where: eq(goforayLinks.userId, authUserId(scope.userId)),
   });
@@ -239,9 +222,7 @@ async function juiceboxRequest(
 ) {
   const link = await linkedCandidate(scope);
   if (!link)
-    throw new Error(
-      "Link your GoForay account before starting an application task."
-    );
+    throw new Error("Link your GoForay account before calling JuiceBox.");
   const { apiUrl } = configured();
   const headers = new Headers(init.headers);
   headers.set(
@@ -266,27 +247,6 @@ async function juiceboxRequest(
     );
   }
   return payload;
-}
-
-export async function createApplicationTask(
-  scope: AccessScope,
-  jobPostingId: string,
-  conversationUrl = ""
-) {
-  return bridgeTaskSchema.parse(
-    await juiceboxRequest(
-      scope,
-      "/v1/internal/openinstinct/application-tasks",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          external_task_id: randomUUID(),
-          job_posting_id: jobPostingId,
-          conversation_url: conversationUrl,
-        }),
-      }
-    )
-  );
 }
 
 /** Uploads a candidate-owned resume without making its bytes model-visible. */
@@ -320,7 +280,7 @@ export async function uploadCandidateResume(scope: AccessScope, file: File) {
 }
 
 /** Reads the linked candidate's current JuiceBox matches without creating an application. */
-export async function goforayJobFeed(
+async function goforayJobFeed(
   scope: AccessScope,
   {
     query = "",
@@ -408,22 +368,6 @@ export async function findGoforayRoles(
   }
 }
 
-export async function applicationTask(scope: AccessScope, taskId: string) {
-  const task = bridgeTaskSchema.parse(
-    await juiceboxRequest(
-      scope,
-      `/v1/internal/openinstinct/application-tasks/${taskId}`
-    )
-  );
-  return {
-    ...task,
-    documents: task.documents.map((document) => ({
-      ...document,
-      access_url: `/api/goforay/application-tasks/${task.id}/documents/${document.id}`,
-    })),
-  };
-}
-
 /**
  * Reads one prepared document through a fresh, candidate-scoped bridge token.
  * The bytes stay within OpenInstinct's server/browser path; no credential is
@@ -507,28 +451,6 @@ export async function candidateDefaultResume(scope: AccessScope) {
 function filenameFromDisposition(disposition: string) {
   const match = /filename="?([^";]+)"?/iu.exec(disposition);
   return match?.[1] ?? "";
-}
-
-export async function reportApplicationTask(
-  scope: AccessScope,
-  taskId: string,
-  result: {
-    status: "submitted" | "needs_human" | "failed";
-    error?: string;
-    external_id?: string;
-    confirmation_ref?: string;
-  }
-) {
-  return bridgeTaskSchema.parse(
-    await juiceboxRequest(
-      scope,
-      `/v1/internal/openinstinct/application-tasks/${taskId}/result`,
-      {
-        method: "POST",
-        body: JSON.stringify({ vendor: "browser", artifacts: [], ...result }),
-      }
-    )
-  );
 }
 
 export async function recordConversationMessage({
