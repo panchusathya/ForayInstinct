@@ -30,8 +30,10 @@ describe("application fill handoff", () => {
   it("keeps JuiceBox as CRM context while the worker fills the ATS itself", () => {
     expect(rootInstructions).toContain("start_goforay_application");
     expect(rootInstructions).toContain("report_goforay_application_result");
-    expect(applicationTools).toContain("createApplicationTask");
+    expect(applicationTools).toContain("startPresentedApplication");
     expect(applicationTools).toContain("reportApplicationTask");
+    expect(applicationTools).toContain("selection");
+    expect(applicationTools).toContain("apply_url");
     expect(workerInstructions).toMatch(/Do not wait for JuiceBox\s+packaging/);
     expect(workerInstructions).toContain("stage_default_goforay_resume");
     expect(workerInstructions).toContain("stage_goforay_document");

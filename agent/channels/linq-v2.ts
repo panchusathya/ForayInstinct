@@ -11,6 +11,7 @@ import { accessScopeForUser, scopeFromPrincipal } from "@/lib/access-scope";
 import { env } from "@/lib/env";
 import { formatCandidateDelivery } from "@/lib/goforay/delivery";
 import {
+  goForayJobCardSchema,
   jobCardFilename,
   renderGoForayJobCard,
   type GoForayJobCard,
@@ -55,20 +56,13 @@ const submittedApplicationResultSchema = z.object({
   output: z.object({ status: z.literal("submitted") }),
   toolName: z.literal("report_goforay_application_result"),
 });
-const jobCardSchema = z.object({
-  company: z.string(),
-  location: z.string(),
-  posting_id: z.string(),
-  reasons: z.array(z.string()),
-  title: z.string(),
-});
 const jobCardResultSchema = z.object({
   kind: z.literal("tool-result"),
-  output: z.object({ cards: z.array(jobCardSchema) }),
+  output: z.object({ cards: z.array(goForayJobCardSchema) }),
   toolName: z.enum(["find_goforay_roles", "find_next_goforay_roles"]),
 });
 const pendingJobCardsSchema = z.object({
-  cards: z.array(jobCardSchema),
+  cards: z.array(goForayJobCardSchema),
   turnId: z.string(),
 });
 const pendingSubmissionScreenshotSchema = z.object({
@@ -125,11 +119,16 @@ const { bot, channel, send } = chatSdkChannel({
         );
       }
       const jobCards = jobCardResultSchema.safeParse(event.result);
-      if (jobCards.success && jobCards.data.output.cards.length) {
-        context.state.pendingGoForayJobCards = {
-          cards: jobCards.data.output.cards.slice(0, 5),
-          turnId: event.turnId,
-        };
+      if (jobCards.success) {
+        const cards = jobCards.data.output.cards
+          .filter((card) => card.url)
+          .slice(0, 5);
+        if (cards.length) {
+          context.state.pendingGoForayJobCards = {
+            cards,
+            turnId: event.turnId,
+          };
+        }
       }
       if (!result.success) return;
 
@@ -555,7 +554,7 @@ async function deliverJobCards(
     const index = offset + 1;
     const text = renderGoForayJobCard(card, index, cards.length);
     let sentImage = false;
-    if (rich && scope) {
+    if (rich && scope && card.posting_id) {
       try {
         const png = await goforayJobCardPng(
           scope,
@@ -564,7 +563,7 @@ async function deliverJobCards(
           cards.length
         );
         await thread.post({
-          markdown: "",
+          markdown: text,
           files: [
             {
               data: png,
