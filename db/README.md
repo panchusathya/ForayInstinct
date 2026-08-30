@@ -1,7 +1,8 @@
 # Database
 
-This directory owns the eight workspace application tables, the four Better
-Auth tables, and the application domain query services. Better Auth uses the
+This directory owns the ten workspace application tables (including
+`candidate_profiles`), the four Better Auth tables, and the application
+domain query services. Better Auth uses the
 canonical Drizzle client from `db/index.ts`; request paths never create or
 migrate tables.
 
@@ -9,7 +10,9 @@ migrate tables.
 - `index.ts` exports the Drizzle client and schema using pooled `DATABASE_URL`
   for request-time access.
 - `services/` owns workspace-scoped application queries by domain.
-- `drizzle.config.ts` uses `DATABASE_URL_UNPOOLED` for migration commands.
+- `drizzle.config.ts` prefers `DATABASE_URL_UNPOOLED` for migration commands
+  and falls back to `DATABASE_URL`, converting Neon `-pooler` hosts to a
+  direct connection.
 - `migrations/` is generated history. Run `pnpm db:generate` after changing the
   schema and commit the SQL, snapshot, and journal together.
 
@@ -17,8 +20,9 @@ Run `pnpm db:migrate` explicitly for local or operator-managed environments.
 Vercel runs the uncached Turbo `db:migrate` task before `build:vercel`. The
 package command delegates directly to `drizzle-kit migrate`. Migration commands
 use `@next/env` to load the same root `.env*` precedence as Next.js; an injected
-`DATABASE_URL_UNPOOLED` remains authoritative. Each Vercel environment must
-therefore provide the direct URL for its intended database. Migrations must
+`DATABASE_URL_UNPOOLED` remains authoritative when present. Preview
+deployments often inject only the pooled `DATABASE_URL`; migrate then uses
+that URL after stripping a Neon `-pooler` hostname. Migrations must
 remain backward compatible with the previously deployed application while a
 rollout is in progress.
 

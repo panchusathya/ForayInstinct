@@ -1,4 +1,4 @@
-/* oxlint-disable typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access -- Eve's Linq adapter exposes the thread through a transitive Chat SDK type; TypeScript still checks this contextual handler. */
+/* oxlint-disable typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access, typescript/no-unsafe-argument -- Eve's Linq adapter exposes the thread through a transitive Chat SDK type; TypeScript still checks this contextual handler. */
 import { connectLinqCredentials } from "@vercel/connect/eve";
 import { createLinqAdapter } from "@linqapp/chat-sdk-adapter";
 import { defaultLinqAuth } from "eve/channels/linq";
@@ -9,10 +9,18 @@ import { auth } from "@/auth";
 import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
 import { accessScopeForUser, scopeFromPrincipal } from "@/lib/access-scope";
 import { env } from "@/lib/env";
+import { formatCandidateDelivery } from "@/lib/goforay/delivery";
+import {
+  jobCardFilename,
+  renderGoForayJobCard,
+  type GoForayJobCard,
+} from "@/lib/goforay/job-cards";
 import { createPostgresState } from "@/lib/linq-state";
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
+import { consumeLatestApplicationSubmissionScreenshot } from "@/db/services/application-submission-screenshots";
 import {
   linkCandidate,
+  goforayJobCardPng,
   recordConversationMessage,
   uploadCandidateResume,
 } from "@/lib/goforay/bridge";
@@ -20,6 +28,10 @@ import {
 const verifiedPhoneUserSchema = z.object({
   id: z.string().min(1),
   phoneNumberVerified: z.literal(true),
+  phoneNumber: z.string().min(1),
+  email: z.string().email().optional(),
+  emailVerified: z.boolean().optional(),
+  name: z.string().optional(),
 });
 const taskCancelResultSchema = z.object({
   kind: z.literal("tool-result"),
@@ -34,6 +46,34 @@ const cancelledWorkerTaskSchema = z.object({
 const workerCancellationsSchema = z.array(
   z.object({ sourceMessageId: z.string(), taskId: z.string() })
 );
+const applicationStartResultSchema = z.object({
+  kind: z.literal("tool-result"),
+  toolName: z.literal("start_goforay_application"),
+});
+const submittedApplicationResultSchema = z.object({
+  kind: z.literal("tool-result"),
+  output: z.object({ status: z.literal("submitted") }),
+  toolName: z.literal("report_goforay_application_result"),
+});
+const jobCardSchema = z.object({
+  company: z.string(),
+  location: z.string(),
+  posting_id: z.string(),
+  reasons: z.array(z.string()),
+  title: z.string(),
+});
+const jobCardResultSchema = z.object({
+  kind: z.literal("tool-result"),
+  output: z.object({ cards: z.array(jobCardSchema) }),
+  toolName: z.enum(["find_goforay_roles", "find_next_goforay_roles"]),
+});
+const pendingJobCardsSchema = z.object({
+  cards: z.array(jobCardSchema),
+  turnId: z.string(),
+});
+const pendingSubmissionScreenshotSchema = z.object({
+  turnId: z.string(),
+});
 
 // Linq keeps a durable session for the whole iMessage thread. Supplying this on
 // every turn lets an updated deployment supersede stale behavior in an older
@@ -64,9 +104,35 @@ const { bot, channel, send } = chatSdkChannel({
   events: {
     "action.result"(event, context) {
       const result = taskCancelResultSchema.safeParse(event.result);
+      const sourceMessageId = context.thread?.toJSON().currentMessage?.id;
+      if (applicationStartResultSchema.safeParse(event.result).success) {
+        void reactToCurrentMessage(
+          context,
+          sourceMessageId,
+          "👀",
+          "application-start"
+        );
+      }
+      if (submittedApplicationResultSchema.safeParse(event.result).success) {
+        context.state.pendingSubmissionScreenshot = {
+          turnId: event.turnId,
+        };
+        void reactToCurrentMessage(
+          context,
+          sourceMessageId,
+          "✅",
+          "application-submitted"
+        );
+      }
+      const jobCards = jobCardResultSchema.safeParse(event.result);
+      if (jobCards.success && jobCards.data.output.cards.length) {
+        context.state.pendingGoForayJobCards = {
+          cards: jobCards.data.output.cards.slice(0, 5),
+          turnId: event.turnId,
+        };
+      }
       if (!result.success) return;
 
-      const sourceMessageId = context.thread?.toJSON().currentMessage?.id;
       if (!sourceMessageId) return;
 
       const storedCancellations = workerCancellationsSchema.safeParse(
@@ -91,22 +157,6 @@ const { bot, channel, send } = chatSdkChannel({
               .map((line) => line.trim())
               .find(Boolean) ?? null)
           : null;
-        if (context.thread) {
-          const messageId = context.thread.toJSON().currentMessage?.id;
-          if (
-            messageId &&
-            context.state.acknowledgedLinqMessageId !== messageId
-          ) {
-            try {
-              await context.bot
-                .getAdapter("linq")
-                .addReaction(context.thread.id, messageId, "thumbs_up");
-              context.state.acknowledgedLinqMessageId = messageId;
-            } catch {
-              // SMS/RCS and some carrier paths do not support iMessage tapbacks.
-            }
-          }
-        }
         return;
       }
 
@@ -135,22 +185,72 @@ const { bot, channel, send } = chatSdkChannel({
       }
 
       context.state.pendingToolCallMessage = null;
-      if (!event.message || !context.thread) return;
+      if (!context.thread) return;
 
-      // Eve's Linq adapter translates supported Markdown into native iMessage
-      // decorations, so recipients see styled text instead of literal markers.
-      await context.thread.post({ markdown: event.message });
-      const caller =
-        session.session.auth.current ?? session.session.auth.initiator;
-      if (caller) {
-        const scope = scopeFromPrincipal(caller);
-        void recordConversationMessage({
-          scope,
-          conversationId: `linq:${scope.userId}`,
-          channel: "linq",
-          direction: "outbound",
-          body: event.message,
-        }).catch(() => undefined);
+      const pendingScreenshot = pendingSubmissionScreenshotSchema.safeParse(
+        context.state.pendingSubmissionScreenshot
+      );
+      if (
+        pendingScreenshot.success &&
+        pendingScreenshot.data.turnId === event.turnId
+      ) {
+        context.state.pendingSubmissionScreenshot = undefined;
+        const caller =
+          session.session.auth?.current ?? session.session.auth?.initiator;
+        if (caller) {
+          await deliverSubmissionScreenshot(
+            context.thread,
+            scopeFromPrincipal(caller),
+            event.turnId
+          );
+        }
+      }
+
+      if (!event.message) return;
+
+      const pendingCards = pendingJobCardsSchema.safeParse(
+        context.state.pendingGoForayJobCards
+      );
+      if (pendingCards.success && pendingCards.data.turnId === event.turnId) {
+        context.state.pendingGoForayJobCards = undefined;
+        const caller =
+          session.session.auth?.current ?? session.session.auth?.initiator;
+        await deliverJobCards(
+          context.thread,
+          pendingCards.data.cards,
+          caller ? scopeFromPrincipal(caller) : undefined,
+          event.turnId
+        );
+        return;
+      }
+
+      const delivery = formatCandidateDelivery(event.message);
+      if (!delivery.bubbles.length) return;
+      for (const [index, body] of delivery.bubbles.entries()) {
+        // Eve's Linq adapter translates supported Markdown into native iMessage
+        // decorations, so recipients see styled text instead of literal markers.
+        await context.thread.post({ markdown: body });
+        const caller =
+          session.session.auth?.current ?? session.session.auth?.initiator;
+        if (caller) {
+          const scope = scopeFromPrincipal(caller);
+          void recordConversationMessage({
+            scope,
+            conversationId: `linq:${scope.userId}`,
+            channel: "linq",
+            direction: "outbound",
+            body,
+            sourceMessageId: `linq:${event.turnId}:${index}`,
+          }).catch(() => undefined);
+        }
+      }
+      if (delivery.reaction) {
+        await reactToCurrentMessage(
+          context,
+          sourceMessageId,
+          delivery.reaction === "heart" ? "❤️" : "Haha",
+          `semantic-${delivery.reaction}`
+        );
       }
     },
   },
@@ -211,21 +311,33 @@ async function prepareInboundMessage(message: Message) {
     typeof authorUserName === "string"
       ? normalizeAuthPhoneNumber(authorUserName)
       : undefined;
-  const verifiedUserId = phoneNumber
+  const verifiedUser = phoneNumber
     ? await findVerifiedAuthUserIdByPhoneNumber(phoneNumber)
     : undefined;
-  if (verifiedUserId && phoneNumber) {
+  if (verifiedUser && phoneNumber) {
     try {
       await linkCandidate({
-        userId: verifiedUserId,
-        identities: [{ kind: "phone", value: phoneNumber, verified: true }],
+        userId: verifiedUser.id,
+        name: verifiedUser.name ?? "",
+        identities: [
+          { kind: "phone", value: phoneNumber, verified: true },
+          ...(verifiedUser.emailVerified && verifiedUser.email
+            ? [
+                {
+                  kind: "email" as const,
+                  value: verifiedUser.email,
+                  verified: true as const,
+                },
+              ]
+            : []),
+        ],
       });
     } catch {
       // A missing or ambiguous CRM candidate must not block a normal text.
     }
   }
-  const principalId = verifiedUserId
-    ? `better-auth:${verifiedUserId}`
+  const principalId = verifiedUser
+    ? `better-auth:${verifiedUser.id}`
     : auth.principalId;
   const scope = accessScopeForUser(principalId);
   const importedResumes = await importLinqResumes(message, scope);
@@ -237,6 +349,7 @@ async function prepareInboundMessage(message: Message) {
       channel: "linq",
       direction: "inbound",
       body,
+      sourceMessageId: message.id,
     }).catch(() => undefined);
   }
   return {
@@ -352,5 +465,142 @@ async function findVerifiedAuthUserIdByPhoneNumber(phoneNumber: string) {
     where: [{ field: "phoneNumber", value: phoneNumber }],
   });
   const parsed = verifiedPhoneUserSchema.safeParse(user);
-  return parsed.success ? parsed.data.id : undefined;
+  return parsed.success ? parsed.data : undefined;
+}
+
+async function reactToCurrentMessage(
+  context: {
+    bot: {
+      getAdapter: (name: "linq") => {
+        addReaction: (
+          threadId: string,
+          messageId: string,
+          emoji: string
+        ) => Promise<void>;
+      };
+    };
+    state: Record<string, unknown>;
+    thread?: { id: string };
+  },
+  messageId: string | undefined,
+  emoji: string,
+  reason: string
+) {
+  if (!messageId || !context.thread) return;
+  const key = `forayReaction:${reason}:${messageId}`;
+  if (context.state[key]) return;
+  try {
+    await context.bot
+      .getAdapter("linq")
+      .addReaction(context.thread.id, messageId, emoji);
+    context.state[key] = true;
+  } catch {
+    // SMS/RCS and web paths do not guarantee reaction support.
+  }
+}
+
+async function deliverSubmissionScreenshot(
+  thread: {
+    post: (message: {
+      markdown: string;
+      files?: { data: Buffer; filename: string; mimeType: string }[];
+    }) => Promise<unknown>;
+    toJSON: () => unknown;
+  },
+  scope: ReturnType<typeof scopeFromPrincipal>,
+  turnId: string
+) {
+  if (!isRichLinqThread(thread)) return;
+  try {
+    const screenshot =
+      await consumeLatestApplicationSubmissionScreenshot(scope);
+    if (!screenshot) return;
+    await thread.post({
+      markdown: "",
+      files: [
+        {
+          data: screenshot.png,
+          filename: "application-submitted.png",
+          mimeType: screenshot.mimeType,
+        },
+      ],
+    });
+    void recordConversationMessage({
+      scope,
+      conversationId: `linq:${scope.userId}`,
+      channel: "linq",
+      direction: "outbound",
+      body: "application submitted screenshot",
+      sourceMessageId: `linq:${turnId}:submission-screenshot`,
+    }).catch(() => undefined);
+  } catch {
+    // The coordinator's text confirmation remains useful if media upload fails.
+  }
+}
+
+async function deliverJobCards(
+  thread: {
+    post: (message: {
+      markdown: string;
+      files?: { data: Buffer; filename: string; mimeType: string }[];
+    }) => Promise<unknown>;
+    toJSON: () => unknown;
+  },
+  cards: GoForayJobCard[],
+  scope: ReturnType<typeof scopeFromPrincipal> | undefined,
+  turnId: string
+) {
+  const rich = isRichLinqThread(thread);
+  for (const [offset, card] of cards.entries()) {
+    const index = offset + 1;
+    const text = renderGoForayJobCard(card, index, cards.length);
+    let sentImage = false;
+    if (rich && scope) {
+      try {
+        const png = await goforayJobCardPng(
+          scope,
+          card.posting_id,
+          index,
+          cards.length
+        );
+        await thread.post({
+          markdown: "",
+          files: [
+            {
+              data: png,
+              filename: jobCardFilename(card),
+              mimeType: "image/png",
+            },
+          ],
+        });
+        sentImage = true;
+      } catch {
+        // The text card remains useful if rendering or media upload is unavailable.
+      }
+    }
+    if (!sentImage) await thread.post({ markdown: text });
+    if (scope) {
+      void recordConversationMessage({
+        scope,
+        conversationId: `linq:${scope.userId}`,
+        channel: "linq",
+        direction: "outbound",
+        body: text,
+        sourceMessageId: `linq:${turnId}:card:${index}`,
+      }).catch(() => undefined);
+    }
+  }
+}
+
+function isRichLinqThread(thread: { toJSON: () => unknown }) {
+  const value = z
+    .object({
+      lastService: z.string().optional(),
+      service: z.string().optional(),
+    })
+    .safeParse(thread.toJSON());
+  const service = value.success
+    ? (value.data.lastService ?? value.data.service ?? "")
+    : "";
+  return service === "iMessage" || service === "RCS";
 }

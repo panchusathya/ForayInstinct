@@ -15,8 +15,10 @@ describe("database migrations", () => {
     await applyMigration(database, "0000_fluffy_the_spike.sql");
     await applyMigration(database, "0001_better-auth.sql");
     await applyMigration(database, "0002_heavy_celestials.sql");
+    await applyMigration(database, "0005_browser_run_checkpoints.sql");
     await applyMigration(database, "0000_fluffy_the_spike.sql");
     await applyMigration(database, "0001_better-auth.sql");
+    await applyMigration(database, "0005_browser_run_checkpoints.sql");
 
     await database.exec(`
       INSERT INTO workspaces VALUES ('workspace-1', '2026-01-01');
@@ -42,6 +44,7 @@ describe("database migrations", () => {
            'settings',
            'agent_sessions',
            'browser_sessions',
+           'browser_run_checkpoints',
            'chats',
            'encrypted_secrets',
            'user',
@@ -52,7 +55,7 @@ describe("database migrations", () => {
     );
     const pendingConstraints = await pendingConstraintCount(database);
 
-    expect(tables.rows[0]?.count).toBe(12);
+    expect(tables.rows[0]?.count).toBe(13);
     expect(pendingConstraints).toBe(0);
     await expect(
       database.query("SELECT id FROM vault_items WHERE id = 'contact-1'")
@@ -123,6 +126,119 @@ describe("database migrations", () => {
           '2026-01-01'
         )
         `)
+    ).rejects.toThrow(/constraint/);
+  }, 15_000);
+
+  it("stores the candidate's self-identification answers", async () => {
+    // settings_key_check only admitted 'gateway_model', so saving an EEO
+    // answer failed at the database and stalled the application on the
+    // voluntary disclosures section it was meant to get past.
+    const database = createDatabase();
+
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(database, "0008_self_identification_setting.sql");
+    await applyMigration(database, "0008_self_identification_setting.sql");
+
+    await database.exec(`
+      INSERT INTO workspaces VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO settings VALUES (
+        'workspace-1',
+        'self_identification',
+        '{"gender":"Male"}'
+      );
+      INSERT INTO settings VALUES ('workspace-1', 'gateway_model', 'openai/gpt-5');
+    `);
+
+    await expect(
+      database.query<{ value: string }>(
+        `SELECT value FROM settings WHERE key = 'self_identification'`
+      )
+    ).resolves.toMatchObject({ rows: [{ value: '{"gender":"Male"}' }] });
+    expect(await pendingConstraintCount(database)).toBe(0);
+    await expect(
+      database.exec(
+        `INSERT INTO settings VALUES ('workspace-1', 'unknown_key', 'x')`
+      )
+    ).rejects.toThrow(/constraint/);
+  }, 15_000);
+
+  it("stores an application-submitted screenshot until Linq delivers it", async () => {
+    const database = createDatabase();
+
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(
+      database,
+      "0010_application_submission_screenshots.sql"
+    );
+    await applyMigration(
+      database,
+      "0010_application_submission_screenshots.sql"
+    );
+
+    await database.exec(`
+      INSERT INTO workspaces VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO workspace_memberships VALUES (
+        'workspace-1',
+        'user-1',
+        'owner',
+        '2026-01-01'
+      );
+      INSERT INTO application_submission_screenshots (
+        session_id,
+        workspace_id,
+        created_by_user_id,
+        created_at,
+        png_base64
+      ) VALUES (
+        'browser-1',
+        'workspace-1',
+        'user-1',
+        '2026-01-01',
+        'iVBORw0KGgo='
+      );
+    `);
+
+    await expect(
+      database.query<{ png_base64: string; delivered_at: string | null }>(
+        `SELECT png_base64, delivered_at
+         FROM application_submission_screenshots
+         WHERE session_id = 'browser-1'`
+      )
+    ).resolves.toMatchObject({
+      rows: [{ delivered_at: null, png_base64: "iVBORw0KGgo=" }],
+    });
+    expect(await pendingConstraintCount(database)).toBe(0);
+  }, 15_000);
+
+  it("stores the candidate ATS profile beside the workspace Kernel profile id", async () => {
+    const database = createDatabase();
+
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(database, "0009_candidate_profile.sql");
+    await applyMigration(database, "0009_candidate_profile.sql");
+
+    await database.exec(`
+      INSERT INTO workspaces (id, created_at) VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO candidate_profiles (workspace_id, legal_first_name, created_at, updated_at)
+      VALUES ('workspace-1', 'Ada', '2026-01-01', '2026-01-01');
+    `);
+
+    await expect(
+      database.query<{ legal_first_name: string; kernel_profile_id: string }>(
+        `SELECT p.legal_first_name, w.kernel_profile_id
+         FROM candidate_profiles p
+         JOIN workspaces w ON w.id = p.workspace_id
+         WHERE p.workspace_id = 'workspace-1'`
+      )
+    ).resolves.toMatchObject({
+      rows: [{ legal_first_name: "Ada", kernel_profile_id: "" }],
+    });
+    await expect(
+      database.exec(
+        `INSERT INTO workspaces (id, created_at) VALUES ('workspace-2', '2026-01-01');
+         INSERT INTO candidate_profiles (workspace_id, work_authorization, created_at, updated_at)
+         VALUES ('workspace-2', 'not-a-status', '2026-01-01', '2026-01-01')`
+      )
     ).rejects.toThrow(/constraint/);
   }, 15_000);
 

@@ -67,13 +67,22 @@ const codecs: readonly VaultAutofillCodec[] = [
       }
       if (login.authentication.type === "password") {
         values.set("current-password", login.authentication.password);
+        values.set("new-password", login.authentication.password);
+        values.set("confirm-password", login.authentication.password);
       }
       return values;
     },
     isAvailableAtOrigin: isBoundLoginForOrigin,
     matchReason: "Saved login",
     surfaceKinds: ["credentials", "contact"],
-    tokens: ["username", "current-password", "email", "tel"],
+    tokens: [
+      "username",
+      "current-password",
+      "new-password",
+      "confirm-password",
+      "email",
+      "tel",
+    ],
     vaultKind: "login",
   },
   {

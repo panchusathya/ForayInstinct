@@ -5,6 +5,7 @@ import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { readVaultItem } from "@/db/services/vault";
 import { materializeAutofillClaims } from "@/lib/manager/server/vault-autofill";
 import { vaultAutofillProvider } from "@/lib/manager/server/vault-autofill-provider";
+import { loginTokensForPurpose } from "@/lib/manager/server/kernel-login-autofill";
 import {
   currentKernelPageOrigin,
   fillWithKernelNativeAutofill,
@@ -21,7 +22,7 @@ const outputSchema = z.object({
 
 export default defineTool({
   description:
-    "Fill a login, card, or address form with an opaque handle returned by list_vault. Focus one control in the intended form first. Never supply vault fields, selectors, origins, or secret values.",
+    'Fill a login, card, or address form with an opaque handle returned by list_vault. Focus one control in the intended form first. Never supply vault fields, selectors, origins, or secret values. For a login, purpose is "sign_in" (default) or "sign_up"; use "sign_up" only on a create-account form.',
   inputSchema: fillFromVaultRequestSchema,
   outputSchema,
   async execute(input, context) {
@@ -39,18 +40,27 @@ export default defineTool({
         "Native browser autofill currently supports only logins, cards, and addresses."
       );
     }
+    if (input.purpose === "sign_up" && item.kind !== "login") {
+      throw new Error(
+        'purpose "sign_up" is only valid for a login vault item.'
+      );
+    }
 
     const origin = await currentKernelPageOrigin({
       browserSessionId: input.browserSessionId,
       signal: context.abortSignal,
     });
+    const purpose = input.purpose;
     const surfaceKind =
       item.kind === "payment"
         ? "payment-card"
         : item.kind === "login"
           ? "credentials"
           : "postal-address";
-    const tokens = nativeAutofillTokens[item.kind];
+    const tokens =
+      item.kind === "login"
+        ? loginTokensForPurpose(purpose)
+        : nativeAutofillTokens[item.kind];
     const surface = {
       fields: tokens.map((token) => ({ score: 100, token })),
       id: surfaceKind,
@@ -72,6 +82,7 @@ export default defineTool({
       claims,
       expectedOrigin: origin,
       kind: item.kind,
+      purpose,
       signal: context.abortSignal,
     });
 

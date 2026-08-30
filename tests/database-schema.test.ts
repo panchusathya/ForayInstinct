@@ -5,7 +5,10 @@ import { z } from "zod";
 import {
   account,
   agentSessions,
+  applicationSubmissionScreenshots,
+  browserRunCheckpoints,
   browserSessions,
+  candidateProfiles,
   chats,
   encryptedSecrets,
   session,
@@ -27,8 +30,11 @@ describe("database schema", () => {
         settings,
         agentSessions,
         browserSessions,
+        browserRunCheckpoints,
+        applicationSubmissionScreenshots,
         chats,
         encryptedSecrets,
+        candidateProfiles,
         user,
         session,
         account,
@@ -41,8 +47,11 @@ describe("database schema", () => {
       "settings",
       "agent_sessions",
       "browser_sessions",
+      "browser_run_checkpoints",
+      "application_submission_screenshots",
       "chats",
       "encrypted_secrets",
+      "candidate_profiles",
       "user",
       "session",
       "account",
@@ -51,7 +60,12 @@ describe("database schema", () => {
   });
 
   it("anchors session creators to a membership in the same workspace", () => {
-    for (const table of [agentSessions, browserSessions]) {
+    for (const table of [
+      agentSessions,
+      browserSessions,
+      browserRunCheckpoints,
+      applicationSubmissionScreenshots,
+    ]) {
       const foreignKeys = getTableConfig(table).foreignKeys;
       expect(foreignKeys.map((foreignKey) => foreignKey.getName())).toContain(
         `${getTableConfig(table).name}_membership_fkey`
@@ -78,6 +92,7 @@ describe("database schema", () => {
       settings,
       chats,
       encryptedSecrets,
+      candidateProfiles,
     ]) {
       expect(
         getTableConfig(table).foreignKeys.some((foreignKey) =>
@@ -142,7 +157,10 @@ describe("migration deployment policy", () => {
     expect(packageManifest.devDependencies).not.toHaveProperty("dotenv-cli");
     expect(turbo.tasks["build:vercel"].dependsOn).toContain("db:migrate");
     expect(turbo.tasks["db:migrate"].cache).toBe(false);
-    expect(turbo.tasks["db:migrate"].env).toEqual(["DATABASE_URL_UNPOOLED"]);
+    expect(turbo.tasks["db:migrate"].env).toEqual([
+      "DATABASE_URL",
+      "DATABASE_URL_UNPOOLED",
+    ]);
     expect(vercel.buildCommand).toBe("pnpm turbo run build:vercel");
   });
 
@@ -153,6 +171,7 @@ describe("migration deployment policy", () => {
     );
     const services = await Promise.all(
       [
+        "application-submission-screenshots",
         "browsers",
         "chats",
         "scope",

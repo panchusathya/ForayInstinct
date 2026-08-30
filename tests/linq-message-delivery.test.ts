@@ -1,23 +1,38 @@
 /* oxlint-disable typescript/no-unsafe-type-assertion -- Eve's Linq adapter exposes the handler context through a transitive Chat SDK `any`; the fixture supplies only the fields exercised here. */
-import type * as LinqModule from "eve/channels/linq";
-import { describe, expect, it, vi } from "vitest";
+import type { chatSdkChannel } from "eve/channels/chat-sdk";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import workerCancellationHook from "../agent/hooks/worker-cancellation-delivery";
 
-const linqChannelCapture = vi.hoisted(() => ({ config: undefined as unknown }));
-vi.mock("eve/channels/linq", async (importOriginal) => {
-  const original = await importOriginal<typeof LinqModule>();
-  return {
-    ...original,
-    linqChannel(config: unknown) {
-      linqChannelCapture.config = config;
-      return config;
-    },
-  };
-});
+const channelCapture = vi.hoisted(() => ({ config: undefined as unknown }));
+const screenshotMocks = vi.hoisted(() => ({
+  consumeLatestApplicationSubmissionScreenshot:
+    vi.fn<
+      (
+        _scope: unknown
+      ) => Promise<{ mimeType: string; png: Buffer } | undefined>
+    >(),
+}));
+vi.mock("eve/channels/chat-sdk", () => ({
+  chatSdkChannel(config: unknown) {
+    channelCapture.config = config;
+    return {
+      bot: {
+        onDirectMessage: vi.fn<() => void>(),
+        onNewMessage: vi.fn<() => void>(),
+      },
+      channel: {},
+      send: vi.fn<() => void>(),
+    };
+  },
+}));
+vi.mock("@/db/services/application-submission-screenshots", () => ({
+  consumeLatestApplicationSubmissionScreenshot:
+    screenshotMocks.consumeLatestApplicationSubmissionScreenshot,
+}));
 await import("../agent/channels/linq-v2");
 
 const channelEvents = (
-  linqChannelCapture.config as LinqModule.LinqChannelConfig
+  channelCapture.config as Parameters<typeof chatSdkChannel>[0]
 ).events;
 const trackWorkerCancellation = channelEvents?.["action.result"];
 const deliverCompletedMessage = channelEvents?.["message.completed"];
@@ -28,6 +43,10 @@ if (!trackWorkerCancellation || !deliverCompletedMessage) {
 type HandlerParameters = Parameters<typeof deliverCompletedMessage>;
 
 describe("Linq message delivery", () => {
+  beforeEach(() => {
+    screenshotMocks.consumeLatestApplicationSubmissionScreenshot.mockReset();
+  });
+
   it("posts final responses as native iMessage Markdown", async () => {
     const message = [
       "Still blocked. No order was submitted.",
@@ -43,10 +62,12 @@ describe("Linq message delivery", () => {
       sessionContext()
     );
 
-    expect(post).toHaveBeenCalledExactlyOnceWith({ markdown: message });
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      markdown: message.toLowerCase(),
+    });
   });
 
-  it("suppresses intermediate tool-call messages", async () => {
+  it("suppresses intermediate tool-call messages without a generic reaction", async () => {
     const { addReaction, context, post, state } = handlerContext();
 
     await deliverCompletedMessage(
@@ -59,11 +80,7 @@ describe("Linq message delivery", () => {
     );
 
     expect(post).not.toHaveBeenCalled();
-    expect(addReaction).toHaveBeenCalledExactlyOnceWith(
-      "linq:dm:chat-1",
-      "message-1",
-      "thumbs_up"
-    );
+    expect(addReaction).not.toHaveBeenCalled();
     expect(state.pendingToolCallMessage).toBe("Checking the checkout");
   });
 
@@ -113,9 +130,9 @@ describe("Linq message delivery", () => {
 
     expect(post).toHaveBeenCalledTimes(2);
     expect(post).toHaveBeenNthCalledWith(1, {
-      markdown: "What should I check instead?",
+      markdown: "what should i check instead?",
     });
-    expect(post).toHaveBeenNthCalledWith(2, { markdown: "A later reply" });
+    expect(post).toHaveBeenNthCalledWith(2, { markdown: "a later reply" });
   });
 
   it("does not suppress an interleaved task result", async () => {
@@ -149,7 +166,7 @@ describe("Linq message delivery", () => {
     );
 
     expect(post).toHaveBeenCalledExactlyOnceWith({
-      markdown: "A different worker completed successfully.",
+      markdown: "a different worker completed successfully.",
     });
   });
 
@@ -177,7 +194,7 @@ describe("Linq message delivery", () => {
     );
 
     expect(newer.post).toHaveBeenCalledExactlyOnceWith({
-      markdown: "User-authored follow-up",
+      markdown: "user-authored follow-up",
     });
   });
 
@@ -204,7 +221,93 @@ describe("Linq message delivery", () => {
 
     expect(post).not.toHaveBeenCalled();
   });
+
+  it("posts a confirmation screenshot on rich iMessage after a submitted report", async () => {
+    screenshotMocks.consumeLatestApplicationSubmissionScreenshot.mockResolvedValue(
+      {
+        mimeType: "image/png",
+        png: Buffer.from("png-bytes"),
+      }
+    );
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+
+    await trackWorkerCancellation(
+      submittedApplicationResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    await deliverCompletedMessage(
+      completedEvent({ message: "Applied to Staff Engineer at Acme." }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(
+      screenshotMocks.consumeLatestApplicationSubmissionScreenshot
+    ).toHaveBeenCalledWith({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+    });
+    expect(post).toHaveBeenNthCalledWith(1, {
+      files: [
+        {
+          data: Buffer.from("png-bytes"),
+          filename: "application-submitted.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown: "",
+    });
+    expect(post).toHaveBeenNthCalledWith(2, {
+      markdown: "applied to staff engineer at acme.",
+    });
+  });
+
+  it("keeps SMS on the text confirmation when a screenshot is available", async () => {
+    screenshotMocks.consumeLatestApplicationSubmissionScreenshot.mockResolvedValue(
+      {
+        mimeType: "image/png",
+        png: Buffer.from("png-bytes"),
+      }
+    );
+    const { context, post } = handlerContext();
+
+    await trackWorkerCancellation(
+      submittedApplicationResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    await deliverCompletedMessage(
+      completedEvent({ message: "Applied to Staff Engineer at Acme." }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(
+      screenshotMocks.consumeLatestApplicationSubmissionScreenshot
+    ).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      markdown: "applied to staff engineer at acme.",
+    });
+  });
 });
+
+function submittedApplicationResult(): Parameters<
+  NonNullable<typeof trackWorkerCancellation>
+>[0] {
+  return {
+    result: {
+      callId: "call-submit",
+      kind: "tool-result",
+      output: { status: "submitted" },
+      toolName: "report_goforay_application_result",
+    },
+    sequence: 0,
+    status: "completed",
+    stepIndex: 0,
+    turnId: "turn-1",
+  };
+}
 
 function workerCancellationResult(
   taskId = "task-worker"
@@ -251,7 +354,8 @@ function completedEvent(
 
 function handlerContext(
   currentMessageId = "message-1",
-  state: Record<string, unknown> = {}
+  state: Record<string, unknown> = {},
+  lastService?: string
 ) {
   const post = vi.fn<(message: string) => Promise<void>>();
   post.mockResolvedValue();
@@ -276,6 +380,7 @@ function handlerContext(
         currentMessage: { id: currentMessageId },
         id: "linq:dm:chat-1",
         isDM: true,
+        ...(lastService ? { lastService } : {}),
       }),
     },
   } as unknown as HandlerParameters[1];
@@ -288,10 +393,22 @@ function handlerContext(
   };
 }
 
-function sessionContext() {
+function sessionContext(auth?: { id: string; workspaceId: string }) {
   return {
-    session: { id: "session-1" },
-  } as HandlerParameters[2];
+    session: {
+      id: "session-1",
+      ...(auth
+        ? {
+            auth: {
+              current: {
+                attributes: { workspaceId: auth.workspaceId },
+                id: auth.id,
+              },
+            },
+          }
+        : {}),
+    },
+  } as unknown as HandlerParameters[2];
 }
 
 async function recordCancellationThroughHook(

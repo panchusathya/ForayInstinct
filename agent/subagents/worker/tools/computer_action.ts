@@ -3,6 +3,8 @@ import { z } from "zod";
 import { kernel } from "@/lib/kernel";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
+import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/browser-run-evidence";
+import { maskVaultFields } from "@/agent/subagents/worker/lib/kernel-screenshot";
 
 const actionSchema = z.object({
   type: z.enum([
@@ -112,122 +114,149 @@ export default defineTool({
     const data: unknown[] = [];
     let screenshotBase64: string | undefined;
 
-    for (const action of input.actions) {
-      switch (action.type) {
-        case "click_mouse":
-          await computer.clickMouse(
-            input.session_id,
-            requiredAction(action.click_mouse, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "move_mouse":
-          await computer.moveMouse(
-            input.session_id,
-            requiredAction(action.move_mouse, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "type_text":
-          await computer.typeText(
-            input.session_id,
-            requiredAction(action.type_text, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "press_key":
-          await computer.pressKey(
-            input.session_id,
-            requiredAction(action.press_key, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "scroll":
-          await computer.scroll(
-            input.session_id,
-            requiredAction(action.scroll, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "drag_mouse":
-          await computer.dragMouse(
-            input.session_id,
-            requiredAction(action.drag_mouse, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "set_cursor":
-          data.push(
-            await computer.setCursorVisibility(
+    try {
+      for (const action of input.actions) {
+        switch (action.type) {
+          case "click_mouse":
+            await computer.clickMouse(
               input.session_id,
-              requiredAction(action.set_cursor, action.type),
-              { signal: context.abortSignal }
-            )
-          );
-          break;
-        case "sleep":
-          await computer.batch(
-            input.session_id,
-            {
-              actions: [
-                {
-                  sleep: requiredAction(action.sleep, action.type),
-                  type: "sleep",
-                },
-              ],
-            },
-            { signal: context.abortSignal }
-          );
-          break;
-        case "write_clipboard":
-          await computer.writeClipboard(
-            input.session_id,
-            requiredAction(action.write_clipboard, action.type),
-            { signal: context.abortSignal }
-          );
-          break;
-        case "read_clipboard":
-          data.push(
-            await computer.readClipboard(input.session_id, {
-              signal: context.abortSignal,
-            })
-          );
-          break;
-        case "get_mouse_position":
-          data.push(
-            await computer.getMousePosition(input.session_id, {
-              signal: context.abortSignal,
-            })
-          );
-          break;
-        case "screenshot": {
-          const removeMask = await maskVaultFields(
-            input.session_id,
-            context.abortSignal
-          );
-          try {
-            const response = await computer.captureScreenshot(
-              input.session_id,
-              action.screenshot,
+              requiredAction(action.click_mouse, action.type),
               { signal: context.abortSignal }
             );
-            screenshotBase64 = Buffer.from(
-              await response.arrayBuffer()
-            ).toString("base64");
-          } finally {
-            await removeMask();
+            break;
+          case "move_mouse":
+            await computer.moveMouse(
+              input.session_id,
+              requiredAction(action.move_mouse, action.type),
+              { signal: context.abortSignal }
+            );
+            break;
+          case "type_text":
+            await computer.typeText(
+              input.session_id,
+              requiredAction(action.type_text, action.type),
+              { signal: context.abortSignal }
+            );
+            break;
+          case "press_key":
+            await computer.pressKey(
+              input.session_id,
+              requiredAction(action.press_key, action.type),
+              { signal: context.abortSignal }
+            );
+            break;
+          case "scroll":
+            await computer.scroll(
+              input.session_id,
+              requiredAction(action.scroll, action.type),
+              { signal: context.abortSignal }
+            );
+            break;
+          case "drag_mouse":
+            await computer.dragMouse(
+              input.session_id,
+              requiredAction(action.drag_mouse, action.type),
+              { signal: context.abortSignal }
+            );
+            break;
+          case "set_cursor":
+            data.push(
+              await computer.setCursorVisibility(
+                input.session_id,
+                requiredAction(action.set_cursor, action.type),
+                { signal: context.abortSignal }
+              )
+            );
+            break;
+          case "sleep":
+            await computer.batch(
+              input.session_id,
+              {
+                actions: [
+                  {
+                    sleep: requiredAction(action.sleep, action.type),
+                    type: "sleep",
+                  },
+                ],
+              },
+              { signal: context.abortSignal }
+            );
+            break;
+          case "write_clipboard":
+            await computer.writeClipboard(
+              input.session_id,
+              requiredAction(action.write_clipboard, action.type),
+              { signal: context.abortSignal }
+            );
+            break;
+          case "read_clipboard":
+            data.push(
+              await computer.readClipboard(input.session_id, {
+                signal: context.abortSignal,
+              })
+            );
+            break;
+          case "get_mouse_position":
+            data.push(
+              await computer.getMousePosition(input.session_id, {
+                signal: context.abortSignal,
+              })
+            );
+            break;
+          case "screenshot": {
+            const removeMask = await maskVaultFields(
+              input.session_id,
+              context.abortSignal
+            );
+            try {
+              const response = await computer.captureScreenshot(
+                input.session_id,
+                action.screenshot,
+                { signal: context.abortSignal }
+              );
+              screenshotBase64 = Buffer.from(
+                await response.arrayBuffer()
+              ).toString("base64");
+            } finally {
+              await removeMask();
+            }
+            break;
           }
-          break;
         }
       }
-    }
 
-    return outputSchema.parse({
-      data: data.length > 0 ? data : undefined,
-      message: `Executed ${String(input.actions.length)} computer action${input.actions.length === 1 ? "" : "s"}.`,
-      mimeType: screenshotBase64 ? "image/png" : undefined,
-      screenshotBase64,
-    });
+      await recordBrowserActionCheckpoint(
+        scope,
+        input.session_id,
+        {
+          action: "batch",
+          actions: input.actions.map((action) => action.type),
+          phase: "computer",
+          state: "completed",
+        },
+        context.abortSignal
+      );
+      return outputSchema.parse({
+        data: data.length > 0 ? data : undefined,
+        message: `Executed ${String(input.actions.length)} computer action${input.actions.length === 1 ? "" : "s"}.`,
+        mimeType: screenshotBase64 ? "image/png" : undefined,
+        screenshotBase64,
+      });
+    } catch (error) {
+      await recordBrowserActionCheckpoint(
+        scope,
+        input.session_id,
+        {
+          action: "batch",
+          actions: input.actions.map((action) => action.type),
+          errorCode: diagnosticErrorCode(error),
+          phase: "computer",
+          state: "failed",
+        },
+        context.abortSignal
+      );
+      throw error;
+    }
   },
   toModelOutput(output) {
     if (!output.screenshotBase64) {
@@ -252,41 +281,15 @@ function requiredAction<T>(value: T | undefined, action: string): T {
   return value;
 }
 
-async function maskVaultFields(sessionId: string, signal?: AbortSignal) {
-  const styleId = "vault-screenshot-mask";
-  const selector = '[data-vault-secret="true"]';
-  const addCode = `
-for (const currentContext of browser.contexts()) {
-  for (const currentPage of currentContext.pages()) {
-    for (const frame of currentPage.frames()) {
-      await frame.evaluate(({ styleId, selector }) => {
-        if (document.getElementById(styleId)) return;
-        const style = document.createElement("style");
-        style.id = styleId;
-        style.textContent = selector + " { color: transparent !important; text-shadow: 0 0 8px black !important; -webkit-text-security: disc !important; }";
-        document.documentElement.append(style);
-      }, ${JSON.stringify({ selector, styleId })}).catch(() => undefined);
-    }
+function diagnosticErrorCode(error: unknown) {
+  if (typeof error !== "string" && !(error instanceof Error)) {
+    return "computer_action";
   }
-}
-return true;`;
-  await kernel.browsers.playwright.execute(
-    sessionId,
-    { code: addCode, timeout_sec: 10 },
-    { signal }
-  );
-  return async () => {
-    const removeCode = `
-for (const currentContext of browser.contexts()) {
-  for (const currentPage of currentContext.pages()) {
-    for (const frame of currentPage.frames()) {
-      await frame.evaluate((styleId) => document.getElementById(styleId)?.remove(), ${JSON.stringify(styleId)}).catch(() => undefined);
-    }
+  const message = typeof error === "string" ? error : error.message;
+  if (/timeout/i.test(message)) return "timeout";
+  if (/407|proxy.*auth|wrong_password|auth failed/i.test(message)) {
+    return "proxy_auth";
   }
-}
-return true;`;
-    await kernel.browsers.playwright
-      .execute(sessionId, { code: removeCode, timeout_sec: 10 }, { signal })
-      .catch(() => undefined);
-  };
+  if (/chrome-error|net::/i.test(message)) return "navigation";
+  return "computer_action";
 }

@@ -50,6 +50,11 @@ describe("worker input bubbling", () => {
     expect(browserSkill).toContain("Sign in to apply");
     expect(browserSkill).toContain("Needs vault setup:");
     expect(browserSkill).toContain("visible password rules");
+    expect(browserSkill).toContain("provision_login");
+    expect(browserSkill).toContain("no registration path");
+    expect(instructions).toContain("timeout_seconds` of at least 1800");
+    expect(workerInstructions).toContain("timeout_seconds` of at least 1800");
+    expect(browserSkill).toContain("twenty-five minutes");
   });
 
   it("reads email OTP from Gmail instead of asking the candidate", () => {
@@ -122,6 +127,10 @@ describe("worker input bubbling", () => {
     );
     expect(browserSkill).toContain("dedicated Workday router");
     expect(browserSkill).toContain("Read its `workday` result");
+    expect(browserSkill).toContain(
+      "Treat `route_incomplete` as an automatic recovery state"
+    );
+    expect(browserSkill).toContain("Do not ask for a takeover");
   });
 
   it("keeps an ATS resume that is already attached", () => {
@@ -152,7 +161,9 @@ describe("worker input bubbling", () => {
     );
 
     expect(instructions).toContain("Never send raw JSON");
-    expect(instructions).toContain("one bullet per role");
+    expect(instructions).toContain(
+      "Roles from `find_goforay_roles` and `find_next_goforay_roles` are"
+    );
     expect(instructions).toContain(
       "dump `documents`, `form_answers`, `cards`, or `result`"
     );

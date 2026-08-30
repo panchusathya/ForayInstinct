@@ -170,14 +170,167 @@ describe("database services", () => {
     expect(await settings.readGatewayModel(alice)).toBe("openai/test");
     expect(await settings.readGatewayModel(bob)).toBeUndefined();
   }, 15_000);
+
+  it("keeps an application alive when the answers cannot be stored", async () => {
+    // A settings_key_check that admitted only 'gateway_model' turned this
+    // write into a thrown tool error, which killed the application waiting on
+    // the answer. Storing is a convenience; the answer itself is the result.
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, selfIdentification] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/self-identification"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    const rejected = await selfIdentification.saveSelfIdentification(alice, {
+      gender: "Male",
+    });
+
+    expect(rejected).toEqual({ answers: { gender: "Male" }, stored: false });
+
+    await applyMigration(client, "0008_self_identification_setting.sql");
+    const accepted = await selfIdentification.saveSelfIdentification(alice, {
+      disabilityStatus: "I do not wish to answer",
+    });
+
+    // The rejected answer was never stored, so it is absent from the merge
+    // the widened constraint now accepts.
+    expect(accepted).toEqual({
+      answers: { disabilityStatus: "I do not wish to answer" },
+      stored: true,
+    });
+    expect(await selfIdentification.readSelfIdentification(alice)).toEqual({
+      disabilityStatus: "I do not wish to answer",
+    });
+  }, 15_000);
+
+  it("keeps an application alive when the candidate profile cannot be stored", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, candidateProfile, workspaces] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/candidate-profile"),
+      import("@/db/services/workspaces"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    const orphan = { userId: "alice", workspaceId: "workspace:missing" };
+
+    const rejected = await candidateProfile.saveCandidateProfile(orphan, {
+      legalFirstName: "Ada",
+    });
+    expect(rejected.stored).toBe(false);
+    expect(rejected.profile.legalFirstName).toBe("Ada");
+
+    const kernelRejected = await workspaces.saveWorkspaceKernelProfileId(
+      orphan,
+      "profile-1"
+    );
+    expect(kernelRejected).toEqual({ stored: false });
+
+    await scope.ensureScope(alice);
+    const accepted = await candidateProfile.saveCandidateProfile(alice, {
+      legalFirstName: "Ada",
+      legalLastName: "Lovelace",
+    });
+    expect(accepted.stored).toBe(true);
+    expect(accepted.profile.legalFirstName).toBe("Ada");
+    expect(accepted.profile.legalLastName).toBe("Lovelace");
+    expect(await candidateProfile.readCandidateProfile(alice)).toEqual(
+      accepted.profile
+    );
+    expect(
+      await workspaces.saveWorkspaceKernelProfileId(alice, "profile-1")
+    ).toEqual({ stored: true });
+    expect(await workspaces.readWorkspaceKernelProfileId(alice)).toBe(
+      "profile-1"
+    );
+  }, 15_000);
+
+  it("hands the latest undelivered confirmation screenshot to the next consumer", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0010_application_submission_screenshots.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, screenshots] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/application-submission-screenshots"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    const bob = { userId: "bob", workspaceId: "workspace:bob" };
+    await scope.ensureScope(alice);
+    await scope.ensureScope(bob);
+
+    await screenshots.saveApplicationSubmissionScreenshot(
+      alice,
+      "browser-old",
+      { png: Buffer.from("older") }
+    );
+    await screenshots.saveApplicationSubmissionScreenshot(
+      alice,
+      "browser-new",
+      { page: "https://example.com/confirmation", png: Buffer.from("newer") }
+    );
+    await screenshots.saveApplicationSubmissionScreenshot(bob, "browser-bob", {
+      png: Buffer.from("other-workspace"),
+    });
+
+    await expect(
+      screenshots.consumeLatestApplicationSubmissionScreenshot(alice)
+    ).resolves.toEqual({
+      mimeType: "image/png",
+      png: Buffer.from("newer"),
+    });
+    await expect(
+      screenshots.consumeLatestApplicationSubmissionScreenshot(alice)
+    ).resolves.toEqual({
+      mimeType: "image/png",
+      png: Buffer.from("older"),
+    });
+    await expect(
+      screenshots.consumeLatestApplicationSubmissionScreenshot(alice)
+    ).resolves.toBeUndefined();
+    await expect(
+      screenshots.consumeLatestApplicationSubmissionScreenshot(bob)
+    ).resolves.toEqual({
+      mimeType: "image/png",
+      png: Buffer.from("other-workspace"),
+    });
+  }, 15_000);
 });
 
-async function applyInitialMigration(database: PGlite) {
+async function applyMigration(database: PGlite, name: string) {
   const migration = await readFile(
-    new URL("../db/migrations/0000_fluffy_the_spike.sql", import.meta.url),
+    new URL(`../db/migrations/${name}`, import.meta.url),
     "utf8"
   );
   for (const statement of migration.split("--> statement-breakpoint")) {
     if (statement.trim()) await database.exec(statement);
   }
+}
+
+async function applyInitialMigration(database: PGlite) {
+  await applyMigration(database, "0000_fluffy_the_spike.sql");
+  await applyMigration(database, "0009_candidate_profile.sql");
 }

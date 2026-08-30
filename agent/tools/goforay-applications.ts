@@ -5,6 +5,7 @@ import {
   applicationTask,
   createApplicationTask,
   findGoforayRoles,
+  nextGoforayRoles,
   reportApplicationTask,
 } from "@/lib/goforay/bridge";
 
@@ -50,6 +51,12 @@ export default defineDynamic({
           }),
           execute: ({ job_posting_id }) =>
             createApplicationTask(scope, job_posting_id),
+        }),
+        find_next_goforay_roles: defineTool({
+          description:
+            "Immediately after starting an application, fetch up to five new curated JuiceBox roles for the same candidate. The started and previously shown roles are excluded. Never use this as an Exa fallback and never claim there are roles when the returned list is empty.",
+          inputSchema: z.object({}),
+          execute: () => nextGoforayRoles(scope),
         }),
         get_goforay_application_task: defineTool({
           description:

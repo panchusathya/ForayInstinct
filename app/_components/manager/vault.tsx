@@ -1,7 +1,8 @@
 "use client";
 
-import { KeyRoundIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { EyeIcon, KeyRoundIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
+import { z } from "zod";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +13,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import type {
   ManagerMutation,
   ManagerSetupRequest,
@@ -201,6 +203,7 @@ function VaultItemRow({
           </p>
         ) : null}
       </div>
+      {item.kind === "login" ? <RevealLoginButton item={item} /> : null}
       <Button
         aria-label={`Remove ${item.label}`}
         disabled={busy}
@@ -212,6 +215,116 @@ function VaultItemRow({
         <Trash2Icon />
       </Button>
     </div>
+  );
+}
+
+function RevealLoginButton({
+  item,
+}: {
+  readonly item: ManagerSnapshot["vaultItems"][number];
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [secret, setSecret] = useState<{
+    identifier: string;
+    origin?: string;
+    password: string;
+  }>();
+
+  const reveal = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await fetch("/api/vault/reveal", {
+        body: JSON.stringify({ id: item.id }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      const body: unknown = await response.json();
+      if (!response.ok) {
+        const message =
+          body &&
+          typeof body === "object" &&
+          "error" in body &&
+          typeof body.error === "string"
+            ? body.error
+            : "Could not reveal this password.";
+        throw new Error(message);
+      }
+      const parsed = z
+        .object({
+          identifier: z.string(),
+          origin: z.string().optional(),
+          password: z.string(),
+        })
+        .parse(body);
+      setSecret(parsed);
+    } catch (revealError) {
+      setError(
+        revealError instanceof Error
+          ? revealError.message
+          : "Could not reveal this password."
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) {
+          setSecret(undefined);
+          setError(undefined);
+        }
+      }}
+      open={open}
+    >
+      <DialogTrigger
+        render={
+          <Button
+            aria-label={`Show password for ${item.label}`}
+            size="icon-sm"
+            type="button"
+            variant="quiet"
+          />
+        }
+      >
+        <EyeIcon />
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Show password</DialogTitle>
+          <DialogDescription>
+            This password is shown once in this dialog and is never logged.
+          </DialogDescription>
+        </DialogHeader>
+        {secret ? (
+          <div className="space-y-2">
+            <p className="type-supporting-body text-muted-foreground">
+              {secret.identifier}
+              {secret.origin ? ` · ${secret.origin}` : ""}
+            </p>
+            <Input readOnly type="text" value={secret.password} />
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {error ? (
+              <p className="type-supporting-body text-destructive">{error}</p>
+            ) : (
+              <p className="type-supporting-body text-muted-foreground">
+                Confirm to decrypt the password for {item.label}.
+              </p>
+            )}
+            <Button disabled={busy} onClick={() => void reveal()} type="button">
+              Show password
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
