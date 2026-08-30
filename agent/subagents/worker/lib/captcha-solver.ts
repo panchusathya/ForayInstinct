@@ -9,7 +9,7 @@ const captchaKindSchema = z.enum([
 ]);
 
 const clickSchema = z.object({
-  kind: z.enum(["hcaptcha", "incapsula", "turnstile"]),
+  kind: z.enum(["hcaptcha", "hcaptcha_challenge", "incapsula", "turnstile"]),
   x: z.number(),
   y: z.number(),
 });
@@ -83,6 +83,12 @@ const clickPoint = (box, kind) => {
       y: Math.round(box.y + Math.min(32, Math.max(8, box.height * 0.5))),
     };
   }
+  if (kind === "hcaptcha_challenge") {
+    return {
+      x: Math.round(box.x + box.width / 2),
+      y: Math.round(box.y + box.height / 2),
+    };
+  }
   return {
     x: Math.round(box.x + box.width / 2),
     y: Math.round(box.y + Math.min(120, box.height * 0.42)),
@@ -118,7 +124,6 @@ const checkboxBox = async () => {
     const box = await checkbox.first().boundingBox().catch(() => null);
     if (box && box.width > 0 && box.height > 0) {
       const kind = classify(frame.url()) ?? "hcaptcha";
-      if (kind === "hcaptcha_challenge") continue;
       return { box, kind: kind === "incapsula" ? "hcaptcha" : kind };
     }
   }
@@ -165,8 +170,10 @@ const detect = async () => {
  * Kernel's default stealth solver covers reCAPTCHA and Cloudflare. Visible
  * hCaptcha is a separate beta and, when it is not enabled, Kernel logs
  * "visible hcaptcha could not be solved automatically" and leaves the widget.
- * Inspect only locates the checkbox; the tool clicks with Kernel computer
- * controls so the event is a trusted OS-level mouse action.
+ * Inspect locates a checkbox or image-challenge widget; the tool clicks with
+ * Kernel computer controls so the event is a trusted OS-level mouse action.
+ * An image grid is not a human-only boundary: click it, then let the worker
+ * finish remaining tiles with computer_action. Never inject CAPTCHA tokens.
  */
 export const captchaInspectCode = `${captchaHelpers}
 const before = await detect();
@@ -185,8 +192,9 @@ const target =
   checkbox ??
   before.widgets.find((widget) => widget.kind === "hcaptcha") ??
   before.widgets.find((widget) => widget.kind === "turnstile") ??
-  before.widgets.find((widget) => widget.kind === "incapsula");
-if (!target || target.kind === "hcaptcha_challenge") {
+  before.widgets.find((widget) => widget.kind === "incapsula") ??
+  before.widgets.find((widget) => widget.kind === "hcaptcha_challenge");
+if (!target) {
   return {
     kernelDeclined: before.kernelDeclined,
     kernelMessages: before.kernelMessages,

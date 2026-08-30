@@ -105,6 +105,18 @@ describe("checkbox CAPTCHA solver", () => {
     expect(captchaSettleCode).toContain("hcaptcha_challenge");
   });
 
+  it("clicks image-challenge widgets instead of skipping them", () => {
+    expect(captchaInspectCode).not.toContain(
+      'if (kind === "hcaptcha_challenge") continue'
+    );
+    expect(captchaInspectCode).not.toContain(
+      'target.kind === "hcaptcha_challenge"'
+    );
+    expect(captchaInspectCode).toContain(
+      'before.widgets.find((widget) => widget.kind === "hcaptcha_challenge")'
+    );
+  });
+
   it("normalizes a Kernel decline inspect payload", () => {
     expect(
       normalizeCaptchaInspectResult({
@@ -203,5 +215,105 @@ describe("checkbox CAPTCHA solver", () => {
       "For reCAPTCHA or Cloudflare, leave the widget untouched and use one bounded wait of at most 20 seconds"
     );
     expect(instructions).toContain("`solve_captcha`");
+  });
+
+  it("teaches the worker to complete image grids instead of requesting takeover", () => {
+    const skill = readFileSync(
+      "agent/subagents/worker/skills/browser-execution/SKILL.md",
+      "utf8"
+    );
+    const instructions = readFileSync(
+      "agent/subagents/worker/instructions.md",
+      "utf8"
+    );
+    const tool = readFileSync(
+      "agent/subagents/worker/tools/solve_captcha.ts",
+      "utf8"
+    );
+
+    expect(tool).not.toContain("Does not solve image puzzles");
+    expect(tool).toContain("complete the matching tiles with computer_action");
+    expect(skill).toContain("If the state is `challenge_required`");
+    expect(skill).toContain("select the tiles that match the visible prompt");
+    expect(skill).toContain(
+      "do not request a human takeover for them and do not inject CAPTCHA tokens"
+    );
+    expect(skill).toContain(
+      "even when `solve_captcha` returns `not_found`"
+    );
+    expect(skill).not.toContain(
+      "If the state is `challenge_required`, `unsolved`, `not_found` after a still-blocked page, or `execution_failed`, preserve the browser and return the takeover blocker"
+    );
+    expect(instructions).toContain(
+      "A checkbox or image-selection CAPTCHA is work for `solve_captcha` and `computer_action`, not a takeover"
+    );
+  });
+
+  it("clicks an image-challenge widget with Kernel computer controls", async () => {
+    mocks.executePlaywright.mockReset();
+    mocks.executePlaywright
+      .mockResolvedValueOnce({
+        result: {
+          clicked: { kind: "hcaptcha_challenge", x: 240, y: 320 },
+          kernelDeclined: true,
+          kernelMessages: [
+            "visible hcaptcha could not be solved automatically",
+          ],
+          kinds: ["hcaptcha_challenge"],
+          token: false,
+          url: "https://jobs.example/apply",
+        },
+        success: true,
+      })
+      .mockResolvedValueOnce({
+        result: {
+          challenge: true,
+          kinds: ["hcaptcha_challenge"],
+          token: false,
+          url: "https://jobs.example/apply",
+        },
+        success: true,
+      });
+
+    const result = await solveCaptcha.execute(
+      { session_id: "browser-1" },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; execute only reads abortSignal after the mocked authorization boundary.
+      {} as never
+    );
+
+    expect(mocks.clickMouse).toHaveBeenCalledExactlyOnceWith(
+      "browser-1",
+      {
+        button: "left",
+        click_type: "click",
+        x: 240,
+        y: 320,
+      },
+      { signal: undefined }
+    );
+    expect(result).toMatchObject({
+      clicked: { kind: "hcaptcha_challenge", x: 240, y: 320 },
+      clickSource: "computer",
+      state: "challenge_required",
+    });
+  });
+
+  it("normalizes an image-challenge inspect payload", () => {
+    expect(
+      normalizeCaptchaInspectResult({
+        result: {
+          clicked: { kind: "hcaptcha_challenge", x: 240, y: 320 },
+          kernelDeclined: false,
+          kernelMessages: [],
+          kinds: ["hcaptcha_challenge"],
+          token: false,
+          url: "https://jobs.example/apply",
+        },
+        success: true,
+      })
+    ).toMatchObject({
+      clicked: { kind: "hcaptcha_challenge", x: 240, y: 320 },
+      kinds: ["hcaptcha_challenge"],
+    });
   });
 });

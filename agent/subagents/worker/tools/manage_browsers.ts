@@ -309,7 +309,7 @@ function lifecycleResult(
           ]),
       `Use execute_playwright_code with session_id "${value.session_id}" for deterministic browser automation.`,
       `Use computer_action with session_id "${value.session_id}" for visual browser control.`,
-      `Use solve_captcha with session_id "${value.session_id}" immediately if Kernel reports visible hCaptcha could not be solved automatically or a checkbox hCaptcha remains.`,
+      `Use solve_captcha with session_id "${value.session_id}" immediately if Kernel reports visible hCaptcha could not be solved automatically, a checkbox hCaptcha remains, or an image-selection grid is visible. If solve_captcha returns challenge_required, complete the tiles with computer_action; do not request a takeover.`,
       `Use manage_browsers with action "delete" and session_id "${value.session_id}" when finished.`,
     ],
     ...(workday === undefined ? {} : { workday }),
