@@ -3,7 +3,7 @@ import { connectLinqCredentials } from "@vercel/connect/eve";
 import { createLinqAdapter } from "@linqapp/chat-sdk-adapter";
 import { defaultLinqAuth } from "eve/channels/linq";
 import { chatSdkChannel } from "eve/channels/chat-sdk";
-import type { Attachment, Message, Thread } from "chat";
+import type { Message, Thread } from "chat";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
@@ -29,6 +29,10 @@ import {
   resolveLinqJobCardReply,
 } from "@/lib/goforay/linq-replies";
 import { createPostgresState } from "@/lib/linq-state";
+import {
+  readLinqAttachment,
+  retryLinqResumeSave,
+} from "@/lib/linq-resume-import";
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
 import { consumeLatestApplicationSubmissionScreenshot } from "@/db/services/application-submission-screenshots";
 import { normalizeTaskStatus } from "@/lib/task-completion";
@@ -509,35 +513,6 @@ async function importLinqResumes(
   return { uploaded, failures };
 }
 
-async function readLinqAttachment(attachment: Attachment) {
-  if (attachment.data instanceof Buffer) {
-    return {
-      bytes: attachment.data,
-      resolvedMimeType: attachment.mimeType ?? "",
-    };
-  }
-  if (attachment.data instanceof Blob) {
-    return {
-      bytes: Buffer.from(await attachment.data.arrayBuffer()),
-      resolvedMimeType: attachment.mimeType ?? attachment.data.type,
-    };
-  }
-  if (attachment.fetchData) {
-    return {
-      bytes: await attachment.fetchData(),
-      resolvedMimeType: attachment.mimeType ?? "",
-    };
-  }
-  if (!attachment.url) throw new Error("the attachment has no download URL");
-
-  const response = await fetch(attachment.url);
-  if (!response.ok) throw new Error(`download failed (${response.status})`);
-  return {
-    bytes: Buffer.from(await response.arrayBuffer()),
-    resolvedMimeType: response.headers.get("content-type") ?? "",
-  };
-}
-
 async function saveLinqResumeWithRetry(
   scope: ReturnType<typeof accessScopeForUser>,
   input: {
@@ -546,20 +521,14 @@ async function saveLinqResumeWithRetry(
     readonly mimeType: string;
   }
 ) {
-  let failure: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      return await saveCandidateDocument(scope, {
-        ...input,
-        kind: inferCandidateDocumentKind(input.filename),
-        setDefault: true,
-        source: "linq",
-      });
-    } catch (error) {
-      failure = error;
-    }
-  }
-  throw failure;
+  return retryLinqResumeSave(() =>
+    saveCandidateDocument(scope, {
+      ...input,
+      kind: inferCandidateDocumentKind(input.filename),
+      setDefault: true,
+      source: "linq",
+    })
+  );
 }
 
 function isResumeAttachment(filename: string, mimeType: string) {
