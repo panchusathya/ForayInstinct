@@ -3,7 +3,7 @@ import { connectLinqCredentials } from "@vercel/connect/eve";
 import { createLinqAdapter } from "@linqapp/chat-sdk-adapter";
 import { defaultLinqAuth } from "eve/channels/linq";
 import { chatSdkChannel } from "eve/channels/chat-sdk";
-import type { Message, Thread } from "chat";
+import type { Attachment, Message, Thread } from "chat";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
@@ -308,7 +308,7 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
   if (message.author.isBot) return;
 
   const replyTarget = await resolveLinqReplyTarget(message, thread);
-  const inbound = await prepareInboundMessage(message, thread.id, replyTarget);
+  const inbound = await prepareInboundMessage(message, thread, replyTarget);
 
   try {
     await bot.getAdapter("linq").markRead(thread.id, message.id);
@@ -331,7 +331,7 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
 
 async function prepareInboundMessage(
   message: Message,
-  threadId: string,
+  thread: Thread,
   replyTarget: LinqReplyTarget | undefined
 ) {
   const auth = defaultLinqAuth(message);
@@ -355,7 +355,7 @@ async function prepareInboundMessage(
         : []),
     ]);
   }
-  await rememberLinqRoleSearchThread(scope, threadId, phoneNumber);
+  await rememberLinqRoleSearchThread(scope, thread.id, phoneNumber);
   if (phoneNumber) {
     try {
       await linkCandidate({
@@ -400,7 +400,7 @@ async function prepareInboundMessage(
         : []),
       ...(importedResumes.failures.length
         ? [
-            `A resume attachment could not be stored: ${importedResumes.failures.join("; ")}. Explain the exact attachment problem and ask the candidate to resend it once; do not claim that a previously stored resume is missing.`,
+            `A resume attachment could not be stored after an automatic server-side retry: ${importedResumes.failures.join("; ")}. Do not ask the candidate to resend the PDF. Briefly explain that their original attachment was received but storage is temporarily unavailable, then continue helping with everything that does not need the file.`,
           ]
         : []),
       ...(replyTarget?.role
@@ -475,46 +475,23 @@ function messageText(value: unknown) {
   return "";
 }
 
-const linqAttachmentSchema = z.object({
-  attachments: z
-    .array(
-      z.object({
-        mimeType: z.string().optional(),
-        name: z.string().optional(),
-        url: z.string().url(),
-      })
-    )
-    .optional(),
-});
-
 async function importLinqResumes(
-  message: unknown,
+  message: Message,
   scope: ReturnType<typeof accessScopeForUser>
 ) {
-  const parsed = linqAttachmentSchema.safeParse(message);
-  if (!parsed.success) return { uploaded: [], failures: [] };
-
   const uploaded: string[] = [];
   const failures: string[] = [];
-  for (const attachment of parsed.data.attachments ?? []) {
-    const filename = attachment.name ?? filenameFromUrl(attachment.url);
+  for (const attachment of message.attachments) {
+    const filename = attachment.name ?? filenameFromUrl(attachment.url ?? "");
     const mimeType = attachment.mimeType ?? "";
     if (!isResumeAttachment(filename, mimeType)) continue;
 
     try {
-      const response = await fetch(attachment.url);
-      if (!response.ok) {
-        failures.push(`${filename}: download failed (${response.status})`);
-        continue;
-      }
-      const bytes = Buffer.from(await response.arrayBuffer());
-      const result = await saveCandidateDocument(scope, {
+      const { bytes, resolvedMimeType } = await readLinqAttachment(attachment);
+      const result = await saveLinqResumeWithRetry(scope, {
         bytes,
         filename,
-        kind: inferCandidateDocumentKind(filename),
-        mimeType: mimeType || response.headers.get("content-type") || "",
-        setDefault: true,
-        source: "linq",
+        mimeType: mimeType || resolvedMimeType,
       });
       uploaded.push(result.document.filename);
     } catch (error) {
@@ -530,6 +507,59 @@ async function importLinqResumes(
     });
   }
   return { uploaded, failures };
+}
+
+async function readLinqAttachment(attachment: Attachment) {
+  if (attachment.data instanceof Buffer) {
+    return {
+      bytes: attachment.data,
+      resolvedMimeType: attachment.mimeType ?? "",
+    };
+  }
+  if (attachment.data instanceof Blob) {
+    return {
+      bytes: Buffer.from(await attachment.data.arrayBuffer()),
+      resolvedMimeType: attachment.mimeType ?? attachment.data.type,
+    };
+  }
+  if (attachment.fetchData) {
+    return {
+      bytes: await attachment.fetchData(),
+      resolvedMimeType: attachment.mimeType ?? "",
+    };
+  }
+  if (!attachment.url) throw new Error("the attachment has no download URL");
+
+  const response = await fetch(attachment.url);
+  if (!response.ok) throw new Error(`download failed (${response.status})`);
+  return {
+    bytes: Buffer.from(await response.arrayBuffer()),
+    resolvedMimeType: response.headers.get("content-type") ?? "",
+  };
+}
+
+async function saveLinqResumeWithRetry(
+  scope: ReturnType<typeof accessScopeForUser>,
+  input: {
+    readonly bytes: Buffer;
+    readonly filename: string;
+    readonly mimeType: string;
+  }
+) {
+  let failure: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await saveCandidateDocument(scope, {
+        ...input,
+        kind: inferCandidateDocumentKind(input.filename),
+        setDefault: true,
+        source: "linq",
+      });
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
 }
 
 function isResumeAttachment(filename: string, mimeType: string) {

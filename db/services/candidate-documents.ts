@@ -124,8 +124,6 @@ export async function saveCandidateDocument(
   const shouldDefault =
     kind === "resume" &&
     (input.setDefault === true || !(await hasDefaultResume(scope)));
-  if (shouldDefault) await clearDefaultResume(scope);
-
   const now = new Date().toISOString();
   const id = randomUUID();
   const filename = safeFilename(input.filename);
@@ -135,20 +133,34 @@ export async function saveCandidateDocument(
     filename
   );
 
-  await db.insert(candidateDocuments).values({
-    byteSize: input.bytes.byteLength,
-    bytes: input.bytes,
-    createdAt: now,
-    extractedText,
-    filename,
-    id,
-    isDefault: shouldDefault ? "yes" : "",
-    kind,
-    mimeType: input.mimeType || "application/octet-stream",
-    sha256,
-    source,
-    updatedAt: now,
-    workspaceId: scope.workspaceId,
+  await db.transaction(async (transaction) => {
+    if (shouldDefault) {
+      await transaction
+        .update(candidateDocuments)
+        .set({ isDefault: "" })
+        .where(
+          and(
+            eq(candidateDocuments.workspaceId, scope.workspaceId),
+            eq(candidateDocuments.kind, "resume"),
+            eq(candidateDocuments.isDefault, "yes")
+          )
+        );
+    }
+    await transaction.insert(candidateDocuments).values({
+      byteSize: input.bytes.byteLength,
+      bytes: input.bytes,
+      createdAt: now,
+      extractedText,
+      filename,
+      id,
+      isDefault: shouldDefault ? "yes" : "",
+      kind,
+      mimeType: input.mimeType || "application/octet-stream",
+      sha256,
+      source,
+      updatedAt: now,
+      workspaceId: scope.workspaceId,
+    });
   });
 
   const stored = await readCandidateDocument(scope, id);
