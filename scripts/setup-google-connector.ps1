@@ -38,7 +38,11 @@ param(
   [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
   [string[]] $Environments = @('production', 'preview'),
 
-  [string] $ConnectorName = 'open-instinct'
+  [string] $ConnectorName = 'open-instinct',
+
+  # Replace GOOGLE_CONNECTOR_UID even when it is already set. Needed after a
+  # run left a uid behind that points at a connector that does not exist.
+  [switch] $ResetConnectorUid
 )
 
 $ErrorActionPreference = 'Stop'
@@ -126,9 +130,10 @@ try {
   # An empty connector list exits non-zero on some CLI versions, so the exit
   # code is deliberately not checked here; absence just means "create it".
   $existing = (Invoke-Vercel -Arguments @('connect', 'list') -Capture) -join "`n"
-  # Match the bare name: the listing does not always render the uid in the
-  # google/<name> form this script builds.
-  if ($existing -match [regex]::Escape($ConnectorName)) {
+  # Match the uid, not the bare name. Connector names are unique per team
+  # across services, so a name alone can belong to another service's connector
+  # entirely (linq/<name> is not google/<name>).
+  if ($existing -match [regex]::Escape($connectorUid)) {
     Write-Host "==> Connector $connectorUid already exists, reusing it"
   }
   else {
@@ -141,24 +146,38 @@ try {
     )
     $created | Write-Host
     if ($script:VercelExitCode -ne 0) {
-      # A 409 is the authoritative answer that the connector is already there,
-      # and it is more reliable than parsing the listing above. Reuse it.
+      # The listing above already established that $connectorUid is absent, so
+      # a 409 here means the *name* is taken by a connector for some other
+      # service. Reusing that one would attach the wrong provider, so stop with
+      # the fix rather than carrying on.
       if (($created -join "`n") -match 'already exists|\(409\)') {
-        Write-Host "    Connector $ConnectorName already exists, reusing it"
+        throw @"
+The name '$ConnectorName' is already taken by another connector on this team.
+Connector names are unique across services, so '$connectorUid' cannot be created
+while it is. Re-run with a free name, for example:
+
+  .\scripts\setup-google-connector.ps1 '$CredentialsPath' -ConnectorName $ConnectorName-google
+
+GOOGLE_CONNECTOR_UID is then set to google/$ConnectorName-google to match.
+"@
       }
-      else {
-        throw "vercel connect create failed with exit code $script:VercelExitCode"
-      }
+      throw "vercel connect create failed with exit code $script:VercelExitCode"
     }
   }
 
   foreach ($environment in $Environments) {
     Write-Host "==> Attaching $connectorUid to $environment"
-    Invoke-Vercel -Capture -Arguments @(
+    $attached = Invoke-Vercel -Capture -Arguments @(
       'connect', 'attach', $connectorUid, '--environment', $environment, '--yes'
-    ) | Write-Host
+    )
+    $attached | Write-Host
     if ($script:VercelExitCode -ne 0) {
-      Write-Host "    (already attached to $environment, or the attach was rejected - see above)"
+      if (($attached -join "`n") -match 'already attached|already linked') {
+        Write-Host "    (already attached to $environment)"
+      }
+      else {
+        throw "Attaching $connectorUid to $environment failed with exit code $script:VercelExitCode"
+      }
     }
   }
 
@@ -166,6 +185,15 @@ try {
   # set when the connector carries another name. Setting it anyway keeps the
   # deployed value explicit rather than implied.
   $envList = (Invoke-Vercel -Arguments @('env', 'ls') -Capture) -join "`n"
+  if ($ResetConnectorUid -and $envList -match 'GOOGLE_CONNECTOR_UID') {
+    foreach ($environment in $Environments) {
+      Write-Host "==> Removing the existing GOOGLE_CONNECTOR_UID from $environment"
+      Invoke-Vercel -Capture -Arguments @(
+        'env', 'rm', 'GOOGLE_CONNECTOR_UID', $environment, '--yes'
+      ) | Write-Host
+    }
+    $envList = ''
+  }
   if ($envList -match 'GOOGLE_CONNECTOR_UID') {
     Write-Host '==> GOOGLE_CONNECTOR_UID is already set; leaving it alone.'
     Write-Host "    It must equal $connectorUid. If it does not:"
@@ -183,7 +211,11 @@ try {
 
   Write-Host ''
   Write-Host '==> Connectors now on this project'
-  Invoke-Vercel -Arguments @('connect', 'list') -Capture | Write-Host
+  $final = Invoke-Vercel -Arguments @('connect', 'list') -Capture
+  $final | Write-Host
+  if (($final -join "`n") -notmatch [regex]::Escape($connectorUid)) {
+    throw "$connectorUid is still not linked to this project. Nothing below would be true, so stopping here."
+  }
 
   $scopes = @()
   $config = Get-Content -LiteralPath $scopesFile -Raw

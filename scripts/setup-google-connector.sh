@@ -56,9 +56,10 @@ jq -n --arg id "$client_id" --arg secret "$client_secret" \
 
 cd "$repo_root"
 
-# Match the bare name: the listing does not always render the uid in the
-# google/<name> form this script builds.
-if vercel connect list 2>/dev/null | grep -q "$connector_name"; then
+# Match the uid, not the bare name. Connector names are unique per team across
+# services, so a name alone can belong to another service's connector entirely
+# (linq/<name> is not google/<name>).
+if vercel connect list 2>/dev/null | grep -q "$connector_uid"; then
   echo "==> Connector ${connector_uid} already exists, reusing it"
 else
   echo "==> Creating connector ${connector_uid}"
@@ -69,20 +70,35 @@ else
     --data @"$connector_data" 2>&1)" || create_status=$?
   echo "$create_output"
   if [ "$create_status" -ne 0 ]; then
-    # A 409 is the authoritative answer that the connector is already there,
-    # and it is more reliable than parsing the listing above. Reuse it.
+    # The listing above already established that $connector_uid is absent, so a
+    # 409 here means the *name* is taken by a connector for some other service.
+    # Reusing that one would attach the wrong provider, so stop with the fix.
     if echo "$create_output" | grep -qE "already exists|\(409\)"; then
-      echo "    Connector ${connector_name} already exists, reusing it"
-    else
-      fail "vercel connect create failed with exit code ${create_status}"
+      fail "the name '${connector_name}' is already taken by another connector on this team.
+Connector names are unique across services, so '${connector_uid}' cannot be created
+while it is. Re-run with a free name, for example:
+
+  CONNECTOR_NAME=${connector_name}-google $0 '${credentials_json}'
+
+GOOGLE_CONNECTOR_UID is then set to google/${connector_name}-google to match."
     fi
+    fail "vercel connect create failed with exit code ${create_status}"
   fi
 fi
 
 for environment in "${environments[@]}"; do
   echo "==> Attaching ${connector_uid} to ${environment}"
-  vercel connect attach "$connector_uid" --environment "$environment" --yes ||
-    echo "    (already attached to ${environment}, or the attach was rejected — see above)"
+  attach_status=0
+  attach_output="$(vercel connect attach "$connector_uid" \
+    --environment "$environment" --yes 2>&1)" || attach_status=$?
+  echo "$attach_output"
+  if [ "$attach_status" -ne 0 ]; then
+    if echo "$attach_output" | grep -qE "already attached|already linked"; then
+      echo "    (already attached to ${environment})"
+    else
+      fail "attaching ${connector_uid} to ${environment} failed with exit code ${attach_status}"
+    fi
+  fi
 done
 
 # The app falls back to google/open-instinct, so the variable only has to be set
@@ -103,7 +119,11 @@ fi
 
 echo
 echo "==> Connectors now on this project"
-vercel connect list || true
+final_list="$(vercel connect list 2>&1 || true)"
+echo "$final_list"
+if ! echo "$final_list" | grep -q "$connector_uid"; then
+  fail "${connector_uid} is still not linked to this project. Nothing below would be true, so stopping here."
+fi
 
 cat <<EOF
 
