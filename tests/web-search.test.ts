@@ -78,7 +78,9 @@ describe("web search routing", () => {
     expect(instructions).toContain("`web_search`");
     expect(instructions).toContain("no built-in web browsing");
     expect(instructions).toContain("Never tell the");
-    expect(instructions).toContain("delivered by the channel as numbered cards");
+    expect(instructions).toContain(
+      "delivered by the channel as numbered cards"
+    );
   });
 
   it("keeps web_search away from the candidate's own role search", () => {
@@ -102,9 +104,7 @@ describe("web search routing", () => {
   it("treats any chosen apply URL as a worker assignment", () => {
     const instructions = readFileSync("agent/instructions.md", "utf8");
 
-    expect(instructions).toContain(
-      "send the `worker` straight at that URL"
-    );
+    expect(instructions).toContain("send the `worker` straight at that URL");
     expect(instructions).toMatch(/no\s+GoForay application task/);
     expect(instructions).toContain(
       "Never tell the candidate you cannot click through"

@@ -130,9 +130,7 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain(
       "Roles from `find_goforay_roles` and `find_next_goforay_roles` are"
     );
-    expect(instructions).toContain(
-      "dump `cards` or `result`"
-    );
+    expect(instructions).toContain("dump `cards` or `result`");
     expect(applicationTools).toContain("never paste this object");
   });
 });
