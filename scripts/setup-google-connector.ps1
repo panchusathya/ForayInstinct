@@ -126,19 +126,29 @@ try {
   # An empty connector list exits non-zero on some CLI versions, so the exit
   # code is deliberately not checked here; absence just means "create it".
   $existing = (Invoke-Vercel -Arguments @('connect', 'list') -Capture) -join "`n"
-  if ($existing -match [regex]::Escape($connectorUid)) {
+  # Match the bare name: the listing does not always render the uid in the
+  # google/<name> form this script builds.
+  if ($existing -match [regex]::Escape($ConnectorName)) {
     Write-Host "==> Connector $connectorUid already exists, reusing it"
   }
   else {
     Write-Host "==> Creating connector $connectorUid"
-    Invoke-Vercel -Capture -Arguments @(
+    $created = Invoke-Vercel -Capture -Arguments @(
       'connect', 'create', 'google',
       '--connection-method', 'oauth',
       '--name', $ConnectorName,
       '--data', "@$connectorData"
-    ) | Write-Host
+    )
+    $created | Write-Host
     if ($script:VercelExitCode -ne 0) {
-      throw "vercel connect create failed with exit code $script:VercelExitCode"
+      # A 409 is the authoritative answer that the connector is already there,
+      # and it is more reliable than parsing the listing above. Reuse it.
+      if (($created -join "`n") -match 'already exists|\(409\)') {
+        Write-Host "    Connector $ConnectorName already exists, reusing it"
+      }
+      else {
+        throw "vercel connect create failed with exit code $script:VercelExitCode"
+      }
     }
   }
 

@@ -56,14 +56,27 @@ jq -n --arg id "$client_id" --arg secret "$client_secret" \
 
 cd "$repo_root"
 
-if vercel connect list 2>/dev/null | grep -q "$connector_uid"; then
+# Match the bare name: the listing does not always render the uid in the
+# google/<name> form this script builds.
+if vercel connect list 2>/dev/null | grep -q "$connector_name"; then
   echo "==> Connector ${connector_uid} already exists, reusing it"
 else
   echo "==> Creating connector ${connector_uid}"
-  vercel connect create google \
+  create_status=0
+  create_output="$(vercel connect create google \
     --connection-method oauth \
     --name "$connector_name" \
-    --data @"$connector_data"
+    --data @"$connector_data" 2>&1)" || create_status=$?
+  echo "$create_output"
+  if [ "$create_status" -ne 0 ]; then
+    # A 409 is the authoritative answer that the connector is already there,
+    # and it is more reliable than parsing the listing above. Reuse it.
+    if echo "$create_output" | grep -qE "already exists|\(409\)"; then
+      echo "    Connector ${connector_name} already exists, reusing it"
+    else
+      fail "vercel connect create failed with exit code ${create_status}"
+    fi
+  fi
 fi
 
 for environment in "${environments[@]}"; do
