@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { saveChat } from "@/db/services/chats";
 import type { ensureScope } from "@/db/services/scope";
 import type { claimSession } from "@/db/services/sessions";
@@ -41,6 +41,10 @@ const context = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("session ownership hook", () => {
@@ -88,5 +92,24 @@ describe("session ownership hook", () => {
     await handler?.(event, hookContext);
 
     expect(mocks.recordConversationMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not fail a turn when chat indexing is temporarily unavailable", async () => {
+    const handler = sessionOwner.events?.["message.received"];
+    expect(handler).toBeDefined();
+    const error = new Error("database unavailable");
+    mocks.saveChat.mockRejectedValueOnce(error);
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const event = {} as Parameters<MessageReceivedHandler>[0];
+    const hookContext =
+      context as unknown as Parameters<MessageReceivedHandler>[1];
+
+    await expect(handler?.(event, hookContext)).resolves.toBeUndefined();
+    expect(consoleError).toHaveBeenCalledWith(
+      "Failed to index agent chat session",
+      error
+    );
   });
 });

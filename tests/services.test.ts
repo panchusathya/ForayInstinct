@@ -92,6 +92,16 @@ describe("database services", () => {
       title: "Updated title",
     });
 
+    await sessions.claimSession(alice, "session-retry");
+    await Promise.all([
+      chats.saveChat(alice, { sessionId: "session-retry" }),
+      chats.saveChat(alice, { sessionId: "session-retry" }),
+    ]);
+    expect(await chats.readChat(alice, "session-retry")).toMatchObject({
+      sessionId: "session-retry",
+      title: "New chat",
+    });
+
     const aliceChat = await chats.readChat(alice, "session-alice");
     expect(aliceChat?.title).toBe("Updated title");
     expect(aliceChat?.usage).toEqual({
@@ -101,12 +111,15 @@ describe("database services", () => {
     });
     expect(await chats.readChat(bob, "session-alice")).toBeUndefined();
     const indexedChats = await chats.listChats(alice);
-    expect(indexedChats).toHaveLength(2);
+    expect(indexedChats).toHaveLength(3);
     expect(
       indexedChats.find((chat) => chat.sessionId === "session-alice")
     ).toEqual(aliceChat);
     expect(indexedChats.map((chat) => chat.sessionId)).toContain(
       "session-imessage"
+    );
+    expect(indexedChats.map((chat) => chat.sessionId)).toContain(
+      "session-retry"
     );
     expect(await chats.listChats(bob)).toEqual([]);
 
@@ -115,7 +128,7 @@ describe("database services", () => {
         sessionId: "session-alice",
         title: "Bob's title",
       })
-    ).rejects.toThrow(/Failed query: insert into "chats"/);
+    ).rejects.toThrow("Chat session belongs to another workspace.");
     expect(await chats.readChat(alice, "session-alice")).toEqual(aliceChat);
     expect(await chats.readChat(bob, "session-alice")).toBeUndefined();
 
