@@ -43,6 +43,48 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$script:VercelExitCode = 0
+
+<#
+Run the Vercel CLI without letting its output abort the script.
+
+The CLI writes its version banner to stderr on every call. Under
+ErrorActionPreference=Stop, PowerShell promotes native-command stderr to a
+terminating NativeCommandError, so a command that succeeded still kills the
+run. Exit codes decide success here, not stderr.
+
+-Capture returns the combined output as strings to match against; without it
+the command keeps the console, which interactive commands like `vercel link`
+need in order to prompt.
+#>
+function Invoke-Vercel {
+  param(
+    [Parameter(Mandatory = $true)] [string[]] $Arguments,
+    [switch] $Capture,
+    [string] $StdIn
+  )
+
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    if ($StdIn) {
+      $output = $StdIn | & vercel @Arguments 2>&1 | ForEach-Object { "$_" }
+    }
+    elseif ($Capture) {
+      $output = & vercel @Arguments 2>&1 | ForEach-Object { "$_" }
+    }
+    else {
+      & vercel @Arguments
+      $output = @()
+    }
+    $script:VercelExitCode = $LASTEXITCODE
+    return $output
+  }
+  finally {
+    $ErrorActionPreference = $previous
+  }
+}
+
 $connectorUid = "google/$ConnectorName"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $scopesFile = Join-Path $repoRoot 'lib\google-workspace\config.ts'
@@ -67,7 +109,10 @@ $connectorData = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::
 try {
   if (-not (Test-Path -LiteralPath (Join-Path $repoRoot '.vercel\project.json'))) {
     Write-Host '==> Linking this directory to a Vercel project'
-    vercel link
+    Invoke-Vercel -Arguments @('link')
+    if ($script:VercelExitCode -ne 0) {
+      throw "vercel link failed with exit code $script:VercelExitCode"
+    }
   }
 
   $payload = [ordered]@{
@@ -78,20 +123,31 @@ try {
   [System.IO.File]::WriteAllText(
     $connectorData, $payload, (New-Object System.Text.UTF8Encoding $false))
 
-  $existing = (vercel connect list 2>$null | Out-String)
+  # An empty connector list exits non-zero on some CLI versions, so the exit
+  # code is deliberately not checked here; absence just means "create it".
+  $existing = (Invoke-Vercel -Arguments @('connect', 'list') -Capture) -join "`n"
   if ($existing -match [regex]::Escape($connectorUid)) {
     Write-Host "==> Connector $connectorUid already exists, reusing it"
   }
   else {
     Write-Host "==> Creating connector $connectorUid"
-    vercel connect create google --connection-method oauth --name $ConnectorName --data "@$connectorData"
-    if ($LASTEXITCODE -ne 0) { throw "vercel connect create failed with exit code $LASTEXITCODE" }
+    Invoke-Vercel -Capture -Arguments @(
+      'connect', 'create', 'google',
+      '--connection-method', 'oauth',
+      '--name', $ConnectorName,
+      '--data', "@$connectorData"
+    ) | Write-Host
+    if ($script:VercelExitCode -ne 0) {
+      throw "vercel connect create failed with exit code $script:VercelExitCode"
+    }
   }
 
   foreach ($environment in $Environments) {
     Write-Host "==> Attaching $connectorUid to $environment"
-    vercel connect attach $connectorUid --environment $environment --yes
-    if ($LASTEXITCODE -ne 0) {
+    Invoke-Vercel -Capture -Arguments @(
+      'connect', 'attach', $connectorUid, '--environment', $environment, '--yes'
+    ) | Write-Host
+    if ($script:VercelExitCode -ne 0) {
       Write-Host "    (already attached to $environment, or the attach was rejected - see above)"
     }
   }
@@ -99,7 +155,7 @@ try {
   # The app falls back to google/open-instinct, so the variable only has to be
   # set when the connector carries another name. Setting it anyway keeps the
   # deployed value explicit rather than implied.
-  $envList = (vercel env ls 2>$null | Out-String)
+  $envList = (Invoke-Vercel -Arguments @('env', 'ls') -Capture) -join "`n"
   if ($envList -match 'GOOGLE_CONNECTOR_UID') {
     Write-Host '==> GOOGLE_CONNECTOR_UID is already set; leaving it alone.'
     Write-Host "    It must equal $connectorUid. If it does not:"
@@ -109,13 +165,15 @@ try {
   else {
     foreach ($environment in $Environments) {
       Write-Host "==> Setting GOOGLE_CONNECTOR_UID for $environment"
-      $connectorUid | vercel env add GOOGLE_CONNECTOR_UID $environment
+      Invoke-Vercel -StdIn $connectorUid -Arguments @(
+        'env', 'add', 'GOOGLE_CONNECTOR_UID', $environment
+      ) | Write-Host
     }
   }
 
   Write-Host ''
   Write-Host '==> Connectors now on this project'
-  vercel connect list
+  Invoke-Vercel -Arguments @('connect', 'list') -Capture | Write-Host
 
   $scopes = @()
   $config = Get-Content -LiteralPath $scopesFile -Raw
