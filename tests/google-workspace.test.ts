@@ -10,6 +10,7 @@ import { parseCalendarAvailability } from "@/agent/lib/google-workspace/calendar
 import { googleWorkspaceAuthOptions } from "@/agent/lib/google-workspace/client";
 import { gmailUpdateLabels } from "@/agent/lib/google-workspace/gmail";
 import { googleWorkspaceWriteApproval } from "@/agent/tools/google_workspace_write";
+import { env } from "@/lib/env";
 import {
   GOOGLE_WORKSPACE_SCOPES,
   googleWorkspaceSubject,
@@ -83,6 +84,29 @@ describe("Google Workspace connection", () => {
       accountLabel: null,
       state: "disconnected",
     });
+  });
+
+  it("names the connector when setup, not the user grant, is missing", async () => {
+    const logged = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    vi.mocked(getTokenResponse).mockRejectedValue(
+      new Error("Connector google/open-instinct is not attached.")
+    );
+
+    await expect(getGoogleWorkspaceConnection(scope)).resolves.toEqual({
+      accountLabel: null,
+      state: "unavailable",
+    });
+    expect(logged).toHaveBeenCalledWith(
+      "[google-workspace] connector unavailable",
+      {
+        connectorUid: env.GOOGLE_CONNECTOR_UID,
+        error: "Connector google/open-instinct is not attached.",
+        workspaceId: scope.workspaceId,
+      }
+    );
+    logged.mockRestore();
   });
 
   it("starts authorization with the canonical subject and scopes", async () => {

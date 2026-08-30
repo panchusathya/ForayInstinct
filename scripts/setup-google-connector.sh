@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#
+# Create and attach the Vercel Connect Google connector this app authenticates
+# users through, then report what is left to do on the Google side.
+#
+#   scripts/setup-google-connector.sh <google-client-secret.json> [environment ...]
+#
+# Environments default to production and preview; a production attachment does
+# not enable preview or local development. The downloaded client secret is
+# reshaped into a private temporary file, handed to Vercel, and deleted on exit.
+# Neither file is ever written into the repository.
+#
+# Re-running is safe: an existing connector is reused, an existing attachment is
+# reported rather than duplicated, and an existing GOOGLE_CONNECTOR_UID is left
+# alone.
+set -euo pipefail
+
+connector_name="${CONNECTOR_NAME:-open-instinct}"
+connector_uid="google/${connector_name}"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+scopes_file="${repo_root}/lib/google-workspace/config.ts"
+
+fail() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+credentials_json="${1:-}"
+[ -n "$credentials_json" ] ||
+  fail "usage: $0 <google-client-secret.json> [environment ...]"
+[ -f "$credentials_json" ] || fail "no such file: $credentials_json"
+shift
+
+environments=("$@")
+[ "${#environments[@]}" -gt 0 ] || environments=(production preview)
+
+command -v vercel >/dev/null || fail "vercel CLI not found: npm i -g vercel"
+command -v jq >/dev/null || fail "jq not found: brew install jq"
+
+# Vercel wants top-level clientId and clientSecret, not Google's nested
+# web.client_id and web.client_secret download.
+client_id="$(jq -r '.web.client_id // .installed.client_id // empty' "$credentials_json")"
+client_secret="$(jq -r '.web.client_secret // .installed.client_secret // empty' "$credentials_json")"
+[ -n "$client_id" ] && [ -n "$client_secret" ] ||
+  fail "$credentials_json has no web.client_id/web.client_secret. Download the OAuth *web* client JSON from Google Cloud."
+
+if [ ! -f "${repo_root}/.vercel/project.json" ]; then
+  echo "==> Linking this directory to a Vercel project"
+  (cd "$repo_root" && vercel link)
+fi
+
+connector_data="$(umask 077 && mktemp)"
+trap 'rm -f "$connector_data"' EXIT
+jq -n --arg id "$client_id" --arg secret "$client_secret" \
+  '{clientId: $id, clientSecret: $secret}' >"$connector_data"
+
+cd "$repo_root"
+
+if vercel connect list 2>/dev/null | grep -q "$connector_uid"; then
+  echo "==> Connector ${connector_uid} already exists, reusing it"
+else
+  echo "==> Creating connector ${connector_uid}"
+  vercel connect create google \
+    --connection-method oauth \
+    --name "$connector_name" \
+    --data @"$connector_data"
+fi
+
+for environment in "${environments[@]}"; do
+  echo "==> Attaching ${connector_uid} to ${environment}"
+  vercel connect attach "$connector_uid" --environment "$environment" --yes ||
+    echo "    (already attached to ${environment}, or the attach was rejected — see above)"
+done
+
+# The app falls back to google/open-instinct, so the variable only has to be set
+# when the connector carries another name. Setting it anyway keeps the deployed
+# value explicit rather than implied.
+existing_uid_environments="$(vercel env ls 2>/dev/null | grep -c "GOOGLE_CONNECTOR_UID" || true)"
+if [ "$existing_uid_environments" -gt 0 ]; then
+  echo "==> GOOGLE_CONNECTOR_UID is already set; leaving it alone."
+  echo "    It must equal ${connector_uid}. If it does not:"
+  echo "      vercel env rm GOOGLE_CONNECTOR_UID <environment>"
+  echo "      then re-run this script."
+else
+  for environment in "${environments[@]}"; do
+    echo "==> Setting GOOGLE_CONNECTOR_UID for ${environment}"
+    printf '%s' "$connector_uid" | vercel env add GOOGLE_CONNECTOR_UID "$environment"
+  done
+fi
+
+echo
+echo "==> Connectors now on this project"
+vercel connect list || true
+
+cat <<EOF
+
+Connector ${connector_uid} is set up. Two things finish the job:
+
+1. Redeploy so the deployment picks up GOOGLE_CONNECTOR_UID:
+
+     vercel deploy --prod
+
+2. On the Google Cloud OAuth consent screen, the app's own scope list must be
+   declared, and while publishing status is Testing your Google account must be
+   listed under Test users. Until it is, the Connect button appears and Google
+   then blocks consent. The scopes this app requests:
+
+$(sed -n '/^export const GOOGLE_WORKSPACE_SCOPES = \[/,/^\] as const;/p' "$scopes_file" |
+  sed -n 's/^  "\(.*\)",$/     \1/p')
+
+   The OAuth client also needs https://connect.vercel.com/callback as an
+   authorized redirect URI, and the Gmail, Calendar, and People APIs enabled.
+
+Then hard-refresh Workspace. It should read Connect, not Setup required. If it
+still reads Setup required, the deployment's runtime logs now name the reason:
+
+     vercel logs --prod | grep google-workspace
+EOF
