@@ -58,12 +58,14 @@ describe("root and worker capability boundaries", () => {
       "agent.ts",
       "ask_question.ts",
       "browser_run_checkpoints.ts",
+      "candidate_documents.ts",
       "candidate_profile.ts",
       "goforay-applications.ts",
       "google_workspace_read.ts",
       "google_workspace_write.ts",
       "request_vault_setup.ts",
       "self_identification.ts",
+      "wait_for_email_otp.ts",
       "web_search.ts",
     ]);
     expect(existsSync(`${rootTools}/sendMessage.ts`)).toBe(false);
@@ -92,6 +94,7 @@ describe("root and worker capability boundaries", () => {
       "solve_captcha.ts",
       "stage_default_goforay_resume.ts",
       "stage_goforay_document.ts",
+      "stage_workspace_document.ts",
     ]);
     expect(existsSync(`${workerRoot}/tools/sendMessage.ts`)).toBe(false);
     expect(existsSync(`${workerRoot}/tools/request_vault_setup.ts`)).toBe(

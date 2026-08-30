@@ -40,12 +40,6 @@ const identityLinkResponseSchema = z.object({
 });
 
 const bridgeErrorResponseSchema = z.object({ detail: z.string().optional() });
-const resumeUploadSchema = z.object({
-  filename: z.string(),
-  id: z.string(),
-  status: z.string(),
-});
-
 const bridgeTaskSchema = z.object({
   application_id: z.string(),
   apply_url: z.string(),
@@ -290,35 +284,6 @@ export async function createApplicationTask(
   );
 }
 
-/** Uploads a candidate-owned resume without making its bytes model-visible. */
-export async function uploadCandidateResume(scope: AccessScope, file: File) {
-  const link = await linkedCandidate(scope);
-  if (!link)
-    throw new Error("Link your GoForay account before uploading a resume.");
-  const { apiUrl } = configured();
-  const form = new FormData();
-  form.set("file", file, file.name || "resume");
-  const response = await fetch(`${apiUrl}/v1/internal/openinstinct/resumes`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${createBridgeToken({
-        audience: juiceboxAudience,
-        subject: externalUserId(scope.userId),
-        orgId: link.orgId,
-        candidateId: link.candidateId,
-      })}`,
-    },
-    body: form,
-  });
-  const payload: unknown = await response.json();
-  if (!response.ok) {
-    throw new Error(
-      bridgeErrorResponseSchema.safeParse(payload).data?.detail ??
-        "Unable to upload the resume."
-    );
-  }
-  return resumeUploadSchema.parse(payload);
-}
 
 /** Reads the linked candidate's current JuiceBox matches without creating an application. */
 export async function goforayJobFeed(
