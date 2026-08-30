@@ -65,6 +65,7 @@ describe("root and worker capability boundaries", () => {
       "request_vault_setup.ts",
       "self_identification.ts",
       "wait_for_email_otp.ts",
+      "web_search.ts",
     ]);
     expect(existsSync(`${rootTools}/sendMessage.ts`)).toBe(false);
     expect(existsSync("agent/extensions/kernel/extension.ts")).toBe(false);

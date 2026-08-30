@@ -30,7 +30,7 @@ export async function listCalendarEvents(
       {
         calendarId: input.calendarId,
         fields:
-          "items(id,status,summary,description,location,start,end,attendees(email,responseStatus),htmlLink)",
+          "timeZone,items(id,status,summary,description,location,start,end,attendees(email,responseStatus),htmlLink)",
         maxResults: input.maxResults,
         orderBy: "startTime",
         singleEvents: true,
@@ -39,8 +39,135 @@ export async function listCalendarEvents(
       },
       { signal: ctx.abortSignal }
     );
-    return { events: data.items ?? [] };
+    return { events: data.items ?? [], timeZone: data.timeZone ?? "UTC" };
   });
+}
+
+/**
+ * The agent runs serverless with no clock and no knowledge of the user's
+ * timezone, so it cannot turn "tomorrow" into an absolute window: it reasons in
+ * UTC and silently reads the wrong day. Resolve a relative day here instead,
+ * against the timezone the calendar itself reports.
+ */
+export async function listCalendarEventsForDay(
+  ctx: ToolContext,
+  input: { calendarId: string; dayOffset: number; maxResults: number }
+) {
+  // The target local day sits within a day of the same offset applied in UTC,
+  // so this window covers it whatever the calendar's timezone turns out to be.
+  const approximate = Date.now() + input.dayOffset * DAY_MS;
+  const { events, timeZone } = await listCalendarEvents(ctx, {
+    calendarId: input.calendarId,
+    // Widened queries return neighbouring days that are filtered out below, so
+    // ask for more than the caller wants and trim afterwards.
+    maxResults: Math.min(input.maxResults * 3, 250),
+    timeMax: new Date(approximate + 2 * DAY_MS).toISOString(),
+    timeMin: new Date(approximate - DAY_MS).toISOString(),
+  });
+
+  const localDate = addLocalDays(
+    localDateInTimeZone(new Date(), timeZone),
+    input.dayOffset
+  );
+  const { end, start } = zonedDayBounds(localDate, timeZone);
+  return {
+    events: events
+      .filter((event) => eventOverlapsDay(event, localDate, start, end))
+      .slice(0, input.maxResults),
+    localDate,
+    timeZone,
+  };
+}
+
+const DAY_MS = 86_400_000;
+
+/** The calendar-local calendar date of an instant, as YYYY-MM-DD. */
+export function localDateInTimeZone(instant: Date, timeZone: string) {
+  const parts = zonedParts(instant, timeZone);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+export function addLocalDays(localDate: string, days: number) {
+  const shifted = new Date(`${localDate}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
+}
+
+/** The UTC instants bounding a calendar-local day. */
+export function zonedDayBounds(localDate: string, timeZone: string) {
+  return {
+    end: zonedMidnight(addLocalDays(localDate, 1), timeZone),
+    start: zonedMidnight(localDate, timeZone),
+  };
+}
+
+function zonedMidnight(localDate: string, timeZone: string) {
+  const naive = Date.parse(`${localDate}T00:00:00Z`);
+  // The offset depends on the instant, and the instant depends on the offset.
+  // One refinement settles it, including across a DST transition.
+  let instant = naive - zonedOffsetMs(new Date(naive), timeZone);
+  instant = naive - zonedOffsetMs(new Date(instant), timeZone);
+  return new Date(instant);
+}
+
+function zonedOffsetMs(instant: Date, timeZone: string) {
+  const parts = zonedParts(instant, timeZone);
+  const asUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour) % 24,
+    Number(parts.minute),
+    Number(parts.second)
+  );
+  return asUtc - instant.getTime();
+}
+
+function zonedParts(instant: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+    month: "2-digit",
+    second: "2-digit",
+    timeZone,
+    year: "numeric",
+  });
+  const found = new Map(
+    formatter.formatToParts(instant).map((part) => [part.type, part.value])
+  );
+  const read = (type: Intl.DateTimeFormatPartTypes) => found.get(type) ?? "0";
+  return {
+    day: read("day"),
+    hour: read("hour"),
+    minute: read("minute"),
+    month: read("month"),
+    second: read("second"),
+    year: read("year"),
+  };
+}
+
+/**
+ * All-day events carry `date` (with an exclusive end) rather than `dateTime`,
+ * so they are compared as calendar dates and timed events as instants.
+ */
+export function eventOverlapsDay(
+  event: calendar_v3.Schema$Event,
+  localDate: string,
+  dayStart: Date,
+  dayEnd: Date
+) {
+  const allDayStart = event.start?.date;
+  if (allDayStart) {
+    const allDayEnd = event.end?.date ?? addLocalDays(allDayStart, 1);
+    return allDayStart <= localDate && localDate < allDayEnd;
+  }
+  const startedAt = event.start?.dateTime;
+  if (!startedAt) return false;
+  const start = new Date(startedAt);
+  const end = new Date(event.end?.dateTime ?? startedAt);
+  return start < dayEnd && end > dayStart;
 }
 
 export async function checkCalendarAvailability(

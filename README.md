@@ -110,30 +110,40 @@ access deliberately uses `gmail.modify`, not the permanent-delete
 2. Create OAuth web credentials. Add
    `https://connect.vercel.com/callback` as an authorized redirect URI, then
    download the client-secret JSON.
-3. Vercel expects top-level `clientId` and `clientSecret` keys, not Google's
-   nested `web.client_id` and `web.client_secret` download. Convert the download
-   into a temporary file outside the repository, then create and attach the
-   connector:
+3. Create and attach the connector. Vercel expects top-level `clientId` and
+   `clientSecret` keys, not Google's nested `web.client_id` and
+   `web.client_secret` download, so the script reshapes the download into a
+   private temporary file, hands it to Vercel, and deletes it on exit:
 
    ```bash
-   vercel link
-   google_credentials_file="$(mktemp)"
-   jq '{clientId: .web.client_id, clientSecret: .web.client_secret}' /absolute/path/to/downloaded-client-secret.json > "$google_credentials_file"
-   vercel connect create google --connection-method oauth --name open-instinct --data @"$google_credentials_file"
-   rm -f "$google_credentials_file"
-   vercel connect attach <returned-connector-uid> --project <your-vercel-project> --environment production --yes
-   vercel env pull
+   scripts/setup-google-connector.sh /absolute/path/to/downloaded-client-secret.json
    ```
 
-   Never commit either credential file.
+   On Windows, run the PowerShell counterpart instead. It needs neither bash nor
+   `jq`:
 
-4. Set `GOOGLE_CONNECTOR_UID` to the returned UID and redeploy. The default is
-   `google/open-instinct`.
+   ```powershell
+   .\scripts\setup-google-connector.ps1 C:\path\to\downloaded-client-secret.json
+   ```
+
+   It creates the connector, attaches it to production and preview, sets
+   `GOOGLE_CONNECTOR_UID`, and prints the scope list to declare on the consent
+   screen. Pass environments explicitly to narrow it, and set `CONNECTOR_NAME`
+   to use a name other than `open-instinct`. Re-running reuses whatever already
+   exists. Never commit either credential file.
+
+4. Redeploy so the deployment picks up `GOOGLE_CONNECTOR_UID`. The default is
+   `google/open-instinct`, which is what the script creates.
 
 Gotchas:
 
 - Attach the connector separately to every Vercel environment that should use
   it. A production attachment does not make preview or local development work.
+- Workspace reads `Setup required` whenever the connector is missing, detached
+  from that environment, or named differently from `GOOGLE_CONNECTOR_UID`. The
+  deployment's runtime logs name which one: look for
+  `[google-workspace] connector unavailable`. `Connect` means the connector is
+  found and only the user's own grant is missing.
 - The Gmail read/modify scope is restricted. A Google OAuth app in Testing mode
   only works for listed test users, and those grants expire after seven days.
   Broader distribution requires Google's OAuth verification and may require a

@@ -6,10 +6,17 @@ import {
 } from "@vercel/connect";
 import type * as VercelConnect from "@vercel/connect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseCalendarAvailability } from "@/agent/lib/google-workspace/calendar";
+import {
+  addLocalDays,
+  eventOverlapsDay,
+  localDateInTimeZone,
+  parseCalendarAvailability,
+  zonedDayBounds,
+} from "@/agent/lib/google-workspace/calendar";
 import { googleWorkspaceAuthOptions } from "@/agent/lib/google-workspace/client";
 import { gmailUpdateLabels } from "@/agent/lib/google-workspace/gmail";
 import { googleWorkspaceWriteApproval } from "@/agent/tools/google_workspace_write";
+import { env } from "@/lib/env";
 import {
   GOOGLE_WORKSPACE_SCOPES,
   googleWorkspaceSubject,
@@ -85,6 +92,29 @@ describe("Google Workspace connection", () => {
     });
   });
 
+  it("names the connector when setup, not the user grant, is missing", async () => {
+    const logged = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    vi.mocked(getTokenResponse).mockRejectedValue(
+      new Error("Connector google/open-instinct is not attached.")
+    );
+
+    await expect(getGoogleWorkspaceConnection(scope)).resolves.toEqual({
+      accountLabel: null,
+      state: "unavailable",
+    });
+    expect(logged).toHaveBeenCalledWith(
+      "[google-workspace] connector unavailable",
+      {
+        connectorUid: env.GOOGLE_CONNECTOR_UID,
+        error: "Connector google/open-instinct is not attached.",
+        workspaceId: scope.workspaceId,
+      }
+    );
+    logged.mockRestore();
+  });
+
   it("starts authorization with the canonical subject and scopes", async () => {
     vi.mocked(startAuthorization).mockResolvedValue({
       request: "request",
@@ -105,6 +135,64 @@ describe("Google Workspace connection", () => {
         callbackUrl: "https://openinstinct.example/?google=connected",
       })
     );
+  });
+
+  it("bounds a local day by the calendar's timezone, not UTC", () => {
+    // The bug this replaces: the agent built 2026-08-30 as a UTC day, so an
+    // evening event in Los Angeles fell into the next UTC day and vanished.
+    const { end, start } = zonedDayBounds("2026-08-30", "America/Los_Angeles");
+    expect(start.toISOString()).toBe("2026-08-30T07:00:00.000Z");
+    expect(end.toISOString()).toBe("2026-08-31T07:00:00.000Z");
+
+    const kolkata = zonedDayBounds("2026-08-30", "Asia/Kolkata");
+    expect(kolkata.start.toISOString()).toBe("2026-08-29T18:30:00.000Z");
+  });
+
+  it("bounds a local day across a DST transition", () => {
+    // US DST ends 2026-11-01, so that local day is 25 hours long.
+    const { end, start } = zonedDayBounds("2026-11-01", "America/Los_Angeles");
+    expect(start.toISOString()).toBe("2026-11-01T07:00:00.000Z");
+    expect(end.toISOString()).toBe("2026-11-02T08:00:00.000Z");
+  });
+
+  it("reads the local date and shifts it by whole days", () => {
+    const evening = new Date("2026-08-30T01:12:00.000Z");
+    expect(localDateInTimeZone(evening, "America/Los_Angeles")).toBe(
+      "2026-08-29"
+    );
+    expect(localDateInTimeZone(evening, "UTC")).toBe("2026-08-30");
+    expect(addLocalDays("2026-08-29", 1)).toBe("2026-08-30");
+    expect(addLocalDays("2026-12-31", 1)).toBe("2027-01-01");
+  });
+
+  it("keeps an evening event that a UTC-bounded day would drop", () => {
+    const { end, start } = zonedDayBounds("2026-08-30", "America/Los_Angeles");
+    const evening = {
+      end: { dateTime: "2026-08-30T20:00:00-07:00" },
+      start: { dateTime: "2026-08-30T19:00:00-07:00" },
+    };
+    expect(eventOverlapsDay(evening, "2026-08-30", start, end)).toBe(true);
+
+    const nextDay = {
+      end: { dateTime: "2026-08-31T10:00:00-07:00" },
+      start: { dateTime: "2026-08-31T09:00:00-07:00" },
+    };
+    expect(eventOverlapsDay(nextDay, "2026-08-30", start, end)).toBe(false);
+  });
+
+  it("treats an all-day event's end date as exclusive", () => {
+    const { end, start } = zonedDayBounds("2026-08-30", "America/Los_Angeles");
+    const spanning = {
+      end: { date: "2026-08-31" },
+      start: { date: "2026-08-29" },
+    };
+    expect(eventOverlapsDay(spanning, "2026-08-30", start, end)).toBe(true);
+
+    const endsBefore = {
+      end: { date: "2026-08-30" },
+      start: { date: "2026-08-29" },
+    };
+    expect(eventOverlapsDay(endsBefore, "2026-08-30", start, end)).toBe(false);
   });
 
   it("maps reversible Gmail actions to system labels", () => {

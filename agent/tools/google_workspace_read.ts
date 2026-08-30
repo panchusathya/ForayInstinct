@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   checkCalendarAvailability,
   listCalendarEvents,
+  listCalendarEventsForDay,
   searchGoogleContacts,
 } from "@/agent/lib/google-workspace/calendar";
 import {
@@ -20,13 +21,26 @@ const inputSchema = z.discriminatedUnion("action", [
     action: z.literal("read_email_thread"),
     threadId: z.string().min(1).max(200),
   }),
-  z.object({
-    action: z.literal("list_calendar_events"),
-    calendarId: z.string().default("primary"),
-    maxResults: z.number().int().min(1).max(50).default(20),
-    timeMax: z.iso.datetime({ offset: true }),
-    timeMin: z.iso.datetime({ offset: true }),
-  }),
+  z
+    .object({
+      action: z.literal("list_calendar_events"),
+      calendarId: z.string().default("primary"),
+      // Relative days are resolved against the calendar's own timezone, which
+      // this agent has no other way to know. 0 is today, 1 tomorrow, -1
+      // yesterday. Always prefer it over computing a window from a guessed
+      // current date.
+      dayOffset: z.number().int().min(-365).max(365).optional(),
+      maxResults: z.number().int().min(1).max(50).default(20),
+      // An explicit absolute window, for ranges that are not a single day.
+      timeMax: z.iso.datetime({ offset: true }).optional(),
+      timeMin: z.iso.datetime({ offset: true }).optional(),
+    })
+    .refine(
+      (value) =>
+        value.dayOffset !== undefined ||
+        (value.timeMin !== undefined && value.timeMax !== undefined),
+      "Provide dayOffset for a single day, or both timeMin and timeMax."
+    ),
   z.object({
     action: z.literal("check_calendar_availability"),
     calendars: z.array(z.string()).min(1).max(10).default(["primary"]),
@@ -57,11 +71,33 @@ export default defineTool({
           action: input.action,
           thread: await readGmailThread(ctx, input.threadId),
         };
-      case "list_calendar_events":
+      case "list_calendar_events": {
+        if (input.dayOffset !== undefined) {
+          return {
+            action: input.action,
+            ...(await listCalendarEventsForDay(ctx, {
+              calendarId: input.calendarId,
+              dayOffset: input.dayOffset,
+              maxResults: input.maxResults,
+            })),
+          };
+        }
+        const { timeMax, timeMin } = input;
+        if (timeMax === undefined || timeMin === undefined) {
+          throw new Error(
+            "list_calendar_events needs dayOffset, or both timeMin and timeMax."
+          );
+        }
         return {
           action: input.action,
-          ...(await listCalendarEvents(ctx, input)),
+          ...(await listCalendarEvents(ctx, {
+            calendarId: input.calendarId,
+            maxResults: input.maxResults,
+            timeMax,
+            timeMin,
+          })),
         };
+      }
       case "check_calendar_availability":
         return {
           action: input.action,
