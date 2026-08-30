@@ -149,7 +149,7 @@ describe("worker input bubbling", () => {
       /Keep an existing resume\s+and continue/
     );
     expect(workerInstructions).toMatch(
-      /Do not retry a protected\s+resume upload after a server error/
+      /Do not retry a protected\s+resume upload after\s+a server error/
     );
   });
 
