@@ -165,19 +165,32 @@ GOOGLE_CONNECTOR_UID is then set to google/$ConnectorName-google to match.
     }
   }
 
+  # One attach naming every environment. `connect attach` defines the authorized
+  # environment list rather than adding to it, so attaching in a loop leaves
+  # only the last environment enabled and the earlier ones fail at runtime with
+  # "Connector is not enabled for this environment".
+  Write-Host "==> Attaching $connectorUid to $($Environments -join ', ')"
+  $attachArgs = @('connect', 'attach', $connectorUid)
   foreach ($environment in $Environments) {
-    Write-Host "==> Attaching $connectorUid to $environment"
-    $attached = Invoke-Vercel -Capture -Arguments @(
-      'connect', 'attach', $connectorUid, '--environment', $environment, '--yes'
-    )
-    $attached | Write-Host
-    if ($script:VercelExitCode -ne 0) {
-      if (($attached -join "`n") -match 'already attached|already linked') {
-        Write-Host "    (already attached to $environment)"
-      }
-      else {
-        throw "Attaching $connectorUid to $environment failed with exit code $script:VercelExitCode"
-      }
+    $attachArgs += @('--environment', $environment)
+  }
+  $attachArgs += '--yes'
+  $attached = Invoke-Vercel -Capture -Arguments $attachArgs
+  $attached | Write-Host
+  if ($script:VercelExitCode -ne 0) {
+    if (($attached -join "`n") -match 'already attached|already linked') {
+      Write-Host '    (already attached)'
+    }
+    else {
+      throw "Attaching $connectorUid failed with exit code $script:VercelExitCode"
+    }
+  }
+  # The CLI echoes the environments it enabled; surface any that did not take.
+  foreach ($environment in $Environments) {
+    if (($attached -join "`n") -notmatch "(?i)$([regex]::Escape($environment))") {
+      Write-Host "    WARNING: $environment was not named in the attach result."
+      Write-Host "      Re-run: vercel connect attach $connectorUid --environment $environment --yes"
+      Write-Host '      Note that a later single-environment attach replaces earlier ones.'
     }
   }
 

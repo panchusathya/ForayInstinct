@@ -86,18 +86,32 @@ GOOGLE_CONNECTOR_UID is then set to google/${connector_name}-google to match."
   fi
 fi
 
+# One attach naming every environment. `connect attach` defines the authorized
+# environment list rather than adding to it, so attaching in a loop leaves only
+# the last environment enabled and the earlier ones fail at runtime with
+# "Connector is not enabled for this environment".
+echo "==> Attaching ${connector_uid} to ${environments[*]}"
+attach_args=(connect attach "$connector_uid")
 for environment in "${environments[@]}"; do
-  echo "==> Attaching ${connector_uid} to ${environment}"
-  attach_status=0
-  attach_output="$(vercel connect attach "$connector_uid" \
-    --environment "$environment" --yes 2>&1)" || attach_status=$?
-  echo "$attach_output"
-  if [ "$attach_status" -ne 0 ]; then
-    if echo "$attach_output" | grep -qE "already attached|already linked"; then
-      echo "    (already attached to ${environment})"
-    else
-      fail "attaching ${connector_uid} to ${environment} failed with exit code ${attach_status}"
-    fi
+  attach_args+=(--environment "$environment")
+done
+attach_args+=(--yes)
+attach_status=0
+attach_output="$(vercel "${attach_args[@]}" 2>&1)" || attach_status=$?
+echo "$attach_output"
+if [ "$attach_status" -ne 0 ]; then
+  if echo "$attach_output" | grep -qE "already attached|already linked"; then
+    echo "    (already attached)"
+  else
+    fail "attaching ${connector_uid} failed with exit code ${attach_status}"
+  fi
+fi
+# The CLI echoes the environments it enabled; surface any that did not take.
+for environment in "${environments[@]}"; do
+  if ! echo "$attach_output" | grep -qi "$environment"; then
+    echo "    WARNING: ${environment} was not named in the attach result."
+    echo "      Re-run: vercel connect attach ${connector_uid} --environment ${environment} --yes"
+    echo "      Note that a later single-environment attach replaces earlier ones."
   fi
 done
 
