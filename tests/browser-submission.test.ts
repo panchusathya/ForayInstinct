@@ -92,13 +92,13 @@ describe("browser submission evidence", () => {
     ).toBe("application submitted");
     expect(
       observedSubmission("https://tenant.example/apply", "Thank you")
-    ).toBe("thank you");
+    ).toBeUndefined();
     expect(
       observedSubmission(
         "https://tenant.example/apply",
         "We have received your materials."
       )
-    ).toBe("we have received");
+    ).toBeUndefined();
     expect(
       observedSubmission(
         "https://tenant.example/apply",
@@ -203,7 +203,7 @@ describe("playwright checkpoints observe a submission without final_output", () 
     });
   });
 
-  it("records submission_observed from the live page, not the Playwright return", async () => {
+  it("adds submission evidence without replacing the Playwright result", async () => {
     const { default: executePlaywrightCode } =
       await import("../agent/subagents/worker/tools/execute_playwright_code");
 
@@ -217,10 +217,10 @@ describe("playwright checkpoints observe a submission without final_output", () 
       { userId: "user-1", workspaceId: "workspace-1" },
       "browser-1",
       expect.objectContaining({
-        actions: ["application submitted"],
+        actions: ["submission evidence: application submitted"],
         page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/applicationSubmitted",
         phase: "playwright",
-        state: "submission_observed",
+        state: "completed",
       })
     );
     expect(mocks.captureScreenshot).toHaveBeenCalledWith(

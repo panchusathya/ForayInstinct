@@ -112,6 +112,51 @@ describe("Linq message delivery", () => {
     });
   });
 
+  it("remembers the provider message id for a role-card threaded reply", async () => {
+    const { context, post, state } = handlerContext();
+    post.mockResolvedValueOnce({ id: "linq-role-card-2" });
+
+    await trackWorkerCancellation(
+      {
+        result: {
+          callId: "call-roles",
+          kind: "tool-result",
+          output: {
+            cards: [
+              {
+                company: "OpenAI",
+                location: "San Francisco, CA",
+                reasons: ["Agent experience"],
+                title: "Product Engineer",
+                url: "https://openai.com/careers/example",
+              },
+            ],
+          },
+          toolName: "find_goforay_roles",
+        },
+        sequence: 0,
+        status: "completed",
+        stepIndex: 0,
+        turnId: "turn-role-reply",
+      },
+      context,
+      sessionContext()
+    );
+    await deliverCompletedMessage(
+      completedEvent({ message: "role cards", turnId: "turn-role-reply" }),
+      context,
+      sessionContext()
+    );
+
+    expect(state.linqJobCardsByMessageId).toMatchObject({
+      "linq-role-card-2": {
+        company: "OpenAI",
+        title: "Product Engineer",
+        url: "https://openai.com/careers/example",
+      },
+    });
+  });
+
   it("suppresses intermediate tool-call messages without a generic reaction", async () => {
     const { addReaction, context, post, state } = handlerContext();
 
@@ -402,8 +447,8 @@ function handlerContext(
   state: Record<string, unknown> = {},
   lastService?: string
 ) {
-  const post = vi.fn<(message: string) => Promise<void>>();
-  post.mockResolvedValue();
+  const post = vi.fn<(message: unknown) => Promise<unknown>>();
+  post.mockResolvedValue(undefined);
   const addReaction = vi
     .fn<(threadId: string, messageId: string, emoji: string) => Promise<void>>()
     .mockResolvedValue(undefined);

@@ -42,8 +42,12 @@ export async function recordBrowserActionCheckpoint(
     ...(evidence === undefined
       ? {}
       : {
-          actions: [...(checkpoint.actions ?? []), evidence],
-          state: "submission_observed",
+          // Evidence is useful for debugging and screenshot capture, but it
+          // cannot turn a failed or incomplete browser action into a success.
+          actions: [
+            ...(checkpoint.actions ?? []),
+            `submission evidence: ${evidence}`,
+          ],
         }),
   }).catch((error: unknown) => {
     console.error("[browser-checkpoint] persistence failed", {
