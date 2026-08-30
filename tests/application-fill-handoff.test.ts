@@ -18,7 +18,7 @@ const browserSkill = readFileSync(
 describe("application fill handoff", () => {
   it("sends the worker at the apply URL without a JuiceBox task wrapper", () => {
     expect(rootInstructions).toContain("send the `worker` straight at that URL");
-    expect(rootInstructions).toContain("no GoForay application task");
+    expect(rootInstructions).toMatch(/no\s+GoForay application task/);
     expect(rootInstructions).toContain("stage_default_goforay_resume");
     expect(rootInstructions).not.toContain("start_goforay_application");
     expect(rootInstructions).not.toContain("report_goforay_application_result");

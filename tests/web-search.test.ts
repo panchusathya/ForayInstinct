@@ -105,7 +105,7 @@ describe("web search routing", () => {
     expect(instructions).toContain(
       "send the `worker` straight at that URL"
     );
-    expect(instructions).toContain("no GoForay application task");
+    expect(instructions).toMatch(/no\s+GoForay application task/);
     expect(instructions).toContain(
       "Never tell the candidate you cannot click through"
     );

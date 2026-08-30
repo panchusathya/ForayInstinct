@@ -396,7 +396,7 @@ export async function findGoforayRoles(
     if (feed.cards.length) {
       await rememberPresentedRoles(scope, feed.cards);
     }
-    return { ...feed, searching: feed.searching ?? false, source: "juicebox" };
+    return { ...feed, searching: feed.searching, source: "juicebox" };
   } catch (error) {
     return {
       cards: [],
