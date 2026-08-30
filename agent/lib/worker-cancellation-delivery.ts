@@ -1,4 +1,5 @@
 import { pool } from "@/db";
+import { env } from "@/lib/env";
 
 const runtime = globalThis as typeof globalThis & {
   openInstinctWorkerCancellationTurns?: Map<string, string>;
@@ -54,7 +55,7 @@ function persistenceKey(turn: string) {
 }
 
 function persistDurably() {
-  return process.env.NODE_ENV !== "test";
+  return env.NODE_ENV !== "test";
 }
 
 async function persistCancellation(turn: string, taskId: string) {

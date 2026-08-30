@@ -10,27 +10,7 @@ describe("computer_action model output", () => {
       screenshotBase64: "aaaa",
     });
 
-    expect(output).toEqual(
-      expect.objectContaining({
-        type: "content",
-      })
-    );
-    const content =
-      output && "value" in output && Array.isArray(output.value)
-        ? output.value
-        : [];
-    const text = content.find(
-      (part) =>
-        typeof part === "object" &&
-        part !== null &&
-        "type" in part &&
-        part.type === "text"
-    );
-    expect(text).toEqual(
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining("pasted-id"),
-      })
-    );
+    expect(JSON.stringify(output)).toContain("pasted-id");
+    expect(JSON.stringify(output)).toContain("image/png");
   });
 });

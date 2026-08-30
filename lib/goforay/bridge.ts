@@ -438,8 +438,9 @@ export async function recordConversationMessage({
 }) {
   const link = await linkedCandidate(scope);
   if (!body.trim()) return;
+  const sourceId = sourceMessageId?.slice(0, 300);
   const entry = {
-    id: sourceMessageId?.slice(0, 300) || randomUUID(),
+    id: sourceId ?? randomUUID(),
     direction,
     body: body.slice(0, 20_000),
     created_at: new Date().toISOString(),

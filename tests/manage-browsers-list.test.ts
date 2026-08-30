@@ -4,9 +4,7 @@ import manageBrowsers from "../agent/subagents/worker/tools/manage_browsers";
 const mocks = vi.hoisted(() => ({
   listBrowserSessions:
     vi.fn<
-      (
-        _scope: unknown
-      ) => Promise<Array<{ createdAt: string; sessionId: string }>>
+      (_scope: unknown) => Promise<{ createdAt: string; sessionId: string }[]>
     >(),
   retrieveBrowser: vi.fn<
     (
