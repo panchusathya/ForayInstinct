@@ -4,6 +4,7 @@ import {
   createVaultItem as insertVaultItem,
   deleteVaultItem,
 } from "@/db/services/vault";
+import { chatGatewayModel } from "@/lib/model-config";
 import type { AccessScope } from "../../access-scope";
 import { getGoogleWorkspaceConnection } from "../../google-workspace/server";
 import type { ManagerMutation } from "..";
@@ -21,7 +22,7 @@ export async function readManagerSnapshot(scope: AccessScope) {
   return {
     browser: { available: true },
     googleWorkspace,
-    runtime: { inference: "openai/gpt-5.6-luna-fast" },
+    runtime: { inference: chatGatewayModel },
     secretStore: secretStoreStatus(),
     vaultItems: vaultRows,
   };
