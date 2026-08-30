@@ -31,6 +31,11 @@ export async function getGoogleWorkspaceConnection(scope: AccessScope) {
     ) {
       return { accountLabel: null, state: "disconnected" as const };
     }
+    console.error("[google-workspace] connector unavailable", {
+      connectorUid: env.GOOGLE_CONNECTOR_UID,
+      error: error instanceof Error ? error.message : String(error),
+      workspaceId: scope.workspaceId,
+    });
     return { accountLabel: null, state: "unavailable" as const };
   }
 }
