@@ -5,12 +5,20 @@ import {
   db,
   goforayConversations,
   goforayLinks,
-  goforayPresentedPostings,
-  goforaySyncOutbox,
-  user,
+  goforayWorkspaceLinks,
+  goforayWorkspaceConversations,
+  goforayWorkspacePresentedPostings,
+  goforayWorkspaceSyncOutbox,
+  goforayPendingRoleSearches,
 } from "@/db";
 import { env } from "@/lib/env";
 import type { AccessScope } from "@/lib/access-scope";
+import { ensureScope } from "@/db/services/scope";
+import {
+  completePendingRoleSearch,
+  listPendingRoleSearches,
+  queuePendingRoleSearch,
+} from "@/db/services/pending-role-searches";
 
 const issuer = "goforay-openinstinct";
 const juiceboxAudience = "juicebox";
@@ -51,6 +59,20 @@ const jobFeedSchema = z.object({
     })
   ),
   searching: z.boolean().optional().default(false),
+  discovery: z
+    .object({
+      state: z.enum([
+        "queued",
+        "running",
+        "ready",
+        "empty",
+        "unavailable",
+        "failed",
+      ]),
+      detail: z.string().optional(),
+      job_id: z.string().optional(),
+    })
+    .optional(),
 });
 
 function authUserId(userId: string) {
@@ -58,7 +80,9 @@ function authUserId(userId: string) {
 }
 
 function externalUserId(userId: string) {
-  return `better-auth:${authUserId(userId)}`;
+  return userId.startsWith("phone:")
+    ? userId
+    : `better-auth:${authUserId(userId)}`;
 }
 
 function configured() {
@@ -142,14 +166,15 @@ export function verifyBridgeToken(
 }
 
 export async function linkCandidate({
-  userId,
+  scope,
   identities,
   name = "",
 }: {
-  userId: string;
+  scope: AccessScope;
   identities: Identity[];
   name?: string;
 }) {
+  await ensureScope(scope);
   const { apiUrl } = configured();
   const email =
     identities.find((identity) => identity.kind === "email")?.value ?? "";
@@ -162,13 +187,13 @@ export async function linkCandidate({
       headers: {
         Authorization: `Bearer ${createBridgeToken({
           audience: juiceboxAudience,
-          subject: externalUserId(userId),
+          subject: externalUserId(scope.userId),
           identities,
         })}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        external_user_id: externalUserId(userId),
+        external_user_id: externalUserId(scope.userId),
         name,
         email,
         phone,
@@ -185,26 +210,31 @@ export async function linkCandidate({
       payload.detail === "No candidate matches this verified identity"
     ) {
       await db
-        .delete(goforayLinks)
-        .where(eq(goforayLinks.userId, authUserId(userId)));
+        .delete(goforayWorkspaceLinks)
+        .where(eq(goforayWorkspaceLinks.workspaceId, scope.workspaceId));
     }
     throw new Error(payload.detail ?? "Unable to link this GoForay account.");
   }
   await db
-    .insert(goforayLinks)
+    .insert(goforayWorkspaceLinks)
     .values({
-      userId: authUserId(userId),
+      workspaceId: scope.workspaceId,
       orgId: payload.org_id,
       candidateId: payload.candidate_id,
     })
     .onConflictDoUpdate({
-      target: goforayLinks.userId,
+      target: goforayWorkspaceLinks.workspaceId,
       set: { orgId: payload.org_id, candidateId: payload.candidate_id },
     });
   return { org_id: payload.org_id, candidate_id: payload.candidate_id };
 }
 
 async function linkedCandidate(scope: AccessScope) {
+  const canonical = await db.query.goforayWorkspaceLinks.findFirst({
+    where: eq(goforayWorkspaceLinks.workspaceId, scope.workspaceId),
+  });
+  if (canonical) return canonical;
+  if (!scope.userId.startsWith("better-auth:")) return;
   return db.query.goforayLinks.findFirst({
     where: eq(goforayLinks.userId, authUserId(scope.userId)),
   });
@@ -312,6 +342,7 @@ export async function findGoforayRoles(
   cards: z.infer<typeof jobFeedSchema>["cards"];
   searching: boolean;
   source: "juicebox";
+  discovery?: z.infer<typeof jobFeedSchema>["discovery"];
   unavailable?: string;
 }> {
   const limit = input.limit ?? 5;
@@ -321,7 +352,18 @@ export async function findGoforayRoles(
     if (feed.cards.length) {
       await rememberPresentedRoles(scope, feed.cards);
     }
-    return { ...feed, searching: feed.searching, source: "juicebox" };
+    if (feed.searching) {
+      await queuePendingRoleSearch(scope, input);
+    }
+    return {
+      ...feed,
+      searching: feed.searching,
+      source: "juicebox",
+      ...(feed.discovery?.state === "unavailable" ||
+      feed.discovery?.state === "failed"
+        ? { unavailable: feed.discovery.detail || "Role search is unavailable." }
+        : {}),
+    };
   } catch (error) {
     return {
       cards: [],
@@ -331,6 +373,45 @@ export async function findGoforayRoles(
         error instanceof Error ? error.message : "Role search is unavailable.",
     };
   }
+}
+
+/** Polls queued phone-scoped searches so Linq can proactively resume them. */
+export async function pollPendingGoforayRoleSearches(limit = 20) {
+  const pending = await listPendingRoleSearches(limit);
+  const deliveries: {
+    message: string;
+    scope: AccessScope;
+    threadId: string;
+    workspaceId: string;
+  }[] = [];
+  for (const search of pending) {
+    const scope = {
+      userId: search.workspaceId,
+      workspaceId: search.workspaceId,
+    } satisfies AccessScope;
+    const feed = await findGoforayRoles(scope, {
+      location: search.location,
+      query: search.query,
+    });
+    if (feed.searching) continue;
+    await completePendingRoleSearch(search.workspaceId);
+    if (feed.cards.length) {
+      deliveries.push({
+        message: `A background JuiceBox role search has completed. Send these verified openings to the candidate as concise numbered cards with their apply URLs; do not run another search or use web_search:\n${JSON.stringify(feed.cards)}`,
+        scope,
+        threadId: search.threadId,
+        workspaceId: search.workspaceId,
+      });
+    } else if (feed.unavailable) {
+      deliveries.push({
+        message: `The background JuiceBox role search could not run: ${feed.unavailable}. Tell the candidate clearly, without using web_search.`,
+        scope,
+        threadId: search.threadId,
+        workspaceId: search.workspaceId,
+      });
+    }
+  }
+  return deliveries;
 }
 
 /**
@@ -438,8 +519,8 @@ export async function recordConversationMessage({
 }) {
   const link = await linkedCandidate(scope);
   if (!body.trim()) return;
-  const existing = await db.query.goforayConversations.findFirst({
-    where: eq(goforayConversations.id, conversationId),
+  const existing = await db.query.goforayWorkspaceConversations.findFirst({
+    where: eq(goforayWorkspaceConversations.id, conversationId),
   });
   const entry = {
     id: sourceMessageId?.slice(0, 300) || randomUUID(),
@@ -451,9 +532,9 @@ export async function recordConversationMessage({
     (message) => message.id === entry.id
   );
   if (!existing) {
-    await db.insert(goforayConversations).values({
+    await db.insert(goforayWorkspaceConversations).values({
       id: conversationId,
-      userId: authUserId(scope.userId),
+      workspaceId: scope.workspaceId,
       candidateId: link?.candidateId,
       channel,
       url,
@@ -461,19 +542,19 @@ export async function recordConversationMessage({
     });
   } else if (!alreadyRecorded) {
     await db
-      .update(goforayConversations)
+      .update(goforayWorkspaceConversations)
       .set({
         messages: [...existing.messages, entry],
         updatedAt: new Date(),
         ...(url ? { url } : {}),
       })
-      .where(eq(goforayConversations.id, conversationId));
+      .where(eq(goforayWorkspaceConversations.id, conversationId));
   }
   await db
-    .insert(goforaySyncOutbox)
+    .insert(goforayWorkspaceSyncOutbox)
     .values({
       id: entry.id,
-      userId: authUserId(scope.userId),
+      workspaceId: scope.workspaceId,
       candidateId: link?.candidateId,
       conversationId,
       channel,
@@ -486,30 +567,26 @@ export async function recordConversationMessage({
   void syncConversationEvent(entry.id);
 }
 
-async function candidateProfile(userId: string) {
-  const account = await db.query.user.findFirst({ where: eq(user.id, userId) });
-  if (!account) return { name: "", identities: [] as Identity[] };
-  const identities: Identity[] = [];
-  if (account.emailVerified && account.email) {
-    identities.push({ kind: "email", value: account.email, verified: true });
-  }
-  if (account.phoneNumberVerified && account.phoneNumber) {
-    identities.push({
-      kind: "phone",
-      value: account.phoneNumber,
-      verified: true,
-    });
-  }
-  return { name: account.name, identities };
+async function candidateProfile(workspaceId: string) {
+  const thread = await db.query.goforayPendingRoleSearches.findFirst({
+    where: eq(goforayPendingRoleSearches.workspaceId, workspaceId),
+  });
+  const phone = thread?.phone ?? "";
+  return {
+    name: "",
+    identities: phone
+      ? ([{ kind: "phone", value: phone, verified: true }] satisfies Identity[])
+      : ([] satisfies Identity[]),
+  };
 }
 
 async function syncConversationEvent(id: string) {
-  const item = await db.query.goforaySyncOutbox.findFirst({
-    where: eq(goforaySyncOutbox.id, id),
+  const item = await db.query.goforayWorkspaceSyncOutbox.findFirst({
+    where: eq(goforayWorkspaceSyncOutbox.id, id),
   });
   if (!item || item.sentAt) return;
   try {
-    const profile = await candidateProfile(item.userId);
+    const profile = await candidateProfile(item.workspaceId);
     if (!profile.identities.length)
       throw new Error("No verified candidate identity available.");
     const { apiUrl } = configured();
@@ -520,7 +597,7 @@ async function syncConversationEvent(id: string) {
         headers: {
           Authorization: `Bearer ${createBridgeToken({
             audience: juiceboxAudience,
-            subject: externalUserId(item.userId),
+            subject: externalUserId(item.workspaceId),
             ...(item.candidateId ? { candidateId: item.candidateId } : {}),
             identities: profile.identities,
           })}`,
@@ -545,35 +622,36 @@ async function syncConversationEvent(id: string) {
       );
     }
     await db
-      .update(goforaySyncOutbox)
+      .update(goforayWorkspaceSyncOutbox)
       .set({
         sentAt: new Date(),
         lastError: "",
-        attempts: sql`${goforaySyncOutbox.attempts} + 1`,
+        attempts: sql`${goforayWorkspaceSyncOutbox.attempts} + 1`,
       })
-      .where(eq(goforaySyncOutbox.id, item.id));
+      .where(eq(goforayWorkspaceSyncOutbox.id, item.id));
   } catch (error) {
     await db
-      .update(goforaySyncOutbox)
+      .update(goforayWorkspaceSyncOutbox)
       .set({
-        attempts: sql`${goforaySyncOutbox.attempts} + 1`,
+        attempts: sql`${goforayWorkspaceSyncOutbox.attempts} + 1`,
         lastError:
           error instanceof Error
             ? error.message.slice(0, 1_000)
             : "JuiceBox mirror failed.",
       })
-      .where(eq(goforaySyncOutbox.id, item.id));
+      .where(eq(goforayWorkspaceSyncOutbox.id, item.id));
   }
 }
 
 /** Fresh, curated roles after a candidate starts an application. */
 export async function nextGoforayRoles(scope: AccessScope, limit = 5) {
-  const userId = authUserId(scope.userId);
   const shown = await db
-    .select({ postingId: goforayPresentedPostings.postingId })
-    .from(goforayPresentedPostings)
-    .where(eq(goforayPresentedPostings.userId, userId))
-    .orderBy(desc(goforayPresentedPostings.createdAt))
+    .select({ postingId: goforayWorkspacePresentedPostings.postingId })
+    .from(goforayWorkspacePresentedPostings)
+    .where(
+      eq(goforayWorkspacePresentedPostings.workspaceId, scope.workspaceId)
+    )
+    .orderBy(desc(goforayWorkspacePresentedPostings.createdAt))
     .limit(100);
   const feed = await goforayJobFeed(scope, {
     limit: Math.min(limit, 5),
@@ -587,17 +665,21 @@ async function rememberPresentedRoles(
   scope: AccessScope,
   cards: z.infer<typeof jobFeedSchema>["cards"]
 ) {
-  const userId = authUserId(scope.userId);
   await Promise.all(
     cards.map((card) =>
       db
-        .insert(goforayPresentedPostings)
+        .insert(goforayWorkspacePresentedPostings)
         .values({
-          id: `${userId}:${card.posting_id}`,
-          userId,
+          id: `${scope.workspaceId}:${card.posting_id}`,
+          workspaceId: scope.workspaceId,
           postingId: card.posting_id,
         })
-        .onConflictDoNothing()
+        .onConflictDoNothing({
+          target: [
+            goforayWorkspacePresentedPostings.workspaceId,
+            goforayWorkspacePresentedPostings.postingId,
+          ],
+        })
     )
   );
 }
@@ -605,10 +687,10 @@ async function rememberPresentedRoles(
 /** Retry durable conversation events without delaying an active candidate turn. */
 export async function flushConversationSyncOutbox(limit = 50) {
   const rows = await db
-    .select({ id: goforaySyncOutbox.id })
-    .from(goforaySyncOutbox)
-    .where(isNull(goforaySyncOutbox.sentAt))
-    .orderBy(asc(goforaySyncOutbox.createdAt))
+    .select({ id: goforayWorkspaceSyncOutbox.id })
+    .from(goforayWorkspaceSyncOutbox)
+    .where(isNull(goforayWorkspaceSyncOutbox.sentAt))
+    .orderBy(asc(goforayWorkspaceSyncOutbox.createdAt))
     .limit(limit);
   await Promise.all(rows.map((row) => syncConversationEvent(row.id)));
 }

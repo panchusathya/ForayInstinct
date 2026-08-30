@@ -1,8 +1,14 @@
 import { eveChannel } from "eve/channels/eve";
 import { ForbiddenError, UnauthenticatedError } from "eve/channels/auth";
 import { isSessionOwned } from "@/db/services/sessions";
-import { accessScopeForUser, type AccessScope } from "@/lib/access-scope";
+import {
+  accessScopeForPhone,
+  accessScopeForUser,
+  type AccessScope,
+} from "@/lib/access-scope";
 import { getAuthSession } from "@/auth/session";
+import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
+import { adoptLegacyWorkspace } from "@/db/services/adopt-legacy-workspace";
 
 export default eveChannel({
   auth: [
@@ -42,9 +48,13 @@ function sessionIdFromPath(pathname: string) {
 
 async function requestScopeFromRequest(request: Request) {
   const session = await getAuthSession(request.headers);
-  return session
-    ? accessScopeForUser(`better-auth:${session.user.id}`)
-    : undefined;
+  if (!session) return;
+  const legacyScope = accessScopeForUser(`better-auth:${session.user.id}`);
+  const phoneNumber = normalizeAuthPhoneNumber(session.user.phoneNumber ?? "");
+  if (!phoneNumber) return legacyScope;
+  const scope = accessScopeForPhone(phoneNumber);
+  await adoptLegacyWorkspace(scope, [legacyScope]);
+  return scope;
 }
 
 async function waitForSessionOwnership(scope: AccessScope, sessionId: string) {

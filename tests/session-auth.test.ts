@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accessScopeForUser } from "../lib/access-scope";
+import { accessScopeForPhone, accessScopeForUser } from "../lib/access-scope";
 import { normalizeAuthPhoneNumber } from "../auth/phone-number";
 
 describe("multi-user request identity", () => {
@@ -17,5 +17,16 @@ describe("multi-user request identity", () => {
     expect(normalizeAuthPhoneNumber("1 202 555 0123")).toBe("+12025550123");
     expect(normalizeAuthPhoneNumber("+44 7911 123456")).toBe("+447911123456");
     expect(normalizeAuthPhoneNumber("not-a-number")).toBeUndefined();
+  });
+
+  it("uses the normalized phone as one stable cross-channel workspace", () => {
+    const fromText = accessScopeForPhone("+12025550123");
+    const fromWeb = accessScopeForPhone(
+      normalizeAuthPhoneNumber("(202) 555-0123") ?? ""
+    );
+
+    expect(fromText).toEqual(fromWeb);
+    expect(fromText.workspaceId).toMatch(/^phone:[a-f0-9]{32}$/u);
+    expect(fromText.workspaceId).not.toContain("2025550123");
   });
 });

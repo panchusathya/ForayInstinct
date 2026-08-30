@@ -1,5 +1,7 @@
 import { headers } from "next/headers";
 import { auth } from "@/auth";
+import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
+import { accessScopeForPhone } from "@/lib/access-scope";
 import { linkCandidate } from "@/lib/goforay/bridge";
 
 export const dynamic = "force-dynamic";
@@ -42,8 +44,15 @@ export async function POST() {
   }
 
   try {
+    const phone = normalizeAuthPhoneNumber(session.user.phoneNumber ?? "");
+    if (!phone) {
+      return Response.json(
+        { error: "A verified phone number is required to link GoForay." },
+        { status: 422 }
+      );
+    }
     return Response.json(
-      await linkCandidate({ userId: session.user.id, identities })
+      await linkCandidate({ scope: accessScopeForPhone(phone), identities })
     );
   } catch (error) {
     return Response.json(
