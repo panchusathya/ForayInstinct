@@ -346,3 +346,28 @@ export const candidateProfiles = pgTable(
     ),
   ]
 );
+
+/**
+ * Text of the candidate's most recent resume, so the agent can ground an
+ * answer about their own experience long after the upload turn. The file
+ * bytes stay in GoForay; only this text is ever readable by a model.
+ */
+export const candidateResumes = pgTable(
+  "candidate_resumes",
+  {
+    workspaceId: text("workspace_id").primaryKey(),
+    filename: text("filename").notNull(),
+    mediaType: text("media_type").notNull().default(""),
+    text: text("text").notNull().default(""),
+    characters: integer("characters").notNull().default(0),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "candidate_resumes_workspace_id_fkey",
+      columns: [table.workspaceId],
+      foreignColumns: [workspaces.id],
+    }).onDelete("cascade"),
+  ]
+);

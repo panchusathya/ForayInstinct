@@ -10,6 +10,8 @@ import {
   user,
 } from "@/db";
 import { env } from "@/lib/env";
+import { extractResumeText } from "@/lib/resume-text";
+import { saveCandidateResume } from "@/db/services/candidate-resume";
 import type { AccessScope } from "@/lib/access-scope";
 import { searchExaRoles, type ExaRoleCard } from "./exa";
 
@@ -289,7 +291,11 @@ export async function createApplicationTask(
   );
 }
 
-/** Uploads a candidate-owned resume without making its bytes model-visible. */
+/**
+ * Uploads a candidate-owned resume. The bytes stay out of model context; the
+ * extracted text is kept so the agent can ground an answer about the
+ * candidate's own experience on a later turn instead of inventing one.
+ */
 export async function uploadCandidateResume(scope: AccessScope, file: File) {
   const link = await linkedCandidate(scope);
   if (!link)
@@ -316,7 +322,31 @@ export async function uploadCandidateResume(scope: AccessScope, file: File) {
         "Unable to upload the resume."
     );
   }
-  return resumeUploadSchema.parse(payload);
+  const uploaded = resumeUploadSchema.parse(payload);
+  await rememberResumeText(scope, file);
+  return uploaded;
+}
+
+/**
+ * Extraction is best effort. A resume GoForay already accepted must not fail
+ * the upload because its text could not be read.
+ */
+async function rememberResumeText(scope: AccessScope, file: File) {
+  try {
+    const text = await extractResumeText({
+      bytes: new Uint8Array(await file.arrayBuffer()),
+      filename: file.name,
+      mediaType: file.type,
+    });
+    if (!text) return;
+    await saveCandidateResume(scope, {
+      filename: file.name,
+      mediaType: file.type,
+      text,
+    });
+  } catch {
+    // The candidate still has a parsed resume in GoForay either way.
+  }
 }
 
 /** Reads the linked candidate's current JuiceBox matches without creating an application. */

@@ -59,6 +59,7 @@ describe("root and worker capability boundaries", () => {
       "ask_question.ts",
       "browser_run_checkpoints.ts",
       "candidate_profile.ts",
+      "candidate_resume.ts",
       "goforay-applications.ts",
       "google_workspace_read.ts",
       "google_workspace_write.ts",
