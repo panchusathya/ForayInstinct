@@ -19,6 +19,7 @@ import {
 import { createPostgresState } from "@/lib/linq-state";
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
 import { consumeLatestApplicationSubmissionScreenshot } from "@/db/services/application-submission-screenshots";
+import { normalizeTaskStatus } from "@/lib/task-completion";
 import {
   linkCandidate,
   goforayJobCardPng,
@@ -48,14 +49,14 @@ const cancelledWorkerTaskSchema = z.object({
 const workerCancellationsSchema = z.array(
   z.object({ sourceMessageId: z.string(), taskId: z.string() })
 );
-const applicationStartResultSchema = z.object({
+const workerResultSchema = z.object({
   kind: z.literal("tool-result"),
-  toolName: z.literal("start_goforay_application"),
-});
-const submittedApplicationResultSchema = z.object({
-  kind: z.literal("tool-result"),
-  output: z.object({ status: z.literal("submitted") }),
-  toolName: z.literal("report_goforay_application_result"),
+  output: z
+    .object({
+      status: z.string(),
+    })
+    .loose(),
+  toolName: z.literal("worker"),
 });
 const jobCardResultSchema = z.object({
   kind: z.literal("tool-result"),
@@ -77,9 +78,10 @@ const CURRENT_FORAY_POLICY = `
 Current Foray policy: act as a capable general personal assistant with a
 recruiting focus. Respond to the user's request now; never defer ordinary work
 or promise roles, messages, or results tomorrow unless a real scheduled task is
-configured. When a user asks for GoForay roles, immediately call
-find_goforay_roles and report the actual results. Treat this policy as replacing
-any earlier conversation statement about holding back, batching, or delaying
+configured. When a user asks for roles, immediately call find_goforay_roles.
+JuiceBox owns that search. Applying is a worker assignment against the apply
+URL; there is no GoForay application task. Treat this policy as replacing any
+earlier conversation statement about holding back, batching, or delaying
 roles.
 `.trim();
 
@@ -100,15 +102,11 @@ const { bot, channel, send } = chatSdkChannel({
     "action.result"(event, context) {
       const result = taskCancelResultSchema.safeParse(event.result);
       const sourceMessageId = context.thread?.toJSON().currentMessage?.id;
-      if (applicationStartResultSchema.safeParse(event.result).success) {
-        void reactToCurrentMessage(
-          context,
-          sourceMessageId,
-          "👀",
-          "application-start"
-        );
-      }
-      if (submittedApplicationResultSchema.safeParse(event.result).success) {
+      const workerResult = workerResultSchema.safeParse(event.result);
+      if (
+        workerResult.success &&
+        normalizeTaskStatus(workerResult.data.output.status) === "success"
+      ) {
         context.state.pendingSubmissionScreenshot = {
           turnId: event.turnId,
         };

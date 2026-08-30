@@ -149,7 +149,7 @@ describe("worker input bubbling", () => {
       /Keep an existing resume\s+and continue/
     );
     expect(workerInstructions).toMatch(
-      /Do not retry a protected\s+resume upload after a server error/
+      /Do not retry a protected\s+resume upload after\s+a server error/
     );
   });
 
@@ -164,12 +164,7 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain(
       "Roles from `find_goforay_roles` and `find_next_goforay_roles` are"
     );
-    expect(instructions).toContain(
-      "dump `documents`, `form_answers`, `cards`, or `result`"
-    );
+    expect(instructions).toContain("dump `cards` or `result`");
     expect(applicationTools).toContain("never paste this object");
-    expect(applicationTools).toContain(
-      "Do not dump documents, form_answers, or this object to the user"
-    );
   });
 });

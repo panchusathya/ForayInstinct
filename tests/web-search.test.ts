@@ -79,7 +79,7 @@ describe("web search routing", () => {
     expect(instructions).toContain("no built-in web browsing");
     expect(instructions).toContain("Never tell the");
     expect(instructions).toContain(
-      "delivered by the iMessage channel as numbered cards with their apply URL"
+      "delivered by the channel as numbered cards with their apply URL"
     );
   });
 
@@ -97,20 +97,15 @@ describe("web search routing", () => {
       expect(source).toContain("`find_goforay_roles`");
     }
     expect(instructions).toContain(
-      "Never answer a request for roles with `web_search` instead"
+      "Never call\n  `web_search` for the candidate's own openings"
     );
   });
 
-  it("treats a role with no posting id as an application, not a referral", () => {
+  it("treats any chosen apply URL as a worker assignment", () => {
     const instructions = readFileSync("agent/instructions.md", "utf8");
 
-    expect(instructions).toContain(
-      "A role with no posting id is still an application you carry out"
-    );
-    expect(instructions).toContain(
-      "the fill to `worker` against that role's apply URL"
-    );
-    expect(instructions).toContain("Never skip this call because a posting id");
+    expect(instructions).toContain("send the `worker` straight at that URL");
+    expect(instructions).toMatch(/no\s+GoForay application task/);
     expect(instructions).toContain(
       "Never tell the candidate you cannot click through"
     );

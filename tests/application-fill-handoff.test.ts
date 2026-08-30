@@ -16,28 +16,22 @@ const browserSkill = readFileSync(
 );
 
 describe("application fill handoff", () => {
-  it("starts the browser worker without waiting on JuiceBox packaging", () => {
-    expect(rootInstructions).toContain("immediately delegate the browser");
-    expect(rootInstructions).toContain("not a start gate");
+  it("sends the worker at the apply URL without a JuiceBox task wrapper", () => {
+    expect(rootInstructions).toContain(
+      "send the `worker` straight at that URL"
+    );
+    expect(rootInstructions).toMatch(/no\s+GoForay application task/);
     expect(rootInstructions).toContain("stage_default_goforay_resume");
-    expect(rootInstructions).not.toContain("delegate only when it is `ready`");
-    expect(rootInstructions).not.toContain("Read the same task again before");
+    expect(rootInstructions).not.toContain("start_goforay_application");
+    expect(rootInstructions).not.toContain("report_goforay_application_result");
+    expect(rootInstructions).not.toContain("package_pending");
 
-    expect(applicationTools).toContain("do not wait for package_pending");
-    expect(applicationTools).toContain("Never poll this as a start gate");
-  });
-
-  it("keeps JuiceBox as CRM context while the worker fills the ATS itself", () => {
-    expect(rootInstructions).toContain("start_goforay_application");
-    expect(rootInstructions).toContain("report_goforay_application_result");
-    expect(applicationTools).toContain("startPresentedApplication");
-    expect(applicationTools).toContain("reportApplicationTask");
-    expect(applicationTools).toContain("selection");
-    expect(applicationTools).toContain("apply_url");
-    expect(workerInstructions).toMatch(/Do not wait for JuiceBox\s+packaging/);
+    expect(applicationTools).toContain("findGoforayRoles");
+    expect(applicationTools).toContain("nextGoforayRoles");
+    expect(applicationTools).not.toContain("createApplicationTask");
+    expect(applicationTools).not.toContain("reportApplicationTask");
+    expect(applicationTools).not.toContain("start_goforay_application");
     expect(workerInstructions).toContain("stage_default_goforay_resume");
-    expect(workerInstructions).toContain("stage_goforay_document");
-    expect(browserSkill).toContain("do not wait for JuiceBox packaging");
-    expect(browserSkill).toContain("stage_default_goforay_resume");
+    expect(browserSkill).toContain("stage the default resume");
   });
 });

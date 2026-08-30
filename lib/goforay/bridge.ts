@@ -11,8 +11,6 @@ import {
 } from "@/db";
 import { env } from "@/lib/env";
 import type { AccessScope } from "@/lib/access-scope";
-import { searchExaRoles } from "./exa";
-import type { GoForayJobCard } from "./job-cards";
 
 const issuer = "goforay-openinstinct";
 const juiceboxAudience = "juicebox";
@@ -40,22 +38,6 @@ const identityLinkResponseSchema = z.object({
 });
 
 const bridgeErrorResponseSchema = z.object({ detail: z.string().optional() });
-const bridgeTaskSchema = z.object({
-  application_id: z.string(),
-  apply_url: z.string(),
-  documents: z.array(
-    z.object({
-      content_type: z.string(),
-      download_url: z.string(),
-      filename: z.string(),
-      id: z.string(),
-    })
-  ),
-  form_answers: z.array(z.record(z.string(), z.unknown())),
-  id: z.string(),
-  result: z.record(z.string(), z.unknown()),
-  status: z.string(),
-});
 
 const jobFeedSchema = z.object({
   cards: z.array(
@@ -68,6 +50,7 @@ const jobFeedSchema = z.object({
       url: z.string(),
     })
   ),
+  searching: z.boolean().optional().default(false),
 });
 
 function authUserId(userId: string) {
@@ -92,7 +75,7 @@ function base64url(value: string | Buffer) {
   return Buffer.from(value).toString("base64url");
 }
 
-export function createBridgeToken({
+function createBridgeToken({
   audience,
   subject,
   candidateId,
@@ -221,7 +204,7 @@ export async function linkCandidate({
   return { org_id: payload.org_id, candidate_id: payload.candidate_id };
 }
 
-export async function linkedCandidate(scope: AccessScope) {
+async function linkedCandidate(scope: AccessScope) {
   return db.query.goforayLinks.findFirst({
     where: eq(goforayLinks.userId, authUserId(scope.userId)),
   });
@@ -234,9 +217,7 @@ async function juiceboxRequest(
 ) {
   const link = await linkedCandidate(scope);
   if (!link)
-    throw new Error(
-      "Link your GoForay account before starting an application task."
-    );
+    throw new Error("Link your GoForay account before calling JuiceBox.");
   const { apiUrl } = configured();
   const headers = new Headers(init.headers);
   headers.set(
@@ -263,30 +244,8 @@ async function juiceboxRequest(
   return payload;
 }
 
-export async function createApplicationTask(
-  scope: AccessScope,
-  jobPostingId: string,
-  conversationUrl = ""
-) {
-  return bridgeTaskSchema.parse(
-    await juiceboxRequest(
-      scope,
-      "/v1/internal/openinstinct/application-tasks",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          external_task_id: randomUUID(),
-          job_posting_id: jobPostingId,
-          conversation_url: conversationUrl,
-        }),
-      }
-    )
-  );
-}
-
-
 /** Reads the linked candidate's current JuiceBox matches without creating an application. */
-export async function goforayJobFeed(
+async function goforayJobFeed(
   scope: AccessScope,
   {
     query = "",
@@ -342,59 +301,36 @@ export async function goforayJobCardPng(
 }
 
 /**
- * Prefer roles already curated in JuiceBox, then discover public openings for
- * a new or unmatched candidate. Exa cards deliberately have no posting id:
- * they still carry an apply URL the worker can fill.
+ * Ask JuiceBox for roles. JuiceBox owns Exa discovery: an empty book queues
+ * the same search the messaging bot uses, then later asks match against what
+ * it ingested. Foray never searches Exa itself and never invents a posting.
  */
 export async function findGoforayRoles(
   scope: AccessScope,
   input: { query?: string; location?: string; limit?: number } = {}
 ): Promise<{
-  cards: GoForayJobCard[];
-  source: "juicebox" | "exa";
+  cards: z.infer<typeof jobFeedSchema>["cards"];
+  searching: boolean;
+  source: "juicebox";
   unavailable?: string;
 }> {
   const limit = input.limit ?? 5;
   try {
+    configured();
     const feed = await goforayJobFeed(scope, { ...input, limit });
     if (feed.cards.length) {
       await rememberPresentedRoles(scope, feed.cards);
-      return { ...feed, source: "juicebox" };
     }
-  } catch {
-    // A new candidate has no JuiceBox link yet; public discovery can still help.
-  }
-  try {
-    return {
-      cards: await searchExaRoles({ ...input, limit }),
-      source: "exa",
-    };
+    return { ...feed, searching: feed.searching, source: "juicebox" };
   } catch (error) {
-    // Both sources are down. Report that plainly instead of throwing, so the
-    // assistant says search is unavailable rather than surfacing a raw error.
     return {
       cards: [],
-      source: "exa",
+      searching: false,
+      source: "juicebox",
       unavailable:
         error instanceof Error ? error.message : "Role search is unavailable.",
     };
   }
-}
-
-export async function applicationTask(scope: AccessScope, taskId: string) {
-  const task = bridgeTaskSchema.parse(
-    await juiceboxRequest(
-      scope,
-      `/v1/internal/openinstinct/application-tasks/${taskId}`
-    )
-  );
-  return {
-    ...task,
-    documents: task.documents.map((document) => ({
-      ...document,
-      access_url: `/api/goforay/application-tasks/${task.id}/documents/${document.id}`,
-    })),
-  };
 }
 
 /**
@@ -480,28 +416,6 @@ export async function candidateDefaultResume(scope: AccessScope) {
 function filenameFromDisposition(disposition: string) {
   const match = /filename="?([^";]+)"?/iu.exec(disposition);
   return match?.[1] ?? "";
-}
-
-export async function reportApplicationTask(
-  scope: AccessScope,
-  taskId: string,
-  result: {
-    status: "submitted" | "needs_human" | "failed";
-    error?: string;
-    external_id?: string;
-    confirmation_ref?: string;
-  }
-) {
-  return bridgeTaskSchema.parse(
-    await juiceboxRequest(
-      scope,
-      `/v1/internal/openinstinct/application-tasks/${taskId}/result`,
-      {
-        method: "POST",
-        body: JSON.stringify({ vendor: "browser", artifacts: [], ...result }),
-      }
-    )
-  );
 }
 
 export async function recordConversationMessage({
@@ -652,7 +566,7 @@ async function syncConversationEvent(id: string) {
   }
 }
 
-/** Fresh, curated roles after a candidate starts an application. Never falls back to Exa. */
+/** Fresh, curated roles after a candidate starts an application. */
 export async function nextGoforayRoles(scope: AccessScope, limit = 5) {
   const userId = authUserId(scope.userId);
   const shown = await db

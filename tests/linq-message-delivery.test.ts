@@ -344,8 +344,8 @@ function submittedApplicationResult(): Parameters<
     result: {
       callId: "call-submit",
       kind: "tool-result",
-      output: { status: "submitted" },
-      toolName: "report_goforay_application_result",
+      output: { status: "success", message: "submitted" },
+      toolName: "worker",
     },
     sequence: 0,
     status: "completed",
