@@ -36,6 +36,7 @@ export async function recordBrowserActionCheckpoint(
       ? observedSubmission(url, "")
       : undefined;
   const page = checkpoint.page ?? browserPageLocation(url);
+  const submitted = evidence !== undefined && checkpoint.state !== "failed";
   await recordBrowserRunCheckpoint(scope, sessionId, {
     ...checkpoint,
     page,
@@ -43,7 +44,7 @@ export async function recordBrowserActionCheckpoint(
       ? {}
       : {
           actions: [...(checkpoint.actions ?? []), evidence],
-          state: "submission_observed",
+          ...(submitted ? { state: "submission_observed" as const } : {}),
         }),
   }).catch((error: unknown) => {
     console.error("[browser-checkpoint] persistence failed", {
@@ -57,7 +58,7 @@ export async function recordBrowserActionCheckpoint(
       session_id: sessionId,
     });
   });
-  if (evidence === undefined) return;
+  if (!submitted) return;
   await persistSubmissionScreenshot(scope, sessionId, page, signal);
 }
 

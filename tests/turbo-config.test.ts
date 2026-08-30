@@ -7,6 +7,7 @@ const applicationEnvironment = [
   "AI_GATEWAY_API_KEY",
   "DATABASE_URL",
   "JUICEBOX_API_URL",
+  "EXA_API_KEY",
   "*_CONNECTOR_UID",
   "KERNEL_*",
   "LINQ_*",

@@ -200,7 +200,7 @@ describe("checkbox CAPTCHA solver", () => {
     );
     expect(skill).toContain("call `solve_captcha` immediately");
     expect(skill).toContain(
-      "Do not wait the 20-second managed-solver budget for visible hCaptcha"
+      "For reCAPTCHA or Cloudflare, leave the widget untouched and use one bounded wait of at most 20 seconds"
     );
     expect(instructions).toContain("`solve_captcha`");
   });

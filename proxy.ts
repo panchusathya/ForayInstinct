@@ -1,13 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getAuthSession } from "@/auth/session";
 
-export async function proxy(request: NextRequest) {
-  const pathname = request.nextUrl.pathname;
-  if (
+/** Cookie-free entrypoints. Each handler still enforces its own credential. */
+export function isPublicPath(pathname: string) {
+  return (
     pathname === "/sign-in" ||
     pathname.startsWith("/api/auth/") ||
-    pathname === "/eve/v1/health"
-  ) {
+    pathname.startsWith("/eve/v1/") ||
+    pathname === "/api/goforay/conversations"
+  );
+}
+
+export async function proxy(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+  if (isPublicPath(pathname)) {
     return NextResponse.next();
   }
 

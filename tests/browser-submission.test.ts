@@ -91,8 +91,14 @@ describe("browser submission evidence", () => {
       )
     ).toBe("application submitted");
     expect(
-      observedSubmission("https://tenant.example/apply", "Thank you")
+      observedSubmission(
+        "https://tenant.example/apply",
+        "Thank you for your application."
+      )
     ).toBe("thank you");
+    expect(
+      observedSubmission("https://tenant.example/apply", "Thank you")
+    ).toBeUndefined();
     expect(
       observedSubmission(
         "https://tenant.example/apply",
@@ -258,6 +264,38 @@ describe("playwright checkpoints observe a submission without final_output", () 
       expect.objectContaining({
         phase: "playwright",
         state: "completed",
+      })
+    );
+    expect(mocks.captureScreenshot).not.toHaveBeenCalled();
+    expect(mocks.saveApplicationSubmissionScreenshot).not.toHaveBeenCalled();
+  });
+
+  it("does not promote a failed Playwright step to submission_observed", async () => {
+    mocks.executePlaywright.mockResolvedValue({
+      result: { success: false },
+      success: false,
+    });
+    mocks.snapshotKernelPage.mockResolvedValue({
+      body: "Thank you for applying. We have received your application.",
+      url: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+    });
+    const { default: executePlaywrightCode } =
+      await import("../agent/subagents/worker/tools/execute_playwright_code");
+
+    await executePlaywrightCode.execute(
+      { code: "await page.click('text=Submit')", session_id: "browser-1" },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(mocks.recordBrowserRunCheckpoint).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      "browser-1",
+      expect.objectContaining({
+        actions: ["we have received"],
+        errorCode: "playwright_execution",
+        phase: "playwright",
+        state: "failed",
       })
     );
     expect(mocks.captureScreenshot).not.toHaveBeenCalled();

@@ -24,9 +24,22 @@ export async function readOrImportDefaultResume(scope: AccessScope) {
       source: "goforay",
     });
     return imported.document;
-  } catch {
-    return;
+  } catch (error: unknown) {
+    if (isExpectedMissingRemoteResume(error)) return;
+    console.error("[default-resume] JuiceBox import failed", {
+      error: error instanceof Error ? error.message : "unknown",
+    });
+    throw error;
   }
+}
+
+function isExpectedMissingRemoteResume(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  return (
+    message === "GoForay integration is not configured." ||
+    message.startsWith("Link your GoForay account") ||
+    message.startsWith("The protected default resume is unavailable")
+  );
 }
 
 function filenameMimeType(filename: string) {

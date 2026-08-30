@@ -23,7 +23,14 @@ export function observedSubmission(
   if (/application[\s\S]{0,40}(?:received|submitted)/i.test(text)) {
     return "application received";
   }
-  if (/thank you/i.test(text)) return "thank you";
+  if (
+    /thank you[\s\S]{0,80}(?:for (?:your )?(?:application|applying)|application)/i.test(
+      text
+    ) ||
+    /(?:application|applying)[\s\S]{0,80}thank you/i.test(text)
+  ) {
+    return "thank you";
+  }
   return undefined;
 }
 

@@ -104,6 +104,15 @@ if (
     "LINQ_API_KEY and LINQ_WEBHOOK_SECRET must be configured together."
   );
 }
+
+if (
+  (env.JUICEBOX_API_URL === undefined) !==
+  (env.OPENINSTINCT_SHARED_SECRET === undefined)
+) {
+  throw new Error(
+    "JUICEBOX_API_URL and OPENINSTINCT_SHARED_SECRET must be configured together."
+  );
+}
 const authHostname = new URL(env.BETTER_AUTH_URL).hostname;
 
 export const localPhoneAuthBypassEnabled =

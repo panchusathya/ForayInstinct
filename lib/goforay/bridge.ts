@@ -438,49 +438,53 @@ export async function recordConversationMessage({
 }) {
   const link = await linkedCandidate(scope);
   if (!body.trim()) return;
-  const existing = await db.query.goforayConversations.findFirst({
-    where: eq(goforayConversations.id, conversationId),
-  });
   const entry = {
     id: sourceMessageId?.slice(0, 300) || randomUUID(),
     direction,
     body: body.slice(0, 20_000),
     created_at: new Date().toISOString(),
   };
-  const alreadyRecorded = existing?.messages.some(
-    (message) => message.id === entry.id
-  );
-  if (!existing) {
-    await db.insert(goforayConversations).values({
-      id: conversationId,
-      userId: authUserId(scope.userId),
-      candidateId: link?.candidateId,
-      channel,
-      url,
-      messages: [entry],
-    });
-  } else if (!alreadyRecorded) {
-    await db
-      .update(goforayConversations)
-      .set({
-        messages: [...existing.messages, entry],
-        updatedAt: new Date(),
-        ...(url ? { url } : {}),
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(goforayConversations)
+      .values({
+        id: conversationId,
+        userId: authUserId(scope.userId),
+        candidateId: link?.candidateId,
+        channel,
+        url,
+        messages: [entry],
       })
-      .where(eq(goforayConversations.id, conversationId));
-  }
-  await db
-    .insert(goforaySyncOutbox)
-    .values({
-      id: entry.id,
-      userId: authUserId(scope.userId),
-      candidateId: link?.candidateId,
-      conversationId,
-      channel,
-      direction,
-      body: entry.body,
-    })
-    .onConflictDoNothing();
+      .onConflictDoNothing();
+    const [existing] = await tx
+      .select()
+      .from(goforayConversations)
+      .where(eq(goforayConversations.id, conversationId))
+      .for("update");
+    if (!existing) return;
+    if (!existing.messages.some((message) => message.id === entry.id)) {
+      await tx
+        .update(goforayConversations)
+        .set({
+          messages: [...existing.messages, entry],
+          updatedAt: new Date(),
+          ...(url ? { url } : {}),
+        })
+        .where(eq(goforayConversations.id, conversationId));
+    }
+    await tx
+      .insert(goforaySyncOutbox)
+      .values({
+        id: entry.id,
+        userId: authUserId(scope.userId),
+        candidateId: link?.candidateId,
+        conversationId,
+        channel,
+        direction,
+        body: entry.body,
+      })
+      .onConflictDoNothing();
+  });
   // The local conversation and outbox are committed before the bridge call.
   // Do not make a web or iMessage reply wait for JuiceBox to be reachable.
   void syncConversationEvent(entry.id);

@@ -158,7 +158,7 @@ const { bot, channel, send } = chatSdkChannel({
         return;
       }
 
-      const cancelledTaskId = consumeWorkerCancellationTurn(
+      const cancelledTaskId = await consumeWorkerCancellationTurn(
         session.session.id,
         event.turnId
       );

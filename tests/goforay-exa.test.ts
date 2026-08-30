@@ -18,6 +18,6 @@ describe("role search availability", () => {
     expect(feed.cards).toEqual([]);
     expect(feed.searching).toBe(false);
     expect(feed.source).toBe("juicebox");
-    expect(feed.unavailable).toBeTruthy();
+    expect(feed.unavailable).toBe("GoForay integration is not configured.");
   });
 });
