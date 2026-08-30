@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { browserGatewayModel, chatGatewayModel } from "@/lib/model-config";
 
 const rootTools = "agent/tools";
 const workerRoot = "agent/subagents/worker";
@@ -17,8 +18,10 @@ describe("root and worker capability boundaries", () => {
     const workerAgent = readFileSync(`${workerRoot}/agent.ts`, "utf8");
     const models = readFileSync("lib/model-config.ts", "utf8");
 
-    expect(models).toContain('chatGatewayModel = "zai/glm-5.3-flash"');
-    expect(models).toContain('browserGatewayModel = "zai/glm-5.3-flash"');
+    expect(chatGatewayModel).toBe("zai/glm-5.3-flash");
+    expect(browserGatewayModel).toBe("zai/glm-5.3-flash");
+    expect(models).toContain(`chatGatewayModel = "${chatGatewayModel}"`);
+    expect(models).toContain(`browserGatewayModel = "${browserGatewayModel}"`);
     expect(rootAgent).toContain("model: chatGatewayModel");
     expect(workerAgent).toContain("model: browserGatewayModel");
     expect(readFileSync("lib/manager/server/store.ts", "utf8")).toContain(
