@@ -12,6 +12,16 @@ function toolFiles(directory: string) {
     .toSorted();
 }
 
+function sourceFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${directory}/${entry.name}`;
+    if (entry.isDirectory()) return sourceFiles(path);
+    return entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")
+      ? [path]
+      : [];
+  });
+}
+
 describe("root and worker capability boundaries", () => {
   it("pins chat and browser work to GLM 5.3 Flash on AI Gateway", () => {
     const rootAgent = readFileSync("agent/agent.ts", "utf8");
@@ -29,6 +39,18 @@ describe("root and worker capability boundaries", () => {
     );
     expect(rootAgent).not.toContain("defineDynamic(");
     expect(workerAgent).not.toContain("defineDynamic(");
+
+    const leftoverOpenAi = /openai\/|terra-fast|luna-fast|sol-fast|gpt-5\.6/;
+    for (const file of [
+      "lib/model-config.ts",
+      "lib/manager/server/store.ts",
+      "agent/agent.ts",
+      `${workerRoot}/agent.ts`,
+      ...sourceFiles("agent"),
+      ...sourceFiles("lib"),
+    ]) {
+      expect(readFileSync(file, "utf8"), file).not.toMatch(leftoverOpenAi);
+    }
   });
 
   it("keeps root coordination separate from browser execution", () => {
