@@ -20,9 +20,16 @@ export default defineHook({
       const initiator = ctx.session.auth.initiator;
       if (!initiator) return;
 
-      await saveChat(scopeFromPrincipal(initiator), {
-        sessionId: ctx.session.id,
-      });
+      try {
+        await saveChat(scopeFromPrincipal(initiator), {
+          sessionId: ctx.session.id,
+        });
+      } catch (error) {
+        // Chat titles and usage are an index, not a prerequisite for agent
+        // execution. A transient database failure must not exhaust Eve's
+        // turn retries and fail the user's message.
+        console.error("Failed to index agent chat session", error);
+      }
       if (typeof event.data?.message === "string") {
         await recordWebMessage(
           ctx,

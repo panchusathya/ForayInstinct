@@ -62,17 +62,9 @@ export async function readChat(scope: AccessScope, sessionId: string) {
 export async function saveChat(scope: AccessScope, chat: SaveChat) {
   await ensureScope(scope);
   const now = new Date().toISOString();
-  const existing = await db
-    .select({ sessionId: chats.sessionId })
-    .from(chats)
-    .where(
-      and(
-        eq(chats.workspaceId, scope.workspaceId),
-        eq(chats.sessionId, chat.sessionId)
-      )
-    );
-  if (existing.length === 0) {
-    await db.insert(chats).values({
+  const inserted = await db
+    .insert(chats)
+    .values({
       costUsd: chat.usage?.costUsd ?? null,
       createdAt: now,
       inputTokens: chat.usage?.inputTokens ?? 0,
@@ -81,10 +73,14 @@ export async function saveChat(scope: AccessScope, chat: SaveChat) {
       title: chat.title ?? "New chat",
       updatedAt: now,
       workspaceId: scope.workspaceId,
-    });
+    })
+    .onConflictDoNothing({ target: chats.sessionId })
+    .returning({ sessionId: chats.sessionId });
+  if (inserted.length > 0) {
     return;
   }
-  await db
+
+  const updated = await db
     .update(chats)
     .set({
       ...(chat.title === undefined ? {} : { title: chat.title }),
@@ -102,5 +98,10 @@ export async function saveChat(scope: AccessScope, chat: SaveChat) {
         eq(chats.workspaceId, scope.workspaceId),
         eq(chats.sessionId, chat.sessionId)
       )
-    );
+    )
+    .returning({ sessionId: chats.sessionId });
+
+  if (updated.length === 0) {
+    throw new Error("Chat session belongs to another workspace.");
+  }
 }
