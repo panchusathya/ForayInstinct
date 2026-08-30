@@ -71,6 +71,13 @@
       "when": 1788040300000,
       "tag": "0009_candidate_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788040400000,
+      "tag": "0010_application_submission_screenshots",
+      "breakpoints": true
     }
   ]
 }

@@ -162,6 +162,54 @@ describe("database migrations", () => {
     ).rejects.toThrow(/constraint/);
   }, 15_000);
 
+  it("stores an application-submitted screenshot until Linq delivers it", async () => {
+    const database = createDatabase();
+
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(
+      database,
+      "0010_application_submission_screenshots.sql"
+    );
+    await applyMigration(
+      database,
+      "0010_application_submission_screenshots.sql"
+    );
+
+    await database.exec(`
+      INSERT INTO workspaces VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO workspace_memberships VALUES (
+        'workspace-1',
+        'user-1',
+        'owner',
+        '2026-01-01'
+      );
+      INSERT INTO application_submission_screenshots (
+        session_id,
+        workspace_id,
+        created_by_user_id,
+        created_at,
+        png_base64
+      ) VALUES (
+        'browser-1',
+        'workspace-1',
+        'user-1',
+        '2026-01-01',
+        'iVBORw0KGgo='
+      );
+    `);
+
+    await expect(
+      database.query<{ png_base64: string; delivered_at: string | null }>(
+        `SELECT png_base64, delivered_at
+         FROM application_submission_screenshots
+         WHERE session_id = 'browser-1'`
+      )
+    ).resolves.toMatchObject({
+      rows: [{ delivered_at: null, png_base64: "iVBORw0KGgo=" }],
+    });
+    expect(await pendingConstraintCount(database)).toBe(0);
+  }, 15_000);
+
   it("stores the candidate ATS profile beside the workspace Kernel profile id", async () => {
     const database = createDatabase();
 

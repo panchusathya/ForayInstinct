@@ -1,18 +1,33 @@
 /* oxlint-disable typescript/no-unsafe-type-assertion -- Eve's Linq adapter exposes the handler context through a transitive Chat SDK `any`; the fixture supplies only the fields exercised here. */
 import type { chatSdkChannel } from "eve/channels/chat-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import workerCancellationHook from "../agent/hooks/worker-cancellation-delivery";
 
 const channelCapture = vi.hoisted(() => ({ config: undefined as unknown }));
+const screenshotMocks = vi.hoisted(() => ({
+  consumeLatestApplicationSubmissionScreenshot:
+    vi.fn<
+      (
+        _scope: unknown
+      ) => Promise<{ mimeType: string; png: Buffer } | undefined>
+    >(),
+}));
 vi.mock("eve/channels/chat-sdk", () => ({
   chatSdkChannel(config: unknown) {
     channelCapture.config = config;
     return {
-      bot: { onDirectMessage: vi.fn(), onNewMessage: vi.fn() },
+      bot: {
+        onDirectMessage: vi.fn<() => void>(),
+        onNewMessage: vi.fn<() => void>(),
+      },
       channel: {},
-      send: vi.fn(),
+      send: vi.fn<() => void>(),
     };
   },
+}));
+vi.mock("@/db/services/application-submission-screenshots", () => ({
+  consumeLatestApplicationSubmissionScreenshot:
+    screenshotMocks.consumeLatestApplicationSubmissionScreenshot,
 }));
 await import("../agent/channels/linq-v2");
 
@@ -28,6 +43,10 @@ if (!trackWorkerCancellation || !deliverCompletedMessage) {
 type HandlerParameters = Parameters<typeof deliverCompletedMessage>;
 
 describe("Linq message delivery", () => {
+  beforeEach(() => {
+    screenshotMocks.consumeLatestApplicationSubmissionScreenshot.mockReset();
+  });
+
   it("posts final responses as native iMessage Markdown", async () => {
     const message = [
       "Still blocked. No order was submitted.",
@@ -202,7 +221,93 @@ describe("Linq message delivery", () => {
 
     expect(post).not.toHaveBeenCalled();
   });
+
+  it("posts a confirmation screenshot on rich iMessage after a submitted report", async () => {
+    screenshotMocks.consumeLatestApplicationSubmissionScreenshot.mockResolvedValue(
+      {
+        mimeType: "image/png",
+        png: Buffer.from("png-bytes"),
+      }
+    );
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+
+    await trackWorkerCancellation(
+      submittedApplicationResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    await deliverCompletedMessage(
+      completedEvent({ message: "Applied to Staff Engineer at Acme." }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(
+      screenshotMocks.consumeLatestApplicationSubmissionScreenshot
+    ).toHaveBeenCalledWith({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+    });
+    expect(post).toHaveBeenNthCalledWith(1, {
+      files: [
+        {
+          data: Buffer.from("png-bytes"),
+          filename: "application-submitted.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown: "",
+    });
+    expect(post).toHaveBeenNthCalledWith(2, {
+      markdown: "applied to staff engineer at acme.",
+    });
+  });
+
+  it("keeps SMS on the text confirmation when a screenshot is available", async () => {
+    screenshotMocks.consumeLatestApplicationSubmissionScreenshot.mockResolvedValue(
+      {
+        mimeType: "image/png",
+        png: Buffer.from("png-bytes"),
+      }
+    );
+    const { context, post } = handlerContext();
+
+    await trackWorkerCancellation(
+      submittedApplicationResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    await deliverCompletedMessage(
+      completedEvent({ message: "Applied to Staff Engineer at Acme." }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(
+      screenshotMocks.consumeLatestApplicationSubmissionScreenshot
+    ).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      markdown: "applied to staff engineer at acme.",
+    });
+  });
 });
+
+function submittedApplicationResult(): Parameters<
+  NonNullable<typeof trackWorkerCancellation>
+>[0] {
+  return {
+    result: {
+      callId: "call-submit",
+      kind: "tool-result",
+      output: { status: "submitted" },
+      toolName: "report_goforay_application_result",
+    },
+    sequence: 0,
+    status: "completed",
+    stepIndex: 0,
+    turnId: "turn-1",
+  };
+}
 
 function workerCancellationResult(
   taskId = "task-worker"
@@ -249,7 +354,8 @@ function completedEvent(
 
 function handlerContext(
   currentMessageId = "message-1",
-  state: Record<string, unknown> = {}
+  state: Record<string, unknown> = {},
+  lastService?: string
 ) {
   const post = vi.fn<(message: string) => Promise<void>>();
   post.mockResolvedValue();
@@ -274,6 +380,7 @@ function handlerContext(
         currentMessage: { id: currentMessageId },
         id: "linq:dm:chat-1",
         isDM: true,
+        ...(lastService ? { lastService } : {}),
       }),
     },
   } as unknown as HandlerParameters[1];
@@ -286,10 +393,22 @@ function handlerContext(
   };
 }
 
-function sessionContext() {
+function sessionContext(auth?: { id: string; workspaceId: string }) {
   return {
-    session: { id: "session-1" },
-  } as HandlerParameters[2];
+    session: {
+      id: "session-1",
+      ...(auth
+        ? {
+            auth: {
+              current: {
+                attributes: { workspaceId: auth.workspaceId },
+                id: auth.id,
+              },
+            },
+          }
+        : {}),
+    },
+  } as unknown as HandlerParameters[2];
 }
 
 async function recordCancellationThroughHook(

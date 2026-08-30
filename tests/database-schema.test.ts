@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   account,
   agentSessions,
+  applicationSubmissionScreenshots,
   browserRunCheckpoints,
   browserSessions,
   candidateProfiles,
@@ -30,6 +31,7 @@ describe("database schema", () => {
         agentSessions,
         browserSessions,
         browserRunCheckpoints,
+        applicationSubmissionScreenshots,
         chats,
         encryptedSecrets,
         candidateProfiles,
@@ -46,6 +48,7 @@ describe("database schema", () => {
       "agent_sessions",
       "browser_sessions",
       "browser_run_checkpoints",
+      "application_submission_screenshots",
       "chats",
       "encrypted_secrets",
       "candidate_profiles",
@@ -61,6 +64,7 @@ describe("database schema", () => {
       agentSessions,
       browserSessions,
       browserRunCheckpoints,
+      applicationSubmissionScreenshots,
     ]) {
       const foreignKeys = getTableConfig(table).foreignKeys;
       expect(foreignKeys.map((foreignKey) => foreignKey.getName())).toContain(
@@ -167,6 +171,7 @@ describe("migration deployment policy", () => {
     );
     const services = await Promise.all(
       [
+        "application-submission-screenshots",
         "browsers",
         "chats",
         "scope",

@@ -1,4 +1,6 @@
+import { captureMaskedKernelScreenshot } from "@/agent/subagents/worker/lib/kernel-screenshot";
 import type { AccessScope } from "@/lib/access-scope";
+import { saveApplicationSubmissionScreenshot } from "@/db/services/application-submission-screenshots";
 import {
   recordBrowserRunCheckpoint,
   type BrowserRunCheckpointInput,
@@ -8,8 +10,8 @@ import {
   observedSubmission,
 } from "@/lib/browser-submission";
 import {
-  snapshotKernelPage,
   currentKernelPageUrl,
+  snapshotKernelPage,
 } from "@/lib/manager/server/kernel-native-autofill";
 
 export async function recordBrowserActionCheckpoint(
@@ -33,9 +35,10 @@ export async function recordBrowserActionCheckpoint(
     : url
       ? observedSubmission(url, "")
       : undefined;
+  const page = checkpoint.page ?? browserPageLocation(url);
   await recordBrowserRunCheckpoint(scope, sessionId, {
     ...checkpoint,
-    page: checkpoint.page ?? browserPageLocation(url),
+    page,
     ...(evidence === undefined
       ? {}
       : {
@@ -54,4 +57,32 @@ export async function recordBrowserActionCheckpoint(
       session_id: sessionId,
     });
   });
+  if (evidence === undefined) return;
+  await persistSubmissionScreenshot(scope, sessionId, page, signal);
+}
+
+async function persistSubmissionScreenshot(
+  scope: AccessScope,
+  sessionId: string,
+  page: string | undefined,
+  signal?: AbortSignal
+) {
+  try {
+    const png = await captureMaskedKernelScreenshot(sessionId, signal);
+    if (png.byteLength === 0) return;
+    await saveApplicationSubmissionScreenshot(scope, sessionId, {
+      page,
+      png,
+    });
+  } catch (error: unknown) {
+    console.error("[submission-screenshot] capture failed", {
+      error:
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : "unknown",
+      session_id: sessionId,
+    });
+  }
 }

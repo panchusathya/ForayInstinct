@@ -1,4 +1,4 @@
-/* oxlint-disable typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access -- Eve's Linq adapter exposes the thread through a transitive Chat SDK type; TypeScript still checks this contextual handler. */
+/* oxlint-disable typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access, typescript/no-unsafe-argument -- Eve's Linq adapter exposes the thread through a transitive Chat SDK type; TypeScript still checks this contextual handler. */
 import { connectLinqCredentials } from "@vercel/connect/eve";
 import { createLinqAdapter } from "@linqapp/chat-sdk-adapter";
 import { defaultLinqAuth } from "eve/channels/linq";
@@ -17,6 +17,7 @@ import {
 } from "@/lib/goforay/job-cards";
 import { createPostgresState } from "@/lib/linq-state";
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
+import { consumeLatestApplicationSubmissionScreenshot } from "@/db/services/application-submission-screenshots";
 import {
   linkCandidate,
   goforayJobCardPng,
@@ -70,6 +71,9 @@ const pendingJobCardsSchema = z.object({
   cards: z.array(jobCardSchema),
   turnId: z.string(),
 });
+const pendingSubmissionScreenshotSchema = z.object({
+  turnId: z.string(),
+});
 
 // Linq keeps a durable session for the whole iMessage thread. Supplying this on
 // every turn lets an updated deployment supersede stale behavior in an older
@@ -110,6 +114,9 @@ const { bot, channel, send } = chatSdkChannel({
         );
       }
       if (submittedApplicationResultSchema.safeParse(event.result).success) {
+        context.state.pendingSubmissionScreenshot = {
+          turnId: event.turnId,
+        };
         void reactToCurrentMessage(
           context,
           sourceMessageId,
@@ -178,7 +185,28 @@ const { bot, channel, send } = chatSdkChannel({
       }
 
       context.state.pendingToolCallMessage = null;
-      if (!event.message || !context.thread) return;
+      if (!context.thread) return;
+
+      const pendingScreenshot = pendingSubmissionScreenshotSchema.safeParse(
+        context.state.pendingSubmissionScreenshot
+      );
+      if (
+        pendingScreenshot.success &&
+        pendingScreenshot.data.turnId === event.turnId
+      ) {
+        context.state.pendingSubmissionScreenshot = undefined;
+        const caller =
+          session.session.auth?.current ?? session.session.auth?.initiator;
+        if (caller) {
+          await deliverSubmissionScreenshot(
+            context.thread,
+            scopeFromPrincipal(caller),
+            event.turnId
+          );
+        }
+      }
+
+      if (!event.message) return;
 
       const pendingCards = pendingJobCardsSchema.safeParse(
         context.state.pendingGoForayJobCards
@@ -468,6 +496,45 @@ async function reactToCurrentMessage(
     context.state[key] = true;
   } catch {
     // SMS/RCS and web paths do not guarantee reaction support.
+  }
+}
+
+async function deliverSubmissionScreenshot(
+  thread: {
+    post: (message: {
+      markdown: string;
+      files?: { data: Buffer; filename: string; mimeType: string }[];
+    }) => Promise<unknown>;
+    toJSON: () => unknown;
+  },
+  scope: ReturnType<typeof scopeFromPrincipal>,
+  turnId: string
+) {
+  if (!isRichLinqThread(thread)) return;
+  try {
+    const screenshot =
+      await consumeLatestApplicationSubmissionScreenshot(scope);
+    if (!screenshot) return;
+    await thread.post({
+      markdown: "",
+      files: [
+        {
+          data: screenshot.png,
+          filename: "application-submitted.png",
+          mimeType: screenshot.mimeType,
+        },
+      ],
+    });
+    void recordConversationMessage({
+      scope,
+      conversationId: `linq:${scope.userId}`,
+      channel: "linq",
+      direction: "outbound",
+      body: "application submitted screenshot",
+      sourceMessageId: `linq:${turnId}:submission-screenshot`,
+    }).catch(() => undefined);
+  } catch {
+    // The coordinator's text confirmation remains useful if media upload fails.
   }
 }
 

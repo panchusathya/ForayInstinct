@@ -181,6 +181,36 @@ export const browserRunCheckpoints = pgTable(
   ]
 );
 
+export const applicationSubmissionScreenshots = pgTable(
+  "application_submission_screenshots",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    sessionId: text("session_id").notNull(),
+    workspaceId: text("workspace_id").notNull(),
+    createdByUserId: text("created_by_user_id").notNull(),
+    createdAt: text("created_at").notNull(),
+    page: text("page"),
+    mimeType: text("mime_type").notNull().default("image/png"),
+    pngBase64: text("png_base64").notNull(),
+    deliveredAt: text("delivered_at"),
+  },
+  (table) => [
+    foreignKey({
+      name: "application_submission_screenshots_membership_fkey",
+      columns: [table.workspaceId, table.createdByUserId],
+      foreignColumns: [
+        workspaceMemberships.workspaceId,
+        workspaceMemberships.userId,
+      ],
+    }).onDelete("cascade"),
+    index("application_submission_screenshots_workspace_pending_idx").on(
+      table.workspaceId,
+      table.deliveredAt,
+      table.createdAt.desc().nullsFirst()
+    ),
+  ]
+);
+
 export const chats = pgTable(
   "chats",
   {
