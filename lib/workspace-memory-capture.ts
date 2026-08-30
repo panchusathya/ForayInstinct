@@ -78,20 +78,21 @@ function textParts(content: unknown): string[] {
     return trimmed ? [trimmed] : [];
   }
   if (!Array.isArray(content)) return [];
-  return content.flatMap((part) => {
-    if (
-      part &&
-      typeof part === "object" &&
-      "type" in part &&
-      part.type === "text" &&
-      "text" in part &&
-      typeof part.text === "string"
-    ) {
-      const trimmed = part.text.trim();
-      return trimmed ? [trimmed] : [];
-    }
-    return [];
-  });
+  const texts: string[] = [];
+  for (const part of content) {
+    if (!isTextPart(part)) continue;
+    const trimmed = part.text.trim();
+    if (trimmed) texts.push(trimmed);
+  }
+  return texts;
+}
+
+function isTextPart(part: unknown): part is { readonly text: string } {
+  if (typeof part !== "object" || part === null) return false;
+  return (
+    Reflect.get(part, "type") === "text" &&
+    typeof Reflect.get(part, "text") === "string"
+  );
 }
 
 function normalizeFact(key: string, value: string) {

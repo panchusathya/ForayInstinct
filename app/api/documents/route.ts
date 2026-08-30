@@ -60,10 +60,11 @@ export async function POST(request: Request) {
       );
     }
     const rawKind = form.get("kind");
-    const kind =
+    const parsedKind =
       typeof rawKind === "string" && rawKind.length > 0
-        ? candidateDocumentKindSchema.catch(undefined).parse(rawKind)
+        ? candidateDocumentKindSchema.safeParse(rawKind)
         : undefined;
+    const kind = parsedKind?.success === true ? parsedKind.data : undefined;
     const saved = await saveCandidateDocument(scope, {
       bytes: Buffer.from(await value.arrayBuffer()),
       filename,
