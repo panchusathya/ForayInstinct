@@ -18,12 +18,22 @@ export function observedSubmission(
   }
 
   const text = body.replace(/\s+/g, " ");
-  if (/successfully submitted/i.test(text)) return "successfully submitted";
-  if (/we have received/i.test(text)) return "we have received";
-  if (/application[\s\S]{0,40}(?:received|submitted)/i.test(text)) {
+  if (
+    /application[\s\S]{0,80}successfully submitted/i.test(text) ||
+    /successfully submitted[\s\S]{0,80}application/i.test(text)
+  ) {
+    return "successfully submitted";
+  }
+  if (
+    /application[\s\S]{0,80}(?:successfully )?(?:received|submitted)/i.test(
+      text
+    ) ||
+    /(?:successfully )?(?:received|submitted)[\s\S]{0,80}application/i.test(
+      text
+    )
+  ) {
     return "application received";
   }
-  if (/thank you/i.test(text)) return "thank you";
   return undefined;
 }
 

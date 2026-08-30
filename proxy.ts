@@ -6,7 +6,11 @@ export async function proxy(request: NextRequest) {
   if (
     pathname === "/sign-in" ||
     pathname.startsWith("/api/auth/") ||
-    pathname === "/eve/v1/health"
+    pathname === "/eve/v1/health" ||
+    // These are authenticated by their own webhook signature or bridge JWT,
+    // not a browser session. The proxy must let them reach those handlers.
+    pathname === "/eve/v1/linq" ||
+    pathname === "/api/goforay/conversations"
   ) {
     return NextResponse.next();
   }

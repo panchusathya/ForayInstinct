@@ -14,6 +14,8 @@ import {
 import { env } from "@/lib/env";
 import type { AccessScope } from "@/lib/access-scope";
 import { ensureScope } from "@/db/services/scope";
+import { searchExaRoles } from "./exa";
+import type { GoForayJobCard } from "./job-cards";
 import {
   completePendingRoleSearch,
   listPendingRoleSearches,
@@ -331,44 +333,51 @@ export async function goforayJobCardPng(
 }
 
 /**
- * Ask JuiceBox for roles. JuiceBox owns Exa discovery: an empty book queues
- * the same search the messaging bot uses, then later asks match against what
- * it ingested. Foray never searches Exa itself and never invents a posting.
+ * Prefer curated JuiceBox roles when a CRM candidate is available. Public
+ * discovery remains available for every workspace, including top-of-funnel
+ * users who do not have a JuiceBox candidate yet.
  */
 export async function findGoforayRoles(
   scope: AccessScope,
   input: { query?: string; location?: string; limit?: number } = {}
 ): Promise<{
-  cards: z.infer<typeof jobFeedSchema>["cards"];
+  cards: GoForayJobCard[];
   searching: boolean;
-  source: "juicebox";
+  source: "exa" | "juicebox";
   discovery?: z.infer<typeof jobFeedSchema>["discovery"];
   unavailable?: string;
 }> {
   const limit = input.limit ?? 5;
   try {
-    configured();
     const feed = await goforayJobFeed(scope, { ...input, limit });
     if (feed.cards.length) {
       await rememberPresentedRoles(scope, feed.cards);
+      return {
+        ...feed,
+        searching: false,
+        source: "juicebox",
+      };
     }
-    if (feed.searching) {
-      await queuePendingRoleSearch(scope, input);
-    }
+  } catch {
+    // A missing candidate association or unavailable CRM must not block the
+    // top-of-funnel role-search experience.
+  }
+
+  try {
     return {
-      ...feed,
-      searching: feed.searching,
-      source: "juicebox",
-      ...(feed.discovery?.state === "unavailable" ||
-      feed.discovery?.state === "failed"
-        ? { unavailable: feed.discovery.detail || "Role search is unavailable." }
-        : {}),
+      cards: await searchExaRoles({
+        query: input.query?.trim() || "current professional roles",
+        location: input.location?.trim() || "remote",
+        limit,
+      }),
+      searching: false,
+      source: "exa",
     };
   } catch (error) {
     return {
       cards: [],
       searching: false,
-      source: "juicebox",
+      source: "exa",
       unavailable:
         error instanceof Error ? error.message : "Role search is unavailable.",
     };
@@ -648,9 +657,7 @@ export async function nextGoforayRoles(scope: AccessScope, limit = 5) {
   const shown = await db
     .select({ postingId: goforayWorkspacePresentedPostings.postingId })
     .from(goforayWorkspacePresentedPostings)
-    .where(
-      eq(goforayWorkspacePresentedPostings.workspaceId, scope.workspaceId)
-    )
+    .where(eq(goforayWorkspacePresentedPostings.workspaceId, scope.workspaceId))
     .orderBy(desc(goforayWorkspacePresentedPostings.createdAt))
     .limit(100);
   const feed = await goforayJobFeed(scope, {

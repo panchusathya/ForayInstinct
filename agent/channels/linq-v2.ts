@@ -22,6 +22,12 @@ import {
   renderGoForayJobCard,
   type GoForayJobCard,
 } from "@/lib/goforay/job-cards";
+import {
+  linqJobCardRepliesSchema,
+  linqReplyToMessageId,
+  rememberLinqJobCardReply,
+  resolveLinqJobCardReply,
+} from "@/lib/goforay/linq-replies";
 import { createPostgresState } from "@/lib/linq-state";
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
 import { consumeLatestApplicationSubmissionScreenshot } from "@/db/services/application-submission-screenshots";
@@ -76,6 +82,10 @@ const pendingJobCardsSchema = z.object({
 const pendingSubmissionScreenshotSchema = z.object({
   turnId: z.string(),
 });
+type LinqReplyTarget = {
+  message: string;
+  role?: GoForayJobCard;
+};
 
 // Linq keeps a durable session for the whole iMessage thread. Supplying this on
 // every turn lets an updated deployment supersede stale behavior in an older
@@ -85,10 +95,14 @@ Current Foray policy: act as a capable general personal assistant with a
 recruiting focus. Respond to the user's request now; never defer ordinary work
 or promise roles, messages, or results tomorrow unless a real scheduled task is
 configured. When a user asks for roles, immediately call find_goforay_roles.
-JuiceBox owns that search. Applying is a worker assignment against the apply
-URL; there is no GoForay application task. Treat this policy as replacing any
-earlier conversation statement about holding back, batching, or delaying
-roles.
+That tool uses the candidate's stated details and workspace profile, and never
+requires a JuiceBox candidate link. Applying is a worker assignment against
+the apply URL; there is no GoForay application task. If Google is connected,
+read existing resume/CV or job-search context in the same turn but never wait
+for it before starting the role search or delivering its cards. If it is not
+connected, a resume upload or LinkedIn URL is optional context, not a search
+gate. Treat this policy as replacing any earlier conversation statement about
+holding back, batching, or delaying roles.
 `.trim();
 
 // oxlint-disable-next-line typescript/unbound-method -- external factory, not an instance method.
@@ -105,7 +119,7 @@ const { bot, channel, send } = chatSdkChannel({
   turnPolicy: "steer",
   userName: "Foray",
   events: {
-    "action.result"(event, context) {
+    async "action.result"(event, context) {
       const result = taskCancelResultSchema.safeParse(event.result);
       const sourceMessageId = context.thread?.toJSON().currentMessage?.id;
       const workerResult = workerResultSchema.safeParse(event.result);
@@ -116,7 +130,7 @@ const { bot, channel, send } = chatSdkChannel({
         context.state.pendingSubmissionScreenshot = {
           turnId: event.turnId,
         };
-        void reactToCurrentMessage(
+        await reactToCurrentMessage(
           context,
           sourceMessageId,
           "✅",
@@ -223,7 +237,8 @@ const { bot, channel, send } = chatSdkChannel({
           context.thread,
           pendingCards.data.cards,
           caller ? scopeFromPrincipal(caller) : undefined,
-          event.turnId
+          event.turnId,
+          context.state
         );
         return;
       }
@@ -292,12 +307,17 @@ function linqAdapterConfig(): Parameters<typeof createLinqAdapter>[0] {
 async function dispatchLinqMessage(thread: Thread, message: Message) {
   if (message.author.isBot) return;
 
-  const inbound = await prepareInboundMessage(message, thread.id);
+  const replyTarget = await resolveLinqReplyTarget(message, thread);
+  const inbound = await prepareInboundMessage(message, thread.id, replyTarget);
 
   try {
     await bot.getAdapter("linq").markRead(thread.id, message.id);
   } catch {
     // Read receipts are optional and must not interrupt the candidate turn.
+  }
+
+  if (isApplicationRequest(message.text)) {
+    await reactToLinqMessage(thread, message.id, "👍");
   }
 
   await send(
@@ -309,7 +329,11 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
   );
 }
 
-async function prepareInboundMessage(message: Message, threadId: string) {
+async function prepareInboundMessage(
+  message: Message,
+  threadId: string,
+  replyTarget: LinqReplyTarget | undefined
+) {
   const auth = defaultLinqAuth(message);
   const authorUserName: unknown = message.author.userName;
   const phoneNumber =
@@ -379,6 +403,15 @@ async function prepareInboundMessage(message: Message, threadId: string) {
             `A resume attachment could not be stored: ${importedResumes.failures.join("; ")}. Explain the exact attachment problem and ask the candidate to resend it once; do not claim that a previously stored resume is missing.`,
           ]
         : []),
+      ...(replyTarget?.role
+        ? [
+            `The candidate replied directly to this role card: ${replyTarget.role.title} at ${replyTarget.role.company} (${replyTarget.role.location}). Its apply URL is ${replyTarget.role.url}. Treat the reply as an explicit selection of this role. In particular, "apply to this" means apply to this exact URL. Do not ask them to restate the company, title, number, or URL.`,
+          ]
+        : replyTarget
+          ? [
+              `The candidate replied directly to this earlier message: ${replyTarget.message}. Use that message as the referent for words such as "this one" or "that". Do not ask them to repeat it when it identifies their choice.`,
+            ]
+          : []),
     ],
     auth: {
       ...auth,
@@ -389,6 +422,36 @@ async function prepareInboundMessage(message: Message, threadId: string) {
       principalId: auth.principalId,
     },
   };
+}
+
+async function resolveLinqReplyTarget(
+  message: Message,
+  thread: Thread
+): Promise<LinqReplyTarget | undefined> {
+  const replyToMessageId = linqReplyToMessageId(message.raw);
+  if (!replyToMessageId) return undefined;
+  const state = await thread.state;
+  const cards = linqJobCardRepliesSchema.safeParse(
+    state?.linqJobCardsByMessageId
+  );
+  const role = cards.success
+    ? resolveLinqJobCardReply(message.raw, cards.data)
+    : undefined;
+  if (role) return { message: renderGoForayJobCard(role, 1, 1), role };
+
+  let inspected = 0;
+  for await (const priorMessage of thread.messages) {
+    if (priorMessage.id === replyToMessageId && priorMessage.text.trim()) {
+      return { message: priorMessage.text.trim().slice(0, 2_000) };
+    }
+    inspected += 1;
+    if (inspected >= 40) break;
+  }
+  return undefined;
+}
+
+function isApplicationRequest(text: string) {
+  return /\b(?:apply|application)\b/iu.test(text);
 }
 
 function messageText(value: unknown) {
@@ -529,12 +592,24 @@ async function reactToCurrentMessage(
   }
 }
 
+async function reactToLinqMessage(
+  thread: Thread,
+  messageId: string,
+  emoji: string
+) {
+  try {
+    await thread.adapter.addReaction(thread.id, messageId, emoji);
+  } catch {
+    // SMS/RCS and web paths do not guarantee reaction support.
+  }
+}
+
 async function deliverSubmissionScreenshot(
   thread: {
     post: (message: {
       markdown: string;
       files?: { data: Buffer; filename: string; mimeType: string }[];
-    }) => Promise<unknown>;
+    }) => Promise<{ id?: unknown }>;
     toJSON: () => unknown;
   },
   scope: ReturnType<typeof scopeFromPrincipal>,
@@ -578,7 +653,8 @@ async function deliverJobCards(
   },
   cards: GoForayJobCard[],
   scope: ReturnType<typeof scopeFromPrincipal> | undefined,
-  turnId: string
+  turnId: string,
+  state: Record<string, unknown>
 ) {
   const rich = isRichLinqThread(thread);
   for (const [offset, card] of cards.entries()) {
@@ -593,7 +669,7 @@ async function deliverJobCards(
           index,
           cards.length
         );
-        await thread.post({
+        const sent = await thread.post({
           markdown: text,
           files: [
             {
@@ -603,12 +679,16 @@ async function deliverJobCards(
             },
           ],
         });
+        rememberSentLinqJobCard(state, sent, card);
         sentImage = true;
       } catch {
         // The text card remains useful if rendering or media upload is unavailable.
       }
     }
-    if (!sentImage) await thread.post({ markdown: text });
+    if (!sentImage) {
+      const sent = await thread.post({ markdown: text });
+      rememberSentLinqJobCard(state, sent, card);
+    }
     if (scope) {
       void recordConversationMessage({
         scope,
@@ -620,6 +700,23 @@ async function deliverJobCards(
       }).catch(() => undefined);
     }
   }
+}
+
+function rememberSentLinqJobCard(
+  state: Record<string, unknown>,
+  sent: unknown,
+  card: GoForayJobCard
+) {
+  const message = z.object({ id: z.string().min(1) }).safeParse(sent);
+  if (!message.success) return;
+  const stored = linqJobCardRepliesSchema.safeParse(
+    state.linqJobCardsByMessageId
+  );
+  state.linqJobCardsByMessageId = rememberLinqJobCardReply(
+    stored.success ? stored.data : {},
+    message.data.id,
+    card
+  );
 }
 
 function isRichLinqThread(thread: { toJSON: () => unknown }) {
