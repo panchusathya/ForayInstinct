@@ -9,7 +9,7 @@ import { compactText, exaSearch } from "@/lib/exa";
  */
 export default defineTool({
   description:
-    "Search the live web through Exa. You have no built-in browsing and no knowledge of anything current, so call this for any question that depends on public information you cannot already answer from this conversation: open roles at a company, news, prices, people, products, documentation, company research, or checking whether a page says what the user thinks. Prefer `find_goforay_roles` first for the candidate's own job search, and use this for every other search, including a broader or follow-up role search. Never tell the user you cannot search. Summarize the results in plain prose with the source links; never paste this object.",
+    "Search the live web through Exa. You have no built-in browsing and no knowledge of anything current, so call this for any question that depends on public information you cannot already answer from this conversation: open roles at a company, news, prices, people, products, documentation, company research, or checking whether a page says what the user thinks. This is not the route to a role or an application: anything about the candidate's own openings, roles, or applying goes to `find_goforay_roles`, however the request is worded, because results here carry no posting id. Never tell the user you cannot search. Summarize the results in plain prose with the source links; never paste this object.",
   inputSchema: z.object({
     query: z
       .string()

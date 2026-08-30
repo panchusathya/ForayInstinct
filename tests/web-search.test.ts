@@ -80,4 +80,37 @@ describe("web search routing", () => {
     expect(instructions).toContain("Never tell the");
     expect(instructions).toContain("When `source` is `exa`, the channel sends");
   });
+
+  it("keeps web_search away from the candidate's own role search", () => {
+    const instructions = readFileSync("agent/instructions.md", "utf8");
+    const tool = readFileSync("agent/tools/web_search.ts", "utf8");
+
+    // The verb list is what let "find me ... jobs" reach web_search in
+    // production and return leads with no posting id to apply against.
+    expect(instructions).not.toContain(
+      "any time the user says search, look up, find, or check"
+    );
+    for (const source of [instructions, tool]) {
+      expect(source).toContain("not the route to a role or an application");
+      expect(source).toContain("`find_goforay_roles`");
+    }
+    expect(instructions).toContain(
+      "Never\n  answer a request for roles with `web_search` instead"
+    );
+  });
+
+  it("treats a role with no posting id as an application, not a referral", () => {
+    const instructions = readFileSync("agent/instructions.md", "utf8");
+
+    expect(instructions).toContain(
+      "A role with no posting id is still an application you carry out"
+    );
+    expect(instructions).toContain(
+      "delegate the fill straight to `worker` against that role's"
+    );
+    expect(instructions).toContain(
+      "Never tell the candidate you cannot click through"
+    );
+    expect(instructions).toContain("never downgrade an application");
+  });
 });
