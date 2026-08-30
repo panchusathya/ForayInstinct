@@ -66,14 +66,22 @@ export default defineDynamic({
         }),
         report_goforay_application_result: defineTool({
           description:
-            "Record the outcome of the current GoForay browser task. Use submitted only after the ATS confirms submission; use needs_human for a field or challenge that requires the candidate; use failed for a terminal error. Tell the user the outcome in plain language; never paste this object.",
-          inputSchema: z.object({
-            task_id: taskId,
-            status: z.enum(["submitted", "needs_human", "failed"]),
-            error: z.string().max(2_000).optional(),
-            external_id: z.string().max(500).optional(),
-            confirmation_ref: z.string().max(500).optional(),
-          }),
+            "Record the outcome of the current GoForay browser task. Use submitted only after the ATS visibly confirms submission and supply the actual confirmation text or reference. A completed browser run, a staged form, a click, or a review page is not a submission. Use needs_human for a field or challenge that requires the candidate; use failed for a terminal error. Tell the user the outcome in plain language; never paste this object.",
+          inputSchema: z.discriminatedUnion("status", [
+            z.object({
+              task_id: taskId,
+              status: z.literal("submitted"),
+              confirmation_ref: z.string().trim().min(1).max(500),
+              external_id: z.string().trim().min(1).max(500).optional(),
+            }),
+            z.object({
+              task_id: taskId,
+              status: z.enum(["needs_human", "failed"]),
+              error: z.string().trim().min(1).max(2_000),
+              external_id: z.string().trim().min(1).max(500).optional(),
+              confirmation_ref: z.string().trim().min(1).max(500).optional(),
+            }),
+          ]),
           execute: ({ task_id, ...result }) =>
             reportApplicationTask(scope, task_id, result),
         }),

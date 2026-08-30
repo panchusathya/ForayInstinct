@@ -11,14 +11,13 @@ describe("candidate delivery formatter", () => {
     ).toEqual({ bubbles: ["great - see https://Example.com/Role"] });
   });
 
-  it("splits long copy into no more than five candidate bubbles", () => {
+  it("keeps long copy in one candidate delivery", () => {
     const value = Array.from(
       { length: 8 },
       (_, index) => `Point ${index + 1}.`
     ).join("\n\n");
     const delivery = formatCandidateDelivery(value);
-    expect(delivery.bubbles).toHaveLength(5);
-    expect(delivery.bubbles[0]).toBe("point 1.");
+    expect(delivery.bubbles).toEqual([value.toLowerCase()]);
   });
 
   it("removes an allowed hidden reaction directive", () => {

@@ -38,4 +38,15 @@ describe("application fill handoff", () => {
     expect(browserSkill).toContain("do not wait for JuiceBox packaging");
     expect(browserSkill).toContain("stage_default_goforay_resume");
   });
+
+  it("does not announce a submission without an ATS receipt", () => {
+    expect(rootInstructions).toContain("ATS submission confirmed:");
+    expect(applicationTools).toContain(
+      "confirmation_ref: z.string().trim().min(1).max(500)"
+    );
+    expect(applicationTools).toContain(
+      "A completed browser run, a staged form"
+    );
+    expect(workerInstructions).toContain("site visibly confirms submission");
+  });
 });

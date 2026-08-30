@@ -514,6 +514,11 @@ export async function reportApplicationTask(
     confirmation_ref?: string;
   }
 ) {
+  if (result.status === "submitted" && !result.confirmation_ref?.trim()) {
+    throw new Error(
+      "An ATS confirmation reference is required before recording a submission."
+    );
+  }
   return bridgeTaskSchema.parse(
     await juiceboxRequest(
       scope,

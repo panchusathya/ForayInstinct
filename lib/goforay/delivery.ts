@@ -1,6 +1,5 @@
 const reactionPattern = /\s*\[\[react:(heart|laugh)\]\]\s*$/iu;
 const urlPattern = /(https?:\/\/[^\s<]+)/giu;
-const sentencePattern = /(?<=[.!?])\s+(?=[a-z0-9])/giu;
 
 export type CandidateReaction = "heart" | "laugh";
 
@@ -19,8 +18,7 @@ export function formatCandidateDelivery(value: string): {
   let text = value.replace(reactionPattern, "").trim();
   text = unwrapMachineEnvelope(text);
   text = lowercaseProse(text.replaceAll("—", "-").replaceAll("–", "-"));
-  const pieces = splitBubbles(text);
-  return { bubbles: pieces.slice(0, 5), ...(reaction ? { reaction } : {}) };
+  return { bubbles: text ? [text] : [], ...(reaction ? { reaction } : {}) };
 }
 
 function unwrapMachineEnvelope(value: string) {
@@ -51,41 +49,4 @@ function lowercaseProse(value: string) {
     .split(urlPattern)
     .map((part) => (/^https?:\/\//iu.test(part) ? part : part.toLowerCase()))
     .join("");
-}
-
-function splitBubbles(value: string) {
-  const normalized = value
-    .replace(/\r\n?/gu, "\n")
-    .replace(/\n{3,}/gu, "\n\n")
-    .trim();
-  if (!normalized) return [];
-  const candidates = normalized
-    .split(/\n\s*\n|\n(?=[•*-]\s)/u)
-    .flatMap((piece) => splitLongPiece(piece.trim()))
-    .filter(Boolean);
-  if (candidates.length <= 5) return candidates;
-  // Preserve the beginning and collapse overflow into the fifth natural bubble
-  // rather than transmitting a sixth message while the candidate is waiting.
-  return [
-    ...candidates.slice(0, 4),
-    candidates.slice(4).join(" ").slice(0, 600).trim(),
-  ];
-}
-
-function splitLongPiece(value: string) {
-  if (value.length <= 360) return [value];
-  const sentences = value.split(sentencePattern);
-  const pieces: string[] = [];
-  let current = "";
-  for (const sentence of sentences) {
-    const next = `${current}${current ? " " : ""}${sentence}`;
-    if (next.length > 360 && current) {
-      pieces.push(current);
-      current = sentence;
-    } else {
-      current = next;
-    }
-  }
-  if (current) pieces.push(current);
-  return pieces;
 }

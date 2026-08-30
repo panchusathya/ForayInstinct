@@ -8,7 +8,9 @@ export default defineAgent({
   // Browser work benefits from the stronger tool-use model, while normal chat
   // stays on Luna Fast.
   model: browserGatewayModel,
-  reasoning: "low",
+  // Browser work has irreversible external effects, so give tool recovery
+  // (especially CAPTCHA and form-state checks) enough deliberate reasoning.
+  reasoning: "medium",
   outputSchema: taskCompletionSchema,
   compaction: {
     thresholdPercent: 0.7,
