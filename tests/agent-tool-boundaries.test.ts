@@ -12,17 +12,18 @@ function toolFiles(directory: string) {
 }
 
 describe("root and worker capability boundaries", () => {
-  it("pins chat and browser work to the paid GoForay gateway models", () => {
+  it("pins chat and browser work to GLM 5.3 Flash on AI Gateway", () => {
     const rootAgent = readFileSync("agent/agent.ts", "utf8");
     const workerAgent = readFileSync(`${workerRoot}/agent.ts`, "utf8");
     const models = readFileSync("lib/model-config.ts", "utf8");
 
-    expect(models).toContain('chatGatewayModel = "openai/gpt-5.6-luna-fast"');
-    expect(models).toContain(
-      'browserGatewayModel = "openai/gpt-5.6-terra-fast"'
-    );
+    expect(models).toContain('chatGatewayModel = "zai/glm-5.3-flash"');
+    expect(models).toContain('browserGatewayModel = "zai/glm-5.3-flash"');
     expect(rootAgent).toContain("model: chatGatewayModel");
     expect(workerAgent).toContain("model: browserGatewayModel");
+    expect(readFileSync("lib/manager/server/store.ts", "utf8")).toContain(
+      "inference: chatGatewayModel"
+    );
     expect(rootAgent).not.toContain("defineDynamic(");
     expect(workerAgent).not.toContain("defineDynamic(");
   });
