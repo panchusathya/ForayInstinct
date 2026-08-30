@@ -117,6 +117,25 @@ else
   done
 fi
 
+# `vercel env add <name> preview` prompts for a git branch, and a piped value
+# leaves nothing on stdin to answer it, so the write can be silently skipped.
+# Show what actually landed rather than assuming both environments took.
+echo
+echo "==> GOOGLE_CONNECTOR_UID is now set for"
+verify="$(vercel env ls 2>/dev/null | grep "GOOGLE_CONNECTOR_UID" || true)"
+if [ -n "$verify" ]; then
+  echo "$verify"
+else
+  echo "    nothing. Set it with: vercel env add GOOGLE_CONNECTOR_UID production"
+fi
+for environment in "${environments[@]}"; do
+  if ! echo "$verify" | grep -qi "$environment"; then
+    echo "    WARNING: ${environment} has no GOOGLE_CONNECTOR_UID. Run:"
+    echo "      vercel env add GOOGLE_CONNECTOR_UID ${environment}"
+    echo "      (press Enter at the git-branch prompt to cover all branches)"
+  fi
+done
+
 echo
 echo "==> Connectors now on this project"
 final_list="$(vercel connect list 2>&1 || true)"

@@ -209,6 +209,27 @@ GOOGLE_CONNECTOR_UID is then set to google/$ConnectorName-google to match.
     }
   }
 
+  # `vercel env add <name> preview` prompts for a git branch, and a piped value
+  # leaves nothing on stdin to answer it, so the write can be silently skipped.
+  # Show what actually landed rather than assuming both environments took.
+  Write-Host ''
+  Write-Host '==> GOOGLE_CONNECTOR_UID is now set for'
+  $verify = (Invoke-Vercel -Arguments @('env', 'ls') -Capture) |
+    Where-Object { $_ -match 'GOOGLE_CONNECTOR_UID' }
+  if ($verify) {
+    $verify | Write-Host
+  }
+  else {
+    Write-Host '    nothing. Set it with: vercel env add GOOGLE_CONNECTOR_UID production'
+  }
+  foreach ($environment in $Environments) {
+    if (($verify -join "`n") -notmatch "(?i)$([regex]::Escape($environment))") {
+      Write-Host "    WARNING: $environment has no GOOGLE_CONNECTOR_UID. Run:"
+      Write-Host "      vercel env add GOOGLE_CONNECTOR_UID $environment"
+      Write-Host '      (press Enter at the git-branch prompt to cover all branches)'
+    }
+  }
+
   Write-Host ''
   Write-Host '==> Connectors now on this project'
   $final = Invoke-Vercel -Arguments @('connect', 'list') -Capture
