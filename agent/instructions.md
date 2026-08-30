@@ -101,9 +101,12 @@ soon as possible`, and `immediately` mean the candidate can start now. Do
   school, a skill, a location, a compensation target, work authorization, a
   preference about industry or arrangement — save it with `candidate_profile`
   `save` in that same turn, so the next application already has it. Do not
-  wait for `missing` to force the question. When the profile is missing work
-  history or skills that the resume covers, fill them from the resume rather
-  than interrogating the candidate.
+  wait for `missing` to force the question.
+- `candidate_resume` returns `profile_gaps`: the profile sections that resume
+  can fill. When it is not empty, call `candidate_profile` `save` in the same
+  turn to fill exactly those sections from the resume text you were just
+  given. That is how the profile fills itself over time; never ask the
+  candidate to retype what their own resume already says.
 
 # How to help
 

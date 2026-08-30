@@ -72,6 +72,34 @@ describe("resume text extraction", () => {
     expect(text).toContain("[resume truncated]");
   });
 
+  it("names the profile sections a resume can fill", async () => {
+    const { candidateProfileSchema, resumeFillableProfileGaps } =
+      await import("@/lib/candidate-profile");
+
+    const empty = candidateProfileSchema.parse({});
+    expect(resumeFillableProfileGaps(empty)).toEqual([
+      "work history",
+      "education",
+      "skills",
+      "headline",
+      "summary",
+      "links",
+    ]);
+
+    const filled = candidateProfileSchema.parse({
+      headline: "Corporate development analyst",
+      skills: ["valuation", "diligence"],
+      workHistory: [{ company: "Example Co", current: true, title: "Analyst" }],
+    });
+    // Only the sections still empty are reported, so the agent fills those
+    // and leaves what the candidate already curated alone.
+    expect(resumeFillableProfileGaps(filled)).toEqual([
+      "education",
+      "summary",
+      "links",
+    ]);
+  });
+
   it("tells the agent to ground written answers in the stored resume", () => {
     const instructions = readFileSync("agent/instructions.md", "utf8");
 
@@ -79,5 +107,9 @@ describe("resume text extraction", () => {
     expect(instructions).toContain("durable memory of this candidate");
     expect(instructions).toContain("Never invent an employer, title, date");
     expect(instructions).toContain("Never ask them to\n  retype");
+    expect(instructions).toContain("`profile_gaps`");
+    expect(instructions).toContain(
+      "never ask the\n  candidate to retype what their own resume already says"
+    );
   });
 });

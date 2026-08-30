@@ -318,6 +318,59 @@ describe("database services", () => {
       png: Buffer.from("other-workspace"),
     });
   }, 15_000);
+
+  it("keeps one resume per workspace and replaces it on re-upload", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0011_shocking_human_robot.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, resumes] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/candidate-resume"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    const bob = { userId: "bob", workspaceId: "workspace:bob" };
+    const orphan = { userId: "alice", workspaceId: "workspace:missing" };
+    await scope.ensureScope(alice);
+    await scope.ensureScope(bob);
+
+    await expect(resumes.readCandidateResume(alice)).resolves.toBeUndefined();
+
+    await resumes.saveCandidateResume(alice, {
+      filename: "first.pdf",
+      mediaType: "application/pdf",
+      text: "Analyst at Example Co",
+    });
+    await resumes.saveCandidateResume(alice, {
+      filename: "second.pdf",
+      mediaType: "application/pdf",
+      text: "Senior analyst at Example Co",
+    });
+
+    // Re-uploading replaces rather than accumulating: there is one current
+    // resume per candidate.
+    await expect(resumes.readCandidateResume(alice)).resolves.toMatchObject({
+      characters: "Senior analyst at Example Co".length,
+      filename: "second.pdf",
+      text: "Senior analyst at Example Co",
+    });
+    await expect(resumes.readCandidateResume(bob)).resolves.toBeUndefined();
+
+    // A workspace that does not exist must not throw and end the upload.
+    await expect(
+      resumes.saveCandidateResume(orphan, {
+        filename: "orphan.pdf",
+        mediaType: "application/pdf",
+        text: "nobody",
+      })
+    ).resolves.toEqual({ stored: false });
+  }, 15_000);
 });
 
 async function applyMigration(database: PGlite, name: string) {

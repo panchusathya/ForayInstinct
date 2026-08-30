@@ -172,6 +172,31 @@ export function missingProfileFields(profile: CandidateProfile): string[] {
     .map((field) => field.label);
 }
 
+/**
+ * Profile sections a resume normally covers. These are not ATS-required the
+ * way `missingProfileFields` are, so nothing blocks on them — but leaving them
+ * empty is what forces the agent to ask the candidate to retype what their
+ * own resume already says.
+ */
+const resumeFillableChecks: {
+  label: string;
+  empty: (profile: CandidateProfile) => boolean;
+}[] = [
+  { label: "work history", empty: (p) => p.workHistory.length === 0 },
+  { label: "education", empty: (p) => p.education.length === 0 },
+  { label: "skills", empty: (p) => p.skills.length === 0 },
+  { label: "headline", empty: (p) => p.headline.length === 0 },
+  { label: "summary", empty: (p) => p.summary.length === 0 },
+  { label: "links", empty: (p) => p.links.length === 0 },
+];
+
+/** Empty profile sections the stored resume can populate without asking. */
+export function resumeFillableProfileGaps(profile: CandidateProfile): string[] {
+  return resumeFillableChecks
+    .filter((field) => field.empty(profile))
+    .map((field) => field.label);
+}
+
 const maxPositions = 5;
 const maxDescription = 180;
 
