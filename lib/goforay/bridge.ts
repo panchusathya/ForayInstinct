@@ -11,7 +11,8 @@ import {
 } from "@/db";
 import { env } from "@/lib/env";
 import type { AccessScope } from "@/lib/access-scope";
-import { searchExaRoles, type ExaRoleCard } from "./exa";
+import { searchExaRoles } from "./exa";
+import type { GoForayJobCard } from "./job-cards";
 
 const issuer = "goforay-openinstinct";
 const juiceboxAudience = "juicebox";
@@ -343,13 +344,13 @@ export async function goforayJobCardPng(
 /**
  * Prefer roles already curated in JuiceBox, then discover public openings for
  * a new or unmatched candidate. Exa cards deliberately have no posting id:
- * they are leads to review, not invented CRM applications.
+ * they still carry an apply URL the worker can fill.
  */
 export async function findGoforayRoles(
   scope: AccessScope,
   input: { query?: string; location?: string; limit?: number } = {}
 ): Promise<{
-  cards: (z.infer<typeof jobFeedSchema>["cards"][number] | ExaRoleCard)[];
+  cards: GoForayJobCard[];
   source: "juicebox" | "exa";
   unavailable?: string;
 }> {

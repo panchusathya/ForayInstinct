@@ -3,25 +3,47 @@ import { z } from "zod";
 import { scopeFromPrincipal } from "@/lib/access-scope";
 import {
   applicationTask,
-  createApplicationTask,
   findGoforayRoles,
   nextGoforayRoles,
   reportApplicationTask,
 } from "@/lib/goforay/bridge";
+import {
+  loadPresentedRoles,
+  storePresentedRoles,
+} from "@/lib/goforay/presented-roles";
+import { startPresentedApplication } from "@/lib/goforay/start-application";
 
 /**
  * Coordinator tools for a candidate application fill.
  *
  * Typical call order after "apply to this role":
- * 1. `start_goforay_application` → JuiceBox POST /application-tasks
- * 2. `worker` immediately, with apply_url (+ task/document IDs if present)
+ * 1. `start_goforay_application` → posting_id, selection, query, or apply_url
+ * 2. `worker` immediately, with the returned apply_url
  * 3. Worker: manage_browsers.create → stage resume → Playwright/computer fill
- * 4. `report_goforay_application_result` → JuiceBox POST /application-tasks/:id/result
+ * 4. `report_goforay_application_result` only when a JuiceBox task exists
  *
  * `get_goforay_application_task` is optional extra context, not a start gate.
  */
 
 const taskId = z.string().min(1).max(80);
+
+const applicationTargetSchema = z
+  .object({
+    apply_url: z.url().optional(),
+    job_posting_id: z.uuid().optional(),
+    query: z.string().max(120).optional(),
+    selection: z.number().int().min(1).max(10).optional(),
+  })
+  .refine(
+    (value) =>
+      Boolean(
+        value.apply_url ??
+        value.job_posting_id ??
+        value.query ??
+        value.selection
+      ),
+    { message: "Pass job_posting_id, apply_url, selection, or query." }
+  );
 
 export default defineDynamic({
   events: {
@@ -34,29 +56,38 @@ export default defineDynamic({
       return {
         find_goforay_roles: defineTool({
           description:
-            "Immediately find roles whenever the user asks to find roles, show openings, or suggest jobs. This first returns actionable JuiceBox matches. If none exist or the candidate is new, it searches Exa for live public openings and returns those in the same conversation. Never promise a future delivery. Only JuiceBox cards contain a posting_id and can be started through the GoForay application task. Present cards to the user as short bullets (title, company, location, link); never paste this object.",
+            "Immediately find roles whenever the user asks to find roles, show openings, or suggest jobs. This first returns actionable JuiceBox matches. If none exist or the candidate is new, it searches Exa for live public openings and returns those in the same conversation. Every card includes an apply URL. Never promise a future delivery. Only JuiceBox cards contain a posting_id. The channel delivers numbered cards with the apply URL; never paste this object.",
           inputSchema: z.object({
             query: z.string().max(120).optional(),
             location: z.string().max(120).optional(),
             limit: z.number().int().min(1).max(10).default(5),
           }),
-          execute: ({ query, location, limit }) =>
-            findGoforayRoles(scope, { query, location, limit }),
+          execute: async ({ query, location, limit }) => {
+            const feed = await findGoforayRoles(scope, {
+              query,
+              location,
+              limit,
+            });
+            storePresentedRoles(feed.cards);
+            return feed;
+          },
         }),
         start_goforay_application: defineTool({
           description:
-            "Start exactly one GoForay application task for the concrete JuiceBox job posting ID the candidate asked to apply to. This task is the candidate's authority for that role. It never accepts credentials and does not submit any other role. The returned apply_url is enough to start the browser worker immediately; do not wait for package_pending. Tell the user the outcome in plain language; never paste this object.",
-          inputSchema: z.object({
-            job_posting_id: z.uuid(),
-          }),
-          execute: ({ job_posting_id }) =>
-            createApplicationTask(scope, job_posting_id),
+            "Start exactly one application for the role the candidate asked to apply to. Pass job_posting_id for a JuiceBox card, or selection (the card number), query (company or title), or apply_url when there is no posting id. Never skip this because a posting id is missing. The returned apply_url is enough to start the browser worker immediately; do not wait for package_pending. Tell the user the outcome in plain language; never paste this object.",
+          inputSchema: applicationTargetSchema,
+          execute: (input) =>
+            startPresentedApplication(scope, input, loadPresentedRoles()),
         }),
         find_next_goforay_roles: defineTool({
           description:
             "Immediately after starting an application, fetch up to five new curated JuiceBox roles for the same candidate. The started and previously shown roles are excluded. Never use this as an Exa fallback and never claim there are roles when the returned list is empty.",
           inputSchema: z.object({}),
-          execute: () => nextGoforayRoles(scope),
+          execute: async () => {
+            const feed = await nextGoforayRoles(scope);
+            storePresentedRoles(feed.cards);
+            return feed;
+          },
         }),
         get_goforay_application_task: defineTool({
           description:

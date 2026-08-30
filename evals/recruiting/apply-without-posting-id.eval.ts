@@ -30,8 +30,9 @@ export default defineEval({
 
     const apply = await t.send("Let's apply to this one");
     apply.succeeded();
-    // With or without a posting id, the fill is delegated to the browser
-    // worker rather than handed back to the candidate as homework.
+    // With or without a posting id, start the application (selection or URL)
+    // and hand the fill to the browser worker. Do not send homework.
+    apply.calledTool("start_goforay_application");
     apply.calledSubagent("worker", { count: 1 });
     t.check(
       t.reply,
