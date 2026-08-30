@@ -4,17 +4,13 @@ import {
   unauthorizedResponse,
 } from "@/app/_lib/server/request-scope";
 import { isSameOrigin } from "@/app/_lib/server/same-origin";
-import { uploadCandidateResume } from "@/lib/goforay/bridge";
+import { saveCandidateDocument } from "@/db/services/candidate-documents";
+import { inferCandidateDocumentKind } from "@/lib/candidate-documents";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const resumeTypes = new Set([
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-]);
-
-/** Candidate-authenticated upload proxy; JuiceBox validates the file bytes. */
+/** Candidate-authenticated upload; stored in this workspace, not JuiceBox. */
 export async function POST(request: Request) {
   try {
     if (!isSameOrigin(request)) {
@@ -32,17 +28,22 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
-    const filename = value.name.toLowerCase();
-    if (!resumeTypes.has(value.type) && !/\.(pdf|docx)$/u.test(filename)) {
-      return Response.json(
-        { error: "Upload a PDF or Word (.docx) resume." },
-        { status: 415 }
-      );
-    }
-    return Response.json(await uploadCandidateResume(scope, value), {
-      status: 201,
-      headers: { "Cache-Control": "no-store" },
+    const filename = value.name || "resume.pdf";
+    const saved = await saveCandidateDocument(scope, {
+      bytes: Buffer.from(await value.arrayBuffer()),
+      filename,
+      kind: inferCandidateDocumentKind(filename),
+      mimeType: value.type,
+      setDefault: true,
+      source: "upload",
     });
+    return Response.json(
+      { filename: saved.document.filename, id: saved.document.id },
+      {
+        status: saved.created ? 201 : 200,
+        headers: { "Cache-Control": "no-store" },
+      }
+    );
   } catch (error) {
     if (error instanceof UnauthenticatedError) return unauthorizedResponse();
     return Response.json(

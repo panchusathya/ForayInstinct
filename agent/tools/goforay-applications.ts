@@ -2,6 +2,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 import { z } from "zod";
 import { scopeFromPrincipal } from "@/lib/access-scope";
 import { findGoforayRoles, nextGoforayRoles } from "@/lib/goforay/bridge";
+import { storePresentedRoles } from "@/lib/goforay/presented-roles";
 
 /**
  * Coordinator tools for roles. Applying is a worker assignment against the
@@ -31,14 +32,25 @@ export default defineDynamic({
             location: z.string().max(120).optional(),
             limit: z.number().int().min(1).max(10).default(5),
           }),
-          execute: ({ query, location, limit }) =>
-            findGoforayRoles(scope, { query, location, limit }),
+          execute: async ({ query, location, limit }) => {
+            const feed = await findGoforayRoles(scope, {
+              query,
+              location,
+              limit,
+            });
+            storePresentedRoles(feed.cards);
+            return feed;
+          },
         }),
         find_next_goforay_roles: defineTool({
           description:
             "Immediately after sending the worker to apply, fetch up to five new curated JuiceBox roles for the same candidate. The started and previously shown roles are excluded. Never claim there are roles when the returned list is empty.",
           inputSchema: z.object({}),
-          execute: () => nextGoforayRoles(scope),
+          execute: async () => {
+            const feed = await nextGoforayRoles(scope);
+            storePresentedRoles(feed.cards);
+            return feed;
+          },
         }),
       };
     },

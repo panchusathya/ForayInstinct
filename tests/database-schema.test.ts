@@ -8,6 +8,7 @@ import {
   applicationSubmissionScreenshots,
   browserRunCheckpoints,
   browserSessions,
+  candidateDocuments,
   candidateProfiles,
   chats,
   encryptedSecrets,
@@ -17,6 +18,7 @@ import {
   vaultItems,
   verification,
   workspaceMemberships,
+  workspaceMemories,
   workspaces,
 } from "../db/schema";
 
@@ -35,6 +37,8 @@ describe("database schema", () => {
         chats,
         encryptedSecrets,
         candidateProfiles,
+        candidateDocuments,
+        workspaceMemories,
         user,
         session,
         account,
@@ -52,6 +56,8 @@ describe("database schema", () => {
       "chats",
       "encrypted_secrets",
       "candidate_profiles",
+      "candidate_documents",
+      "workspace_memories",
       "user",
       "session",
       "account",
@@ -93,6 +99,8 @@ describe("database schema", () => {
       chats,
       encryptedSecrets,
       candidateProfiles,
+      candidateDocuments,
+      workspaceMemories,
     ]) {
       expect(
         getTableConfig(table).foreignKeys.some((foreignKey) =>
@@ -173,12 +181,16 @@ describe("migration deployment policy", () => {
       [
         "application-submission-screenshots",
         "browsers",
+        "candidate-documents",
         "chats",
+        "default-resume",
         "scope",
         "secrets",
         "sessions",
         "settings",
         "vault",
+        "workspace-memories",
+        "workspace-memory-capture",
       ].map(
         async (name) =>
           await readFile(

@@ -79,7 +79,7 @@ describe("web search routing", () => {
     expect(instructions).toContain("no built-in web browsing");
     expect(instructions).toContain("Never tell the");
     expect(instructions).toContain(
-      "delivered by the channel as numbered cards"
+      "delivered by the channel as numbered cards with their apply URL"
     );
   });
 

@@ -30,7 +30,7 @@ describe("candidate delivery formatter", () => {
     });
   });
 
-  it("uses a compact no-link text fallback for a job card", () => {
+  it("uses a compact text card that keeps the apply URL", () => {
     expect(
       renderGoForayJobCard(
         {
@@ -39,12 +39,13 @@ describe("candidate delivery formatter", () => {
           posting_id: "posting-1",
           reasons: ["Strong ML background"],
           title: "Machine Learning Engineer",
+          url: "https://jobs.example.co/ml-engineer",
         },
         2,
         5
       )
     ).toBe(
-      '2/5  machine learning engineer · example ai\nremote\n· strong ml background\nreply "apply 2" to apply'
+      '2/5  machine learning engineer · example ai\nremote\n· strong ml background\nhttps://jobs.example.co/ml-engineer\nreply "apply 2" to apply'
     );
   });
 });

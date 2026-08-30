@@ -67,6 +67,51 @@ describe("Linq message delivery", () => {
     });
   });
 
+  it("delivers Exa role cards with their apply URL instead of the model reply", async () => {
+    const { context, post } = handlerContext();
+
+    await trackWorkerCancellation(
+      {
+        result: {
+          callId: "call-roles",
+          kind: "tool-result",
+          output: {
+            cards: [
+              {
+                company: "The Toro Company",
+                location: "Remote, USA",
+                reasons: ["M&A modeling"],
+                title: "Sr. Analyst, Corporate Development",
+                url: "https://jobs.thetorocompany.com/job/bloomington/corp-dev/1",
+              },
+            ],
+            source: "exa",
+          },
+          toolName: "find_goforay_roles",
+        },
+        sequence: 0,
+        status: "completed",
+        stepIndex: 0,
+        turnId: "turn-1",
+      },
+      context,
+      sessionContext()
+    );
+
+    await deliverCompletedMessage(
+      completedEvent({
+        message: "here is a toro role without a link",
+      }),
+      context,
+      sessionContext()
+    );
+
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      markdown:
+        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\n· m&a modeling\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
+    });
+  });
+
   it("suppresses intermediate tool-call messages without a generic reaction", async () => {
     const { addReaction, context, post, state } = handlerContext();
 

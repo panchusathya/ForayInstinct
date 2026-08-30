@@ -80,6 +80,7 @@ describe("session ownership hook", () => {
     };
     const event = {
       data: { message: "Hello from iMessage" },
+      meta: { id: "msg-linq-1" },
     } as Parameters<MessageReceivedHandler>[0];
     const hookContext =
       linqContext as unknown as Parameters<MessageReceivedHandler>[1];

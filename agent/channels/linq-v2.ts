@@ -11,6 +11,7 @@ import { accessScopeForUser, scopeFromPrincipal } from "@/lib/access-scope";
 import { env } from "@/lib/env";
 import { formatCandidateDelivery } from "@/lib/goforay/delivery";
 import {
+  goForayJobCardSchema,
   jobCardFilename,
   renderGoForayJobCard,
   type GoForayJobCard,
@@ -23,8 +24,9 @@ import {
   linkCandidate,
   goforayJobCardPng,
   recordConversationMessage,
-  uploadCandidateResume,
 } from "@/lib/goforay/bridge";
+import { saveCandidateDocument } from "@/db/services/candidate-documents";
+import { inferCandidateDocumentKind } from "@/lib/candidate-documents";
 
 const verifiedPhoneUserSchema = z.object({
   id: z.string().min(1),
@@ -56,20 +58,13 @@ const workerResultSchema = z.object({
     .loose(),
   toolName: z.literal("worker"),
 });
-const jobCardSchema = z.object({
-  company: z.string(),
-  location: z.string(),
-  posting_id: z.string(),
-  reasons: z.array(z.string()),
-  title: z.string(),
-});
 const jobCardResultSchema = z.object({
   kind: z.literal("tool-result"),
-  output: z.object({ cards: z.array(jobCardSchema) }),
+  output: z.object({ cards: z.array(goForayJobCardSchema) }),
   toolName: z.enum(["find_goforay_roles", "find_next_goforay_roles"]),
 });
 const pendingJobCardsSchema = z.object({
-  cards: z.array(jobCardSchema),
+  cards: z.array(goForayJobCardSchema),
   turnId: z.string(),
 });
 const pendingSubmissionScreenshotSchema = z.object({
@@ -123,11 +118,16 @@ const { bot, channel, send } = chatSdkChannel({
         );
       }
       const jobCards = jobCardResultSchema.safeParse(event.result);
-      if (jobCards.success && jobCards.data.output.cards.length) {
-        context.state.pendingGoForayJobCards = {
-          cards: jobCards.data.output.cards.slice(0, 5),
-          turnId: event.turnId,
-        };
+      if (jobCards.success) {
+        const cards = jobCards.data.output.cards
+          .filter((card) => card.url)
+          .slice(0, 5);
+        if (cards.length) {
+          context.state.pendingGoForayJobCards = {
+            cards,
+            turnId: event.turnId,
+          };
+        }
       }
       if (!result.success) return;
 
@@ -355,7 +355,7 @@ async function prepareInboundMessage(message: Message) {
       CURRENT_FORAY_POLICY,
       ...(importedResumes.length
         ? [
-            `The candidate attached a resume. It has been sent directly to their protected GoForay profile for parsing (${importedResumes.join(", ")}). Do not ask them to upload it again or expose the file contents.`,
+            `The candidate attached a document. It is stored in this workspace (${importedResumes.join(", ")}). Use it for applications and do not ask them to upload it again or expose the file contents.`,
           ]
         : []),
     ],
@@ -417,17 +417,18 @@ async function importLinqResumes(
     if (!isResumeAttachment(filename, mimeType)) continue;
 
     try {
-      // The URL comes from Linq's authenticated inbound adapter. Forward the
-      // original bytes directly to JuiceBox, which enforces magic-byte checks
-      // and queues parsing in candidate-document storage.
       const response = await fetch(attachment.url);
       if (!response.ok) continue;
-      const bytes = await response.arrayBuffer();
-      const file = new File([bytes], filename, {
-        type: mimeType || response.headers.get("content-type") || "",
+      const bytes = Buffer.from(await response.arrayBuffer());
+      const result = await saveCandidateDocument(scope, {
+        bytes,
+        filename,
+        kind: inferCandidateDocumentKind(filename),
+        mimeType: mimeType || response.headers.get("content-type") || "",
+        setDefault: true,
+        source: "linq",
       });
-      const result = await uploadCandidateResume(scope, file);
-      uploaded.push(result.filename);
+      uploaded.push(result.document.filename);
     } catch {
       // A malformed or expired attachment cannot interrupt the conversation.
       // The model still sees the normal attachment marker and can ask once for
@@ -553,7 +554,7 @@ async function deliverJobCards(
     const index = offset + 1;
     const text = renderGoForayJobCard(card, index, cards.length);
     let sentImage = false;
-    if (rich && scope) {
+    if (rich && scope && card.posting_id) {
       try {
         const png = await goforayJobCardPng(
           scope,
@@ -562,7 +563,7 @@ async function deliverJobCards(
           cards.length
         );
         await thread.post({
-          markdown: "",
+          markdown: text,
           files: [
             {
               data: png,
