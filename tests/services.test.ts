@@ -262,6 +262,51 @@ describe("database services", () => {
     );
   }, 15_000);
 
+  it("stores a resume in the workspace and recalls it as the default", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0011_candidate_documents.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, documents, memories] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/candidate-documents"),
+      import("@/db/services/workspace-memories"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    const saved = await documents.saveCandidateDocument(alice, {
+      bytes: Buffer.from("%PDF-1.1\n(Ada Lovelace)\n"),
+      filename: "Ada_Resume.pdf",
+      kind: "resume",
+      mimeType: "application/pdf",
+      source: "upload",
+    });
+    expect(saved.created).toBe(true);
+    expect(saved.document.isDefault).toBe(true);
+    expect(saved.document.extractedText).toContain("Ada Lovelace");
+
+    const listed = await documents.listCandidateDocuments(alice);
+    expect(listed).toHaveLength(1);
+    const defaultResume = await documents.readDefaultResume(alice);
+    expect(defaultResume?.filename).toBe("Ada_Resume.pdf");
+    expect(defaultResume?.bytes.equals(saved.document.bytes)).toBe(true);
+
+    await memories.saveWorkspaceMemory(alice, "target_role", "Staff engineer");
+    expect(await memories.listWorkspaceMemories(alice)).toEqual([
+      expect.objectContaining({
+        key: "target_role",
+        value: "Staff engineer",
+      }),
+    ]);
+  }, 15_000);
+
   it("hands the latest undelivered confirmation screenshot to the next consumer", async () => {
     const client = new PGlite();
     databases.push(client);

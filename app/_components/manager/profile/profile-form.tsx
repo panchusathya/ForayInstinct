@@ -21,6 +21,7 @@ import type {
   ProfileLink,
   WorkHistoryEntry,
 } from "@/lib/candidate-profile";
+import { CandidateDocumentsPanel } from "./documents-panel";
 import { useCandidateProfile } from "./use-candidate-profile";
 
 type Keyed<T> = { readonly key: string; value: T };
@@ -432,6 +433,8 @@ function ProfileEditor({
           <p className="type-supporting-body text-muted-foreground">Saved.</p>
         ) : null}
       </div>
+
+      <CandidateDocumentsPanel />
 
       <section className="space-y-3 border-t border-border/50 pt-6">
         <h2 className="type-caption text-muted-foreground uppercase">

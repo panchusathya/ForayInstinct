@@ -242,6 +242,81 @@ describe("database migrations", () => {
     ).rejects.toThrow(/constraint/);
   }, 15_000);
 
+  it("stores workspace-owned candidate documents and remembered facts", async () => {
+    const database = createDatabase();
+
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(database, "0011_candidate_documents.sql");
+    await applyMigration(database, "0011_candidate_documents.sql");
+
+    await database.exec(`
+      INSERT INTO workspaces (id, created_at) VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO candidate_documents (
+        id, workspace_id, kind, source, filename, mime_type, byte_size, sha256,
+        is_default, extracted_text, bytes, created_at, updated_at
+      ) VALUES (
+        'doc-1',
+        'workspace-1',
+        'resume',
+        'upload',
+        'ada.pdf',
+        'application/pdf',
+        4,
+        'abcd',
+        'yes',
+        'Ada Lovelace',
+        '\\x25504446',
+        '2026-01-01',
+        '2026-01-01'
+      );
+      INSERT INTO workspace_memories VALUES (
+        'workspace-1',
+        'preferred_name',
+        'Ada',
+        '2026-01-01'
+      );
+    `);
+
+    await expect(
+      database.query<{ filename: string; key: string }>(
+        `SELECT d.filename, m.key
+         FROM candidate_documents d
+         JOIN workspace_memories m ON m.workspace_id = d.workspace_id
+         WHERE d.workspace_id = 'workspace-1'`
+      )
+    ).resolves.toMatchObject({
+      rows: [{ filename: "ada.pdf", key: "preferred_name" }],
+    });
+    expect(await pendingConstraintCount(database)).toBe(0);
+  }, 15_000);
+
+  it("rejects a second default resume in the same workspace", async () => {
+    const database = createDatabase();
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(database, "0011_candidate_documents.sql");
+    await database.exec(`
+      INSERT INTO workspaces (id, created_at) VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO candidate_documents (
+        id, workspace_id, kind, source, filename, mime_type, byte_size, sha256,
+        is_default, extracted_text, bytes, created_at, updated_at
+      ) VALUES (
+        'doc-1', 'workspace-1', 'resume', 'upload', 'one.pdf', 'application/pdf',
+        4, 'one', 'yes', '', '\\x25504446', '2026-01-01', '2026-01-01'
+      );
+    `);
+    await expect(
+      database.exec(`
+        INSERT INTO candidate_documents (
+          id, workspace_id, kind, source, filename, mime_type, byte_size, sha256,
+          is_default, extracted_text, bytes, created_at, updated_at
+        ) VALUES (
+          'doc-2', 'workspace-1', 'resume', 'upload', 'two.pdf', 'application/pdf',
+          4, 'two', 'yes', '', '\\x25504446', '2026-01-01', '2026-01-01'
+        )
+      `)
+    ).rejects.toThrow();
+  }, 15_000);
+
   it("adopts existing Better Auth tables without changing their rows", async () => {
     const database = createDatabase();
     await database.exec(legacyAuthSchema);

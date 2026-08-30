@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   check,
+  customType,
   doublePrecision,
   foreignKey,
   index,
@@ -9,6 +10,7 @@ import {
   pgTable,
   primaryKey,
   text,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import type {
   EducationEntry,
@@ -344,5 +346,89 @@ export const candidateProfiles = pgTable(
       "candidate_profiles_work_arrangement_check",
       sql`${table.workArrangement} IN ('', 'remote', 'hybrid', 'onsite', 'flexible')`
     ),
+  ]
+);
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
+
+/**
+ * Candidate-owned files (resume, cover letter, transcripts). Bytes stay in
+ * this workspace table so applications do not depend on JuiceBox storage.
+ */
+export const candidateDocuments = pgTable(
+  "candidate_documents",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    kind: text("kind").notNull(),
+    source: text("source").notNull(),
+    filename: text("filename").notNull(),
+    mimeType: text("mime_type").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    sha256: text("sha256").notNull(),
+    isDefault: text("is_default").notNull().default(""),
+    extractedText: text("extracted_text").notNull().default(""),
+    bytes: bytea("bytes").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "candidate_documents_workspace_id_fkey",
+      columns: [table.workspaceId],
+      foreignColumns: [workspaces.id],
+    }).onDelete("cascade"),
+    check(
+      "candidate_documents_kind_check",
+      sql`${table.kind} IN ('resume', 'cover_letter', 'transcript', 'other')`
+    ),
+    check(
+      "candidate_documents_source_check",
+      sql`${table.source} IN ('upload', 'gmail', 'linq', 'goforay')`
+    ),
+    check(
+      "candidate_documents_is_default_check",
+      sql`${table.isDefault} IN ('', 'yes')`
+    ),
+    check(
+      "candidate_documents_byte_size_check",
+      sql`${table.byteSize} > 0 AND ${table.byteSize} <= 8388608`
+    ),
+    uniqueIndex("candidate_documents_workspace_default_resume_idx")
+      .on(table.workspaceId)
+      .where(sql`${table.kind} = 'resume' AND ${table.isDefault} = 'yes'`),
+    index("candidate_documents_workspace_updated_idx").on(
+      table.workspaceId,
+      table.updatedAt.desc().nullsFirst()
+    ),
+  ]
+);
+
+/**
+ * Free-form durable facts the model saved so later chats do not re-ask.
+ * Structured ATS fields stay on candidate_profiles.
+ */
+export const workspaceMemories = pgTable(
+  "workspace_memories",
+  {
+    workspaceId: text("workspace_id").notNull(),
+    key: text("key").notNull(),
+    value: text("value").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.workspaceId, table.key],
+      name: "workspace_memories_pkey",
+    }),
+    foreignKey({
+      name: "workspace_memories_workspace_id_fkey",
+      columns: [table.workspaceId],
+      foreignColumns: [workspaces.id],
+    }).onDelete("cascade"),
   ]
 );
