@@ -30,27 +30,29 @@ import {
 
 const browserTimeoutFloorSeconds = 15 * 60;
 
-const inputSchema = z.object({
-  action: z.enum(["create", "update", "list", "get", "delete"]),
-  session_id: z.string().optional(),
-  start_url: z.url().optional(),
-  timeout_seconds: z
-    .number()
-    .int()
-    .min(browserTimeoutFloorSeconds)
-    .max(259_200)
-    .optional(),
-  viewport_width: z.number().int().min(1).optional(),
-  viewport_height: z.number().int().min(1).optional(),
-  status: z.enum(["active", "deleted", "all"]).optional(),
-  limit: z.number().int().min(1).max(100).optional(),
-  offset: z.number().int().min(0).optional(),
-}).refine(
-  (value) =>
-    (value.viewport_width === undefined) ===
-    (value.viewport_height === undefined),
-  { message: "Viewport width and height must be provided together." }
-);
+const inputSchema = z
+  .object({
+    action: z.enum(["create", "update", "list", "get", "delete"]),
+    session_id: z.string().optional(),
+    start_url: z.url().optional(),
+    timeout_seconds: z
+      .number()
+      .int()
+      .min(browserTimeoutFloorSeconds)
+      .max(259_200)
+      .optional(),
+    viewport_width: z.number().int().min(1).optional(),
+    viewport_height: z.number().int().min(1).optional(),
+    status: z.enum(["active", "deleted", "all"]).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    offset: z.number().int().min(0).optional(),
+  })
+  .refine(
+    (value) =>
+      (value.viewport_width === undefined) ===
+      (value.viewport_height === undefined),
+    { message: "Viewport width and height must be provided together." }
+  );
 
 export default defineTool({
   description:

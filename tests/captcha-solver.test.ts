@@ -238,9 +238,7 @@ describe("checkbox CAPTCHA solver", () => {
     expect(skill).toContain(
       "do not request a human takeover for them and do not inject CAPTCHA tokens"
     );
-    expect(skill).toContain(
-      "even when `solve_captcha` returns `not_found`"
-    );
+    expect(skill).toContain("even when `solve_captcha` returns `not_found`");
     expect(skill).not.toContain(
       "If the state is `challenge_required`, `unsolved`, `not_found` after a still-blocked page, or `execution_failed`, preserve the browser and return the takeover blocker"
     );
