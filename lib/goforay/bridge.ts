@@ -11,7 +11,6 @@ import {
 } from "@/db";
 import { env } from "@/lib/env";
 import type { AccessScope } from "@/lib/access-scope";
-import { searchExaRoles, type ExaRoleCard } from "./exa";
 
 const issuer = "goforay-openinstinct";
 const juiceboxAudience = "juicebox";
@@ -73,6 +72,7 @@ const jobFeedSchema = z.object({
       url: z.string(),
     })
   ),
+  searching: z.boolean().optional().default(false),
 });
 
 function authUserId(userId: string) {
@@ -376,39 +376,32 @@ export async function goforayJobCardPng(
 }
 
 /**
- * Prefer roles already curated in JuiceBox, then discover public openings for
- * a new or unmatched candidate. Exa cards deliberately have no posting id:
- * they are leads to review, not invented CRM applications.
+ * Ask JuiceBox for roles. JuiceBox owns Exa discovery: an empty book queues
+ * the same search the messaging bot uses, then later asks match against what
+ * it ingested. Foray never searches Exa itself and never invents a posting.
  */
 export async function findGoforayRoles(
   scope: AccessScope,
   input: { query?: string; location?: string; limit?: number } = {}
 ): Promise<{
-  cards: (z.infer<typeof jobFeedSchema>["cards"][number] | ExaRoleCard)[];
-  source: "juicebox" | "exa";
+  cards: z.infer<typeof jobFeedSchema>["cards"];
+  searching: boolean;
+  source: "juicebox";
   unavailable?: string;
 }> {
   const limit = input.limit ?? 5;
   try {
+    configured();
     const feed = await goforayJobFeed(scope, { ...input, limit });
     if (feed.cards.length) {
       await rememberPresentedRoles(scope, feed.cards);
-      return { ...feed, source: "juicebox" };
     }
-  } catch {
-    // A new candidate has no JuiceBox link yet; public discovery can still help.
-  }
-  try {
-    return {
-      cards: await searchExaRoles({ ...input, limit }),
-      source: "exa",
-    };
+    return { ...feed, searching: feed.searching ?? false, source: "juicebox" };
   } catch (error) {
-    // Both sources are down. Report that plainly instead of throwing, so the
-    // assistant says search is unavailable rather than surfacing a raw error.
     return {
       cards: [],
-      source: "exa",
+      searching: false,
+      source: "juicebox",
       unavailable:
         error instanceof Error ? error.message : "Role search is unavailable.",
     };
@@ -686,7 +679,7 @@ async function syncConversationEvent(id: string) {
   }
 }
 
-/** Fresh, curated roles after a candidate starts an application. Never falls back to Exa. */
+/** Fresh, curated roles after a candidate starts an application. */
 export async function nextGoforayRoles(scope: AccessScope, limit = 5) {
   const userId = authUserId(scope.userId);
   const shown = await db

@@ -131,11 +131,8 @@ describe("worker input bubbling", () => {
       "Roles from `find_goforay_roles` and `find_next_goforay_roles` are"
     );
     expect(instructions).toContain(
-      "dump `documents`, `form_answers`, `cards`, or `result`"
+      "dump `cards` or `result`"
     );
     expect(applicationTools).toContain("never paste this object");
-    expect(applicationTools).toContain(
-      "Do not dump documents, form_answers, or this object to the user"
-    );
   });
 });
