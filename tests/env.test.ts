@@ -72,6 +72,17 @@ describe("environment", () => {
     expect(localPhoneAuthBypassEnabled).toBe(true);
   });
 
+  it("uses an inert database URL when building a Vercel preview", async () => {
+    vi.stubEnv("DATABASE_URL", "");
+    vi.stubEnv("VERCEL_ENV", "preview");
+
+    const { env } = await import("../lib/env");
+
+    expect(env.DATABASE_URL).toBe(
+      "postgresql://preview:preview@localhost:5432/preview"
+    );
+  });
+
   it("accepts connector overrides", async () => {
     vi.stubEnv("GOOGLE_CONNECTOR_UID", "google/custom");
     vi.stubEnv("LINQ_CONNECTOR", "linq/custom");

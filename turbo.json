@@ -20,7 +20,6 @@
       "outputs": [".next/**", "!.next/cache/**", "next-env.d.ts"]
     },
     "build:vercel": {
-      "dependsOn": ["db:migrate"],
       "env": [
         "BETTER_AUTH_*",
         "AI_GATEWAY_API_KEY",

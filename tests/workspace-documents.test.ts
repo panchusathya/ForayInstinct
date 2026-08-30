@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { deflateSync } from "node:zlib";
 import {
   inferCandidateDocumentKind,
   isCandidateDocumentFile,
@@ -42,6 +43,19 @@ describe("candidate documents", () => {
         "ada.pdf"
       )
     ).toContain("Ada Lovelace");
+
+    const compressed = deflateSync(Buffer.from("BT (Grace Hopper) Tj ET"));
+    const pdf = Buffer.concat([
+      Buffer.from(
+        `%PDF-1.4\n1 0 obj\n<< /Length ${String(compressed.byteLength)} /Filter /FlateDecode >>\nstream\n`,
+        "latin1"
+      ),
+      compressed,
+      Buffer.from("\nendstream\nendobj\n%%EOF", "latin1"),
+    ]);
+    expect(extractDocumentText(pdf, "application/pdf", "grace.pdf")).toContain(
+      "Grace Hopper"
+    );
   });
 
   it("captures explicit self-statements without inferring EEO answers", () => {

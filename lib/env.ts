@@ -6,6 +6,12 @@ import { databaseUrlSchema } from "../db/env/utils";
 const localDevelopment =
   process.env.NODE_ENV === "development" &&
   process.env.VERCEL_ENV === undefined;
+const previewDeployment = process.env.VERCEL_ENV === "preview";
+
+// Vercel evaluates route modules while building a preview. Previews do not
+// receive production database credentials, but a Pool can be constructed with
+// this inert URL without attempting a connection. Production remains strict.
+const previewDatabaseUrl = "postgresql://preview:preview@localhost:5432/preview";
 
 const requiredValue = z
   .string()
@@ -31,7 +37,9 @@ function requiredValueWithLocalDefault<T extends z.ZodType<string, string>>(
 export const env = createEnv({
   server: {
     // Required
-    DATABASE_URL: databaseUrlSchema,
+    DATABASE_URL: previewDeployment
+      ? databaseUrlSchema.default(previewDatabaseUrl)
+      : databaseUrlSchema,
     KERNEL_API_KEY: requiredValue,
     // Optional Kernel dashboard proxy. When set, worker browsers keep
     // stealth (CAPTCHA solver) and replace Kernel's default shared ISP

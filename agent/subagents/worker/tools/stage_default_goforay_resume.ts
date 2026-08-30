@@ -23,10 +23,26 @@ export default defineTool({
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
     await requireOwnedBrowserSession(scope, input.session_id);
-    const document = await readOrImportDefaultResume(scope);
-    if (document === undefined) {
+    let document;
+    try {
+      document = await readOrImportDefaultResume(scope);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (/still being parsed|still processing/iu.test(message)) {
+        throw new Error(
+          "The resume is safely stored but still being parsed by GoForay. Keep the browser open and retry staging it shortly; do not ask for another upload.",
+          { cause: error }
+        );
+      }
+      if (/No protected default resume|not linked/iu.test(message)) {
+        throw new Error(
+          "No resume is on file in this workspace. Ask the candidate to attach a PDF or DOCX, or save one from Gmail.",
+          { cause: error }
+        );
+      }
       throw new Error(
-        "No resume is on file in this workspace. Ask the candidate to attach a PDF or DOCX, or save one from Gmail."
+        `The stored resume could not be retrieved right now: ${message || "unknown bridge error"}. Preserve the browser and report this blocker; do not ask for another upload.`,
+        { cause: error }
       );
     }
     const filename = safeFilename(document.filename);
