@@ -119,6 +119,13 @@ access deliberately uses `gmail.modify`, not the permanent-delete
    scripts/setup-google-connector.sh /absolute/path/to/downloaded-client-secret.json
    ```
 
+   On Windows, run the PowerShell counterpart instead. It needs neither bash nor
+   `jq`:
+
+   ```powershell
+   .\scripts\setup-google-connector.ps1 C:\path\to\downloaded-client-secret.json
+   ```
+
    It creates the connector, attaches it to production and preview, sets
    `GOOGLE_CONNECTOR_UID`, and prints the scope list to declare on the consent
    screen. Pass environments explicitly to narrow it, and set `CONNECTOR_NAME`
