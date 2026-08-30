@@ -2,7 +2,7 @@
 import { connectLinqCredentials } from "@vercel/connect/eve";
 import { createLinqAdapter } from "@linqapp/chat-sdk-adapter";
 import { defaultLinqAuth } from "eve/channels/linq";
-import { chatSdkChannel } from "eve/channels/chat-sdk";
+import { chatSdkChannel, messageToUserContent } from "eve/channels/chat-sdk";
 import type { Message, Thread } from "chat";
 import { z } from "zod";
 import { auth } from "@/auth";
@@ -30,6 +30,7 @@ import {
 } from "@/lib/goforay/linq-replies";
 import { createPostgresState } from "@/lib/linq-state";
 import {
+  normalizeLinqDocument,
   readLinqAttachment,
   retryLinqResumeSave,
 } from "@/lib/linq-resume-import";
@@ -327,7 +328,7 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
   await send(
     {
       context: inbound.context,
-      message: message.text || "The candidate attached a file.",
+      message: messageToUserContent(message),
     },
     { auth: inbound.auth, thread }
   );
@@ -486,29 +487,41 @@ async function importLinqResumes(
   const uploaded: string[] = [];
   const failures: string[] = [];
   for (const attachment of message.attachments) {
+    if (attachment.type !== "file") continue;
     const filename = attachment.name ?? filenameFromUrl(attachment.url ?? "");
-    const mimeType = attachment.mimeType ?? "";
-    if (!isResumeAttachment(filename, mimeType)) continue;
 
+    let phase = "download";
     try {
       const { bytes, resolvedMimeType } = await readLinqAttachment(attachment);
-      const result = await saveLinqResumeWithRetry(scope, {
+      const document = normalizeLinqDocument({
         bytes,
         filename,
-        mimeType: mimeType || resolvedMimeType,
+        mimeType: attachment.mimeType || resolvedMimeType,
+      });
+      if (!document) continue;
+
+      phase = "storage";
+      const result = await saveLinqResumeWithRetry(scope, {
+        bytes,
+        filename: document.filename,
+        mimeType: document.mimeType,
       });
       uploaded.push(result.document.filename);
     } catch (error) {
-      failures.push(
-        `${filename}: ${error instanceof Error ? error.message : "import failed"}`
-      );
+      const message = linqImportErrorMessage(error);
+      failures.push(`${filename}: ${phase} failed (${message})`);
+      console.error("[linq-resume] attachment import failed", {
+        attachment: {
+          hasFetchData: attachment.fetchData !== undefined,
+          mimeType: attachment.mimeType ?? "",
+          size: attachment.size,
+          suffix: filename.split(".").at(-1)?.toLowerCase() ?? "",
+        },
+        error: message,
+        phase,
+        workspaceId: scope.workspaceId,
+      });
     }
-  }
-  if (failures.length) {
-    console.warn("[linq-resume] attachment import failed", {
-      failures: failures.map((failure) => failure.slice(0, 300)),
-      workspaceId: scope.workspaceId,
-    });
   }
   return { uploaded, failures };
 }
@@ -531,15 +544,6 @@ async function saveLinqResumeWithRetry(
   );
 }
 
-function isResumeAttachment(filename: string, mimeType: string) {
-  return (
-    mimeType === "application/pdf" ||
-    mimeType ===
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-    /\.(pdf|docx)$/iu.test(filename)
-  );
-}
-
 function filenameFromUrl(url: string) {
   try {
     return decodeURIComponent(
@@ -548,6 +552,11 @@ function filenameFromUrl(url: string) {
   } catch {
     return "resume";
   }
+}
+
+function linqImportErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : "import failed";
+  return message.replace(/https?:\/\/\S+/gu, "<attachment-url>").slice(0, 300);
 }
 
 async function findVerifiedAuthUserIdByPhoneNumber(phoneNumber: string) {

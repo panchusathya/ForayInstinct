@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  normalizeLinqDocument,
   readLinqAttachment,
   retryLinqResumeSave,
 } from "@/lib/linq-resume-import";
@@ -42,5 +43,15 @@ describe("Linq resume import", () => {
       filename: "resume.pdf",
     });
     expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it("recognizes a PDF when Linq provides only generic file metadata", () => {
+    expect(
+      normalizeLinqDocument({
+        bytes: Buffer.from("%PDF-1.7\nresume"),
+        filename: "upload",
+        mimeType: "application/octet-stream",
+      })
+    ).toEqual({ filename: "upload.pdf", mimeType: "application/pdf" });
   });
 });
