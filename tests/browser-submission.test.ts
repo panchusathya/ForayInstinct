@@ -303,8 +303,8 @@ describe("playwright checkpoints observe a submission without final_output", () 
   });
 });
 
-const scrollAdvanceCode = "top: before + window.innerHeight";
-const scrollResetCode = "top: 0";
+const reviewMetricsCode = "maxScroll: Math.max";
+const reviewScrollCode = 'window.scrollTo({ behavior: "instant", top })';
 const maskAddCode = "style.id = styleId";
 const maskRemoveCode = "getElementById(styleId)?.remove()";
 
@@ -333,13 +333,12 @@ describe("the review gate pauses an application before its final submit", () => 
     mocks.captureScreenshot.mockResolvedValue({
       arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer,
     });
-    // Reports one more viewport below the fold, then the bottom of the form.
-    let advances = 0;
     mocks.executePlaywright.mockImplementation(async (_sessionId, { code }) => {
       executedCode.push(code);
-      if (!code.includes(scrollAdvanceCode)) return { success: true };
-      advances += 1;
-      return { result: { atBottom: advances >= 2 }, success: true };
+      if (code.includes(reviewMetricsCode)) {
+        return { result: { maxScroll: 1800 }, success: true };
+      }
+      return { success: true };
     });
   });
 
@@ -358,8 +357,8 @@ describe("the review gate pauses an application before its final submit", () => 
       {} as never
     );
 
-    expect(result).toMatchObject({ captured: 2, status: "awaiting_approval" });
-    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ captured: 3, status: "awaiting_approval" });
+    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(3);
     for (const call of mocks.saveApplicationSubmissionScreenshot.mock.calls) {
       // The role and apply URL travel with the image: the delivering channel
       // captions by name, so a thread with two applications in flight can tell
@@ -382,7 +381,7 @@ describe("the review gate pauses an application before its final submit", () => 
         actions: [
           "role: Staff Engineer",
           "apply_url: https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
-          "review screenshots: 2",
+          "review screenshots: 3",
         ],
         page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review",
         phase: "submission_approval",
@@ -443,15 +442,17 @@ describe("the review gate pauses an application before its final submit", () => 
     );
     expect(removeIndex).toBe(executedCode.length - 1);
     expect(
-      executedCode.filter((code) => code.includes(scrollResetCode))
-    ).toHaveLength(1);
+      executedCode.filter((code) => code.includes(reviewScrollCode))
+    ).toHaveLength(4);
   });
 
-  it("stops capturing at the slice ceiling when the page never reports a bottom", async () => {
+  it("captures the top, middle, and end of a long review form", async () => {
     mocks.executePlaywright.mockImplementation(async (_sessionId, { code }) => {
       executedCode.push(code);
-      if (!code.includes(scrollAdvanceCode)) return { success: true };
-      return { result: { atBottom: false }, success: true };
+      if (code.includes(reviewMetricsCode)) {
+        return { result: { maxScroll: 4200 }, success: true };
+      }
+      return { success: true };
     });
     const { default: requestSubmissionApproval } =
       await import("../agent/subagents/worker/tools/request_submission_approval");
@@ -468,6 +469,9 @@ describe("the review gate pauses an application before its final submit", () => 
     );
 
     expect(result).toMatchObject({ captured: 3 });
+    expect(
+      executedCode.filter((code) => code.includes(reviewScrollCode))
+    ).toHaveLength(4);
   });
 
   it("still gates when no screenshot could be captured", async () => {
@@ -548,8 +552,10 @@ describe("the review gate pauses an application before its final submit", () => 
       if (code.includes(maskAddCode)) {
         return { error: "mask execution rejected", success: false };
       }
-      if (!code.includes(scrollAdvanceCode)) return { success: true };
-      return { result: { atBottom: true }, success: true };
+      if (code.includes(reviewMetricsCode)) {
+        return { result: { maxScroll: 1800 }, success: true };
+      }
+      return { success: true };
     });
     const { default: requestSubmissionApproval } =
       await import("../agent/subagents/worker/tools/request_submission_approval");
@@ -565,8 +571,8 @@ describe("the review gate pauses an application before its final submit", () => 
       {} as never
     );
 
-    expect(result).toMatchObject({ captured: 1, capture_status: "captured" });
-    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ captured: 3, capture_status: "captured" });
+    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(3);
     expect(console.warn).toHaveBeenCalledWith(
       "[vault-screenshot-mask] could not apply",
       expect.objectContaining({ error: "mask execution rejected" })
@@ -580,8 +586,10 @@ describe("the review gate pauses an application before its final submit", () => 
       if (code.includes(maskAddCode)) {
         throw new Error("mask transport unavailable");
       }
-      if (!code.includes(scrollAdvanceCode)) return { success: true };
-      return { result: { atBottom: true }, success: true };
+      if (code.includes(reviewMetricsCode)) {
+        return { result: { maxScroll: 1800 }, success: true };
+      }
+      return { success: true };
     });
     const { default: requestSubmissionApproval } =
       await import("../agent/subagents/worker/tools/request_submission_approval");
@@ -597,8 +605,8 @@ describe("the review gate pauses an application before its final submit", () => 
       {} as never
     );
 
-    expect(result).toMatchObject({ captured: 1, capture_status: "captured" });
-    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ captured: 3, capture_status: "captured" });
+    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(3);
     expect(console.warn).toHaveBeenCalledWith(
       "[vault-screenshot-mask] could not apply",
       expect.objectContaining({ error: "mask transport unavailable" })

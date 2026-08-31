@@ -208,26 +208,29 @@ const { bot, channel, send } = chatSdkChannel({
         const awaitingApproval = (workerResult.data.output.message ?? "")
           .trimStart()
           .startsWith(submissionApprovalPrefix);
+        const caller =
+          session.session.auth?.current ?? session.session.auth?.initiator;
+        // The worker may capture review images correctly but produce a final
+        // message that omits the approval prefix. Claim on every completed
+        // browser worker instead of letting free-form model prose decide
+        // whether the candidate sees the queued review.
+        const delivery =
+          caller && context.thread
+            ? await deliverSubmissionScreenshot(
+                context.thread,
+                scopeFromPrincipal(caller),
+                event.turnId,
+                context.state
+              )
+            : "blocked";
+        // Only retain a retry marker for outcomes known to have an expected
+        // image. Ordinary worker tasks can legitimately have nothing queued.
+        if (delivery !== "delivered" && (submitted || awaitingApproval)) {
+          context.state.pendingSubmissionScreenshot = {
+            turnId: event.turnId,
+          };
+        }
         if (submitted || awaitingApproval) {
-          const caller =
-            session.session.auth?.current ?? session.session.auth?.initiator;
-          const delivery =
-            caller && context.thread
-              ? await deliverSubmissionScreenshot(
-                  context.thread,
-                  scopeFromPrincipal(caller),
-                  event.turnId,
-                  context.state
-                )
-              : "blocked";
-          // Do not let a later model response control whether a candidate can
-          // inspect the form. Keep a retry marker only when the channel could
-          // not deliver it directly (for example, an explicit SMS thread).
-          if (delivery !== "delivered") {
-            context.state.pendingSubmissionScreenshot = {
-              turnId: event.turnId,
-            };
-          }
           // A review pause must not read as a finished application, so the two
           // outcomes get different reactions.
           await reactToCurrentMessage(

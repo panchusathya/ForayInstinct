@@ -29,7 +29,7 @@ describe("job card projection", () => {
     );
   });
 
-  it("clips reasons and ordinalizes the footer", () => {
+  it("keeps internal matching metadata off candidate-facing cards", () => {
     const view = jobCardView(
       {
         company: "Example AI",
@@ -42,12 +42,9 @@ describe("job card projection", () => {
       2,
       3
     );
-    expect(view.reasons).toHaveLength(2);
+    expect(view.reasons).toEqual([]);
     expect(view.footerPosition).toBe("2 of 3");
-    // Letters are tracked with ordinary spaces; the word gap is non-breaking,
-    // because the renderer collapses runs of ordinary spaces and "OPEN MARKET"
-    // would come out as one word.
-    expect(view.sourceLabel).toBe("O P E N\u00a0\u00a0 M A R K E T");
+    expect(view.sourceLabel).toBe("");
     expect(view.applyReply).toBe("apply 2");
   });
 

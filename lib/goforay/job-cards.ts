@@ -8,8 +8,6 @@ const ROLE_SEARCH_TOOL_NAMES = [
 const MAX_TITLE_CHARS = 64;
 const MAX_COMPANY_CHARS = 34;
 const MAX_META_CHARS = 58;
-const MAX_REASON_CHARS = 62;
-const MAX_CARD_REASONS = 2;
 
 /** One role shown to a candidate. JuiceBox cards have a posting id; Exa leads do not. */
 export const goForayJobCardSchema = z.object({
@@ -89,17 +87,6 @@ function clipCardText(text: string, limit: number) {
     : `${value.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
-function spacedCaps(text: string) {
-  let spaced = "";
-  for (const character of text) {
-    // The renderer collapses runs of ordinary spaces, so a wider word gap has
-    // to be non-breaking or "OPEN MARKET" comes out as one word.
-    if (spaced.length > 0) spaced += character === " " ? "\u00a0\u00a0" : " ";
-    if (character !== " ") spaced += character;
-  }
-  return spaced;
-}
-
 function applyReplyLine(index: number) {
   return `apply ${String(index)}`;
 }
@@ -115,15 +102,10 @@ export function jobCardView(
     cleanTitle(card.title, card.company) || "Role",
     MAX_TITLE_CHARS
   );
-  const sourceLabel = clipCardText((card.source_label ?? "").toUpperCase(), 24);
   const meta = clipCardText(
     [card.location, card.seniority].filter(Boolean).join(" · "),
     MAX_META_CHARS
   );
-  const reasons = card.reasons
-    .slice(0, MAX_CARD_REASONS)
-    .map((reason) => clipCardText(reason, MAX_REASON_CHARS))
-    .filter(Boolean);
   return {
     applyLabel: `Apply ${String(index)}`,
     applyReply: applyReplyLine(index),
@@ -135,8 +117,10 @@ export function jobCardView(
     footerPosition:
       total > 1 ? `${String(index)} of ${String(total)}` : "open role",
     meta,
-    reasons,
-    sourceLabel: sourceLabel ? spacedCaps(sourceLabel) : "",
+    // Matching rationale and source-market labels help internal ranking, but
+    // read like system metadata on a candidate-facing card.
+    reasons: [] as string[],
+    sourceLabel: "",
     title,
     via: "via Foray",
   };

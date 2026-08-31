@@ -75,14 +75,17 @@ export async function captureMaskedKernelScreenshot(
 /** Enough slices for a long ATS review page without flooding a phone thread. */
 const maxReviewCaptures = 3;
 
-const reviewScrollResultSchema = z.object({ atBottom: z.boolean() });
+const reviewCaptureMetricsSchema = z.object({
+  maxScroll: z.number().nonnegative(),
+});
 
 /**
  * The candidate has to be able to read the whole form they are approving, and
  * an ATS review page is routinely taller than the viewport. Capture the page in
- * successive viewport-height slices instead of one cropped shot, and hold the
- * vault mask across all of them: masking per capture would unmask the page
- * between shots and could expose an injected password in the next one.
+ * top, middle, and bottom of the review page. This captures the full shape of
+ * a normal ATS form instead of starting wherever the worker happened to stop.
+ * Hold the vault mask across all captures: masking per capture would unmask
+ * the page between shots and could expose an injected password in the next one.
  */
 export async function captureMaskedReviewScreenshots(
   sessionId: string,
@@ -91,10 +94,10 @@ export async function captureMaskedReviewScreenshots(
   const removeMask = await maskVaultFields(sessionId, signal);
   try {
     const captures: Buffer[] = [];
-    for (let capture = 0; capture < maxReviewCaptures; capture += 1) {
+    for (const offset of await reviewCaptureOffsets(sessionId, signal)) {
+      await scrollReviewPageTo(sessionId, offset, signal);
       const png = await captureKernelScreenshot(sessionId, signal);
       if (png.byteLength > 0) captures.push(png);
-      if (await scrolledToReviewBottom(sessionId, signal)) break;
     }
     return captures;
   } finally {
@@ -117,38 +120,46 @@ async function captureKernelScreenshot(
   return Buffer.from(await response.arrayBuffer());
 }
 
-/** Advances one viewport and reports whether the page has nothing left below. */
-async function scrolledToReviewBottom(sessionId: string, signal?: AbortSignal) {
+/** Space at most three review images from the beginning through the end. */
+async function reviewCaptureOffsets(sessionId: string, signal?: AbortSignal) {
   const code = `
 const page = browser.contexts().flatMap((context) => context.pages()).at(-1);
-if (!page) return { atBottom: true };
+if (!page) return { maxScroll: 0 };
 return await page.evaluate(() => {
-  const before = window.scrollY;
-  window.scrollTo({ behavior: "instant", top: before + window.innerHeight });
   return {
-    atBottom:
-      window.scrollY <= before ||
-      window.scrollY + window.innerHeight >=
-        document.documentElement.scrollHeight - 1,
+    maxScroll: Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
   };
 });`;
   const response = await kernel.browsers.playwright
     .execute(sessionId, { code, timeout_sec: 10 }, { signal })
     .catch(() => undefined);
-  const parsed = reviewScrollResultSchema.safeParse(response?.result);
-  // A page that will not report its own scroll state is not worth re-shooting.
-  return parsed.success ? parsed.data.atBottom : true;
+  const parsed = reviewCaptureMetricsSchema.safeParse(response?.result);
+  if (!parsed.success || parsed.data.maxScroll === 0) return [0];
+  const offsets = [0, parsed.data.maxScroll / 2, parsed.data.maxScroll]
+    .map((offset) => Math.round(offset))
+    .filter(
+      (offset, index, values) => index === 0 || offset !== values[index - 1]
+    );
+  return offsets.slice(0, maxReviewCaptures);
 }
 
-async function scrollReviewPageToTop(sessionId: string, signal?: AbortSignal) {
+async function scrollReviewPageTo(
+  sessionId: string,
+  top: number,
+  signal?: AbortSignal
+) {
   const code = `
 const page = browser.contexts().flatMap((context) => context.pages()).at(-1);
 if (!page) return true;
 await page
-  .evaluate(() => window.scrollTo({ behavior: "instant", top: 0 }))
+  .evaluate((top) => window.scrollTo({ behavior: "instant", top }), ${JSON.stringify(top)})
   .catch(() => undefined);
 return true;`;
   await kernel.browsers.playwright
     .execute(sessionId, { code, timeout_sec: 10 }, { signal })
     .catch(() => undefined);
+}
+
+async function scrollReviewPageToTop(sessionId: string, signal?: AbortSignal) {
+  await scrollReviewPageTo(sessionId, 0, signal);
 }

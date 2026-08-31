@@ -208,7 +208,7 @@ describe("Linq message delivery", () => {
 
     expect(post).toHaveBeenCalledExactlyOnceWith({
       markdown:
-        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\n· m&a modeling\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
+        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
     });
   });
 
@@ -372,7 +372,7 @@ describe("Linq message delivery", () => {
     expect(cardPngMocks.renderJobCardPng).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledExactlyOnceWith({
       markdown:
-        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\n· m&a modeling\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
+        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
     });
   });
 
@@ -417,7 +417,7 @@ describe("Linq message delivery", () => {
 
     expect(post).toHaveBeenCalledExactlyOnceWith({
       markdown:
-        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\n· m&a modeling\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
+        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
     });
   });
 
@@ -459,7 +459,7 @@ describe("Linq message delivery", () => {
 
     expect(post).toHaveBeenCalledExactlyOnceWith({
       markdown:
-        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\n· m&a modeling\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
+        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
     });
   });
 
@@ -857,8 +857,7 @@ describe("Linq message delivery", () => {
       sessionContext({ id: "user-1", workspaceId: "workspace-1" })
     );
 
-    // The pause is a `failure` status, so delivery has to be armed off the
-    // blocker prefix rather than a successful worker result.
+    // Review delivery is independent of the worker's final prose.
     expect(post).toHaveBeenNthCalledWith(1, {
       files: [
         {
@@ -883,6 +882,43 @@ describe("Linq message delivery", () => {
     });
     expect(post).toHaveBeenNthCalledWith(3, {
       markdown: "ready to submit staff engineer at acme. reply yes.",
+    });
+  });
+
+  it("delivers a queued review even when the worker returns a text dump", async () => {
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        {
+          applyUrl: "https://example.com/apply",
+          id: 1,
+          kind: "review",
+          mimeType: "image/png",
+          png: Buffer.from("review"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
+        },
+      ]
+    );
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+
+    await trackWorkerCancellation(
+      submissionApprovalResult(
+        "I filled the application. Here are the details I entered."
+      ),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      files: [
+        {
+          data: Buffer.from("review"),
+          filename: "application-review-1.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown:
+        "Before I submit staff engineer. Reply *yes* to submit, or tell me what to change.",
     });
   });
 
@@ -1083,19 +1119,9 @@ describe("Linq message delivery", () => {
     );
   });
 
-  it("leaves an ordinary worker failure without a screenshot post", async () => {
+  it("checks for a queued review after an ordinary worker failure", async () => {
     screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
-      [
-        {
-          applyUrl: "https://example.com/apply",
-          id: 1,
-          kind: "review",
-          mimeType: "image/png",
-          png: Buffer.from("top"),
-          role: "Staff Engineer",
-          sessionId: "browser-1",
-        },
-      ]
+      []
     );
     const { context, post } = handlerContext("message-1", {}, "iMessage");
 
@@ -1112,7 +1138,10 @@ describe("Linq message delivery", () => {
 
     expect(
       screenshotMocks.claimPendingApplicationSubmissionScreenshots
-    ).not.toHaveBeenCalled();
+    ).toHaveBeenCalledExactlyOnceWith({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+    });
     expect(post).toHaveBeenCalledExactlyOnceWith({
       markdown: "when can you start?",
     });
