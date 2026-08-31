@@ -105,19 +105,24 @@ Linq, not in this repository, so it is not created by a deploy and its absence
 is silent: the tapback simply does nothing. Check it, then enable it:
 
 ```bash
-vercel link && vercel env pull   # supplies LINQ_CONNECTOR and a Vercel OIDC token
-pnpm linq:reactions              # report, exits non-zero if missing
-pnpm linq:reactions --apply      # subscribe
+vercel connect list                             # find the linq connector uid
+LINQ_ACCESS_TOKEN=$(vercel connect token <uid>) pnpm linq:reactions
+LINQ_ACCESS_TOKEN=$(vercel connect token <uid>) pnpm linq:reactions --apply
 ```
 
-The script mints the same Connect app token the channel uses, so it reads the
-account the deployment actually talks to. **Do not substitute a personal Linq
-dashboard key for a Connect-managed line.** Connect provisions its own Linq
-line, so a dashboard key authenticates successfully and then lists a different
-account's subscriptions — which looks exactly like the webhook never having been
-registered, even while inbound iMessages arrive normally. `LINQ_API_KEY` is
-honored only alongside `LINQ_WEBHOOK_SECRET`, which is direct mode (a Linq
-sandbox account), matching how the channel itself chooses credentials.
+The token has to belong to the account the deployment talks to. **Do not
+substitute a personal Linq dashboard key for a Connect-managed line.** Connect
+provisions its own Linq line, so a dashboard key authenticates successfully and
+then lists a different account's subscriptions — which looks exactly like the
+webhook never having been registered, even while inbound iMessages arrive
+normally. `LINQ_API_KEY` is therefore honored only alongside
+`LINQ_WEBHOOK_SECRET`, which is direct mode (a Linq sandbox account), matching
+how the channel itself chooses credentials.
+
+Setting `LINQ_CONNECTOR` instead lets the script mint the token itself, the same
+way the channel does — but that variable is typically set only in the production
+environment, so a development `vercel env pull` will not include it. The script
+reads `.env.local` as well as the shell, since `vercel env pull` writes there.
 
 If the report says these credentials list no subscriptions, check whether
 inbound messages still work before treating it as an outage. If Foray replies to

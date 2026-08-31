@@ -28,6 +28,19 @@
 import { getToken } from "@vercel/connect";
 import { z } from "zod";
 
+// `vercel env pull` writes .env.local, and plain `node` does not read it, so
+// without this the token that was just pulled is invisible here. Node's own
+// loader rather than `@next/env`, which is CommonJS and has no named export to
+// import from an ESM script. It does not override an already-set variable, so
+// anything exported in the shell still wins.
+for (const file of [".env.local", ".env"]) {
+  try {
+    process.loadEnvFile(file);
+  } catch {
+    // Absent is normal; the credential check below reports what is missing.
+  }
+}
+
 const BASE_URL =
   process.env.LINQ_API_V3_BASE_URL ?? "https://api.linqapp.com/api/partner";
 const WANTED = ["reaction.added", "reaction.removed"] as const;
@@ -45,8 +58,16 @@ const listSchema = z.object({ data: z.array(subscriptionSchema).default([]) });
  * script always talks to the account the deployment talks to.
  */
 async function resolveApiKey() {
+  const suppliedToken = process.env.LINQ_ACCESS_TOKEN;
   const directKey = process.env.LINQ_API_KEY;
   const connector = process.env.LINQ_CONNECTOR;
+  // An already-minted Connect token, for when this cannot reach Connect itself
+  // (no OIDC token to hand, or LINQ_CONNECTOR lives only in the production
+  // environment): `vercel connect token <connector-uid>` prints one.
+  if (suppliedToken) {
+    console.log("using LINQ_ACCESS_TOKEN as supplied");
+    return suppliedToken;
+  }
   // Direct mode wins only when it is the mode the app is in: the channel also
   // requires the signing secret before it uses a raw key.
   if (directKey && process.env.LINQ_WEBHOOK_SECRET) {
@@ -73,11 +94,25 @@ async function resolveApiKey() {
   }
   if (directKey) {
     throw new Error(
-      "LINQ_API_KEY is set but LINQ_WEBHOOK_SECRET is not, so the app is not in direct mode. Set LINQ_CONNECTOR (run `vercel env pull`) so this script reads the same Linq account the deployment uses."
+      [
+        "LINQ_API_KEY is set but LINQ_WEBHOOK_SECRET is not, so the app is not in direct mode and a personal dashboard key would read the wrong Linq account.",
+        "",
+        "Use the deployment's own credentials instead:",
+        "  vercel connect list                     # find the linq connector uid",
+        "  vercel connect token <connector-uid>    # print a token",
+        "then set LINQ_ACCESS_TOKEN to it, or set LINQ_CONNECTOR and let this mint one.",
+      ].join("\n")
     );
   }
   throw new Error(
-    "Set LINQ_CONNECTOR (run `vercel env pull` to get it, plus a Vercel OIDC token), or LINQ_API_KEY with LINQ_WEBHOOK_SECRET for a direct-mode line."
+    [
+      "No Linq credentials for the deployment's account.",
+      "",
+      "LINQ_CONNECTOR is commonly set only in the production environment, so a development `vercel env pull` will not include it. Either way:",
+      "  vercel connect list                     # find the linq connector uid",
+      "  vercel connect token <connector-uid>    # print a token",
+      "then set LINQ_ACCESS_TOKEN to it. Or set LINQ_CONNECTOR yourself and this mints a token, which needs VERCEL_OIDC_TOKEN (vercel link writes one into .env.local).",
+    ].join("\n")
   );
 }
 
