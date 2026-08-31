@@ -101,6 +101,7 @@ const pendingJobCardsSchema = z.object({
 const pendingSubmissionScreenshotSchema = z.object({
   turnId: z.string(),
 });
+type SubmissionScreenshotDelivery = "blocked" | "delivered" | "nothing-pending";
 type LinqReplyTarget = {
   message: string;
   role?: GoForayJobCard;
@@ -157,13 +158,15 @@ const { bot, channel, send } = chatSdkChannel({
       const caller =
         session.session.auth?.current ?? session.session.auth?.initiator;
       if (!caller) return;
-      const delivered = await deliverSubmissionScreenshot(
+      const delivery = await deliverSubmissionScreenshot(
         context.thread,
         scopeFromPrincipal(caller),
         event.turnId,
         context.state
       );
-      if (delivered) context.state.pendingSubmissionScreenshot = undefined;
+      if (delivery === "delivered") {
+        context.state.pendingSubmissionScreenshot = undefined;
+      }
     },
     async "authorization.required"(event, context) {
       // Eve's default handler posts Vercel Connect's device-pairing code and
@@ -208,7 +211,7 @@ const { bot, channel, send } = chatSdkChannel({
         if (submitted || awaitingApproval) {
           const caller =
             session.session.auth?.current ?? session.session.auth?.initiator;
-          const delivered =
+          const delivery =
             caller && context.thread
               ? await deliverSubmissionScreenshot(
                   context.thread,
@@ -216,11 +219,11 @@ const { bot, channel, send } = chatSdkChannel({
                   event.turnId,
                   context.state
                 )
-              : false;
+              : "blocked";
           // Do not let a later model response control whether a candidate can
           // inspect the form. Keep a retry marker only when the channel could
           // not deliver it directly (for example, an explicit SMS thread).
-          if (!delivered) {
+          if (delivery !== "delivered") {
             context.state.pendingSubmissionScreenshot = {
               turnId: event.turnId,
             };
@@ -310,7 +313,7 @@ const { bot, channel, send } = chatSdkChannel({
       if (pendingScreenshot.success) {
         const caller =
           session.session.auth?.current ?? session.session.auth?.initiator;
-        const delivered =
+        const delivery =
           caller &&
           (await deliverSubmissionScreenshot(
             context.thread,
@@ -318,7 +321,7 @@ const { bot, channel, send } = chatSdkChannel({
             event.turnId,
             context.state
           ));
-        if (delivered) {
+        if (delivery === "delivered") {
           context.state.pendingSubmissionScreenshot = undefined;
         }
       }
@@ -573,6 +576,18 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
   const replyTarget = await resolveLinqReplyTarget(message, thread);
   const inbound = await prepareInboundMessage(message, thread, replyTarget);
 
+  // A worker can capture the review and then fail before its parent emits a
+  // result. Channel lifecycle recovery cannot post in that case when a cold
+  // webhook has not yet restored the serialized thread. The inbound webhook
+  // always has the real thread, so flush the newest pending review here before
+  // the next model call has a chance to fail.
+  await deliverSubmissionScreenshot(
+    thread,
+    inbound.scope,
+    `linq:inbound:${message.id}:review-recovery`,
+    {}
+  );
+
   try {
     await bot.getAdapter("linq").markRead(thread.id, message.id);
   } catch {
@@ -690,6 +705,7 @@ async function prepareInboundMessage(
     // Already carries the phone-derived principal id and workspace: see
     // linqPrincipalFromAuthor, which a tapback shares.
     auth,
+    scope,
   };
 }
 
@@ -906,12 +922,19 @@ async function deliverSubmissionScreenshot(
   scope: ReturnType<typeof scopeFromPrincipal>,
   turnId: string,
   state: Record<string, unknown>
-) {
+): Promise<SubmissionScreenshotDelivery> {
   // Linq does not always include a transport label in the completion turn.
   // Try the attachment unless the transport is explicitly SMS: an unknown
   // thread can still be iMessage, whereas returning would leave a successfully
   // captured review stranded forever.
-  if (!canDeliverSubmissionScreenshot(thread, state)) return false;
+  const service = rememberLinqService(thread, state);
+  if (service === "SMS") {
+    console.warn("[submission-screenshot] delivery blocked by transport", {
+      service,
+      workspaceId: scope.workspaceId,
+    });
+    return "blocked";
+  }
   // Delivery used to fail silently, exactly as job cards did. A candidate asked
   // to approve a form they cannot see is the worst failure this channel has, so
   // it must never have to be inferred from an absence of logs. `warn`, not
@@ -925,8 +948,14 @@ async function deliverSubmissionScreenshot(
     });
     return undefined;
   });
-  if (screenshots === undefined) return false;
-  if (screenshots.length === 0) return true;
+  if (screenshots === undefined) return "blocked";
+  if (screenshots.length === 0) {
+    console.warn("[submission-screenshot] nothing pending", {
+      service: service || "unknown",
+      workspaceId: scope.workspaceId,
+    });
+    return "nothing-pending";
+  }
   console.warn("[submission-screenshot] delivering", {
     count: screenshots.length,
     role: roleLabel(screenshots[0]?.role),
@@ -984,7 +1013,7 @@ async function deliverSubmissionScreenshot(
     }).catch(() => undefined);
   }
 
-  if (undelivered.length === 0) return true;
+  if (undelivered.length === 0) return "delivered";
   await releaseApplicationSubmissionScreenshots(scope, undelivered).catch(
     (error: unknown) => {
       console.error("[submission-screenshot] could not release a batch", {
@@ -1012,7 +1041,7 @@ async function deliverSubmissionScreenshot(
       })
       .catch(() => undefined);
   }
-  return false;
+  return "blocked";
 }
 
 /** Rows written before migration 0017 carry an empty role, not a missing one. */
@@ -1163,11 +1192,4 @@ function isRichLinqThread(
     ? rememberLinqService(thread, state)
     : linqServiceFromUnknown(thread.toJSON());
   return isRichLinqService(service);
-}
-
-function canDeliverSubmissionScreenshot(
-  thread: { toJSON: () => unknown },
-  state: Record<string, unknown>
-) {
-  return rememberLinqService(thread, state) !== "SMS";
 }

@@ -5,7 +5,8 @@ export function normalizeLinqService(value: unknown) {
   const key = value.trim().toLowerCase();
   if (key === "imessage") return "iMessage";
   if (key === "rcs") return "RCS";
-  if (key === "sms" || key === "mms") return "SMS";
+  if (key === "sms") return "SMS";
+  if (key === "mms") return "MMS";
   return "";
 }
 
@@ -37,5 +38,5 @@ export function linqServiceFromUnknown(value: unknown): string {
 }
 
 export function isRichLinqService(service: string) {
-  return service === "iMessage" || service === "RCS";
+  return service === "iMessage" || service === "MMS" || service === "RCS";
 }

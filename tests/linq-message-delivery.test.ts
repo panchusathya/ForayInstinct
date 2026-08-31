@@ -150,6 +150,23 @@ describe("Linq message delivery", () => {
     expect(state.pendingSubmissionScreenshot).toBeUndefined();
   });
 
+  it("keeps the retry marker when a worker result races the screenshot write", async () => {
+    const { context, post, state } = handlerContext("message-1", {
+      pendingSubmissionScreenshot: { turnId: "interrupted-turn" },
+    });
+
+    await recoverPendingScreenshot(
+      { sequence: 0, turnId: "retry-turn" },
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(post).not.toHaveBeenCalled();
+    expect(state.pendingSubmissionScreenshot).toEqual({
+      turnId: "interrupted-turn",
+    });
+  });
+
   it("delivers Exa role cards with their apply URL instead of the model reply", async () => {
     const { context, post } = handlerContext();
 

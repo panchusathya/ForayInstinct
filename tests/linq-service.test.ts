@@ -11,6 +11,7 @@ describe("linq service", () => {
     expect(normalizeLinqService("imessage")).toBe("iMessage");
     expect(normalizeLinqService("RCS")).toBe("RCS");
     expect(normalizeLinqService("sms")).toBe("SMS");
+    expect(normalizeLinqService("mms")).toBe("MMS");
     expect(normalizeLinqService("")).toBe("");
     expect(normalizeLinqService("auto")).toBe("");
   });
@@ -45,6 +46,7 @@ describe("linq service", () => {
     ).toBe("");
     expect(isRichLinqService("")).toBe(false);
     expect(isRichLinqService("iMessage")).toBe(true);
+    expect(isRichLinqService("MMS")).toBe(true);
     expect(isRichLinqService("SMS")).toBe(false);
   });
 });

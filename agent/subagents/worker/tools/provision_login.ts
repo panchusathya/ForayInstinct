@@ -78,7 +78,7 @@ export default defineTool({
       input.identifier_type === "email" ? identity.email : identity.phone;
     if (!identifierValue) {
       throw new Error(
-        `The candidate has no verified ${input.identifier_type} to register with.`
+        `Needs user input: the candidate needs a verified ${input.identifier_type} to register with.`
       );
     }
 
