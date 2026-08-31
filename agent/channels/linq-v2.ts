@@ -271,10 +271,7 @@ const { bot, channel, send } = chatSdkChannel({
       const pendingScreenshot = pendingSubmissionScreenshotSchema.safeParse(
         context.state.pendingSubmissionScreenshot
       );
-      if (
-        pendingScreenshot.success &&
-        pendingScreenshot.data.turnId === event.turnId
-      ) {
+      if (pendingScreenshot.success) {
         context.state.pendingSubmissionScreenshot = undefined;
         const caller =
           session.session.auth?.current ?? session.session.auth?.initiator;
@@ -872,10 +869,11 @@ async function deliverSubmissionScreenshot(
   turnId: string,
   state: Record<string, unknown>
 ) {
-  // Deliberately before the claim: a thread can read as SMS on an early turn
-  // and as iMessage once the service is stamped, so leaving the rows pending is
-  // what lets a later turn deliver them. Claiming here would burn them.
-  if (!isRichLinqThread(thread, state)) return;
+  // Linq does not always include a transport label in the completion turn.
+  // Try the attachment unless the transport is explicitly SMS: an unknown
+  // thread can still be iMessage, whereas returning would leave a successfully
+  // captured review stranded forever.
+  if (!canDeliverSubmissionScreenshot(thread, state)) return;
   // Delivery used to fail silently, exactly as job cards did. A candidate asked
   // to approve a form they cannot see is the worst failure this channel has, so
   // it must never have to be inferred from an absence of logs. `warn`, not
@@ -1125,4 +1123,11 @@ function isRichLinqThread(
     ? rememberLinqService(thread, state)
     : linqServiceFromUnknown(thread.toJSON());
   return isRichLinqService(service);
+}
+
+function canDeliverSubmissionScreenshot(
+  thread: { toJSON: () => unknown },
+  state: Record<string, unknown>
+) {
+  return rememberLinqService(thread, state) !== "SMS";
 }

@@ -716,7 +716,7 @@ describe("Linq message delivery", () => {
     });
   });
 
-  it("keeps SMS on the text confirmation when a screenshot is available", async () => {
+  it("keeps explicitly identified SMS on the text confirmation when a screenshot is available", async () => {
     screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
       [
         {
@@ -730,7 +730,7 @@ describe("Linq message delivery", () => {
         },
       ]
     );
-    const { context, post } = handlerContext();
+    const { context, post } = handlerContext("message-1", {}, "SMS");
 
     await trackWorkerCancellation(
       submittedApplicationResult(),
@@ -815,6 +815,93 @@ describe("Linq message delivery", () => {
     });
     expect(post).toHaveBeenNthCalledWith(3, {
       markdown: "ready to submit staff engineer at acme. reply yes.",
+    });
+  });
+
+  it("delivers a review when the worker result and coordinator completion use different turns", async () => {
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        {
+          applyUrl: "https://example.com/apply",
+          id: 1,
+          kind: "review",
+          mimeType: "image/png",
+          png: Buffer.from("review"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
+        },
+      ]
+    );
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+    const workerResult = submissionApprovalResult();
+    workerResult.turnId = "worker-turn";
+
+    await trackWorkerCancellation(
+      workerResult,
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    await deliverCompletedMessage(
+      completedEvent({
+        message: "Ready to submit Staff Engineer at Acme. Reply yes.",
+        turnId: "coordinator-turn",
+      }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(post).toHaveBeenNthCalledWith(1, {
+      files: [
+        {
+          data: Buffer.from("review"),
+          filename: "application-review-1.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown:
+        "Before I submit staff engineer. Reply *yes* to submit, or tell me what to change.",
+    });
+  });
+
+  it("tries to deliver a review when Linq omits the transport label", async () => {
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        {
+          applyUrl: "https://example.com/apply",
+          id: 1,
+          kind: "review",
+          mimeType: "image/png",
+          png: Buffer.from("review"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
+        },
+      ]
+    );
+    const { context, post } = handlerContext();
+
+    await trackWorkerCancellation(
+      submissionApprovalResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    await deliverCompletedMessage(
+      completedEvent({
+        message: "Ready to submit Staff Engineer at Acme. Reply yes.",
+      }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(post).toHaveBeenNthCalledWith(1, {
+      files: [
+        {
+          data: Buffer.from("review"),
+          filename: "application-review-1.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown:
+        "Before I submit staff engineer. Reply *yes* to submit, or tell me what to change.",
     });
   });
 
