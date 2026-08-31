@@ -40,7 +40,10 @@ import {
   retryLinqResumeSave,
 } from "@/lib/linq-resume-import";
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
-import { consumePendingApplicationSubmissionScreenshots } from "@/db/services/application-submission-screenshots";
+import {
+  claimPendingApplicationSubmissionScreenshots,
+  releaseApplicationSubmissionScreenshots,
+} from "@/db/services/application-submission-screenshots";
 import { normalizeTaskStatus } from "@/lib/task-completion";
 import { linkCandidate, recordConversationMessage } from "@/lib/goforay/bridge";
 import { saveCandidateDocument } from "@/db/services/candidate-documents";
@@ -394,24 +397,37 @@ async function releaseLinqCardApply(threadId: string, messageId: string) {
  * shape a message carries, so the same auth derivation applies — and without
  * `attributes.workspaceId` the worker would run with no profile and no resume.
  */
-function linqPrincipalFromAuthor(author: Message["author"]) {
+function linqPrincipalFromAuthor(input: { author: Message["author"] }) {
   // `defaultLinqAuth` reads only `message.author`, and a reaction carries the
-  // same `Author`, so this is the whole input it needs.
-  const auth = defaultLinqAuth({ author });
-  const authorUserName: unknown = author.userName;
+  // same `Author`, so this is the whole input it needs — which is what lets a
+  // text and a tapback share one derivation.
+  const auth = defaultLinqAuth(input);
+  const authorUserName: unknown = input.author.userName;
   const phoneNumber =
     typeof authorUserName === "string"
       ? normalizeAuthPhoneNumber(authorUserName)
       : undefined;
-  const scope = phoneNumber
-    ? accessScopeForPhone(phoneNumber)
-    : accessScopeForUser(auth.principalId);
+  const legacyScope = accessScopeForUser(auth.principalId);
+  // A Linq text is possession of the phone number. Do not split storage based
+  // on whether the optional web account happened to be found this turn.
+  const scope = phoneNumber ? accessScopeForPhone(phoneNumber) : legacyScope;
   return {
     auth: {
       ...auth,
-      attributes: { ...auth.attributes, workspaceId: scope.workspaceId },
-      principalId: auth.principalId,
+      attributes: {
+        ...auth.attributes,
+        workspaceId: scope.workspaceId,
+      },
+      // The phone is the candidate's durable identity, so iMessage must forward
+      // the same principal id the web channel and the schedules do. Anything
+      // else gives Vercel Connect a different subject over iMessage, and a
+      // Google grant made on the web is invisible here: every Gmail call then
+      // asks the candidate to authorize Google again. This lives here, shared,
+      // because it was fixed for a text and missed for a tapback.
+      principalId: scope.userId,
     },
+    legacyScope,
+    phoneNumber,
     scope,
   };
 }
@@ -440,7 +456,7 @@ async function dispatchLinqJobCardTapback(event: ReactionEvent) {
 
   let principal: ReturnType<typeof linqPrincipalFromAuthor>;
   try {
-    principal = linqPrincipalFromAuthor(event.user);
+    principal = linqPrincipalFromAuthor({ author: event.user });
   } catch (error) {
     console.error("[goforay] tapback from an unusable handle", {
       message: error instanceof Error ? error.message : String(error),
@@ -549,19 +565,11 @@ async function prepareInboundMessage(
   thread: Thread,
   replyTarget: LinqReplyTarget | undefined
 ) {
-  const auth = defaultLinqAuth(message);
-  const authorUserName: unknown = message.author.userName;
-  const phoneNumber =
-    typeof authorUserName === "string"
-      ? normalizeAuthPhoneNumber(authorUserName)
-      : undefined;
+  const { auth, legacyScope, phoneNumber, scope } =
+    linqPrincipalFromAuthor(message);
   const verifiedUser = phoneNumber
     ? await findVerifiedAuthUserIdByPhoneNumber(phoneNumber)
     : undefined;
-  const legacyScope = accessScopeForUser(auth.principalId);
-  // A Linq text is possession of the phone number. Do not split storage based
-  // on whether the optional web account happened to be found this turn.
-  const scope = phoneNumber ? accessScopeForPhone(phoneNumber) : legacyScope;
   if (phoneNumber) {
     await adoptLegacyWorkspace(scope, [
       legacyScope,
@@ -589,8 +597,14 @@ async function prepareInboundMessage(
             : []),
         ],
       });
-    } catch {
-      // A missing or ambiguous CRM candidate must not block a normal text.
+    } catch (error) {
+      // A missing or ambiguous CRM candidate must not block a normal text, but
+      // it must not be invisible either: swallowed silently, a permanently
+      // broken link looks identical to a candidate who simply never linked.
+      console.warn("[goforay] candidate link unavailable", {
+        message: error instanceof Error ? error.message : String(error),
+        workspaceId: scope.workspaceId,
+      });
     }
   }
   const importedResumes = await importLinqResumes(message, scope);
@@ -638,19 +652,9 @@ async function prepareInboundMessage(
             ]
           : []),
     ],
-    auth: {
-      ...auth,
-      attributes: {
-        ...auth.attributes,
-        workspaceId: scope.workspaceId,
-      },
-      // The phone is the candidate's durable identity, so iMessage must forward
-      // the same principal id the web channel and the schedules do. Anything
-      // else gives Vercel Connect a different subject over iMessage, and a
-      // Google grant made on the web is invisible here: every Gmail call then
-      // asks the candidate to authorize Google again.
-      principalId: scope.userId,
-    },
+    // Already carries the phone-derived principal id and workspace: see
+    // linqPrincipalFromAuthor, which a tapback shares.
+    auth,
   };
 }
 
@@ -868,23 +872,45 @@ async function deliverSubmissionScreenshot(
   turnId: string,
   state: Record<string, unknown>
 ) {
+  // Deliberately before the claim: a thread can read as SMS on an early turn
+  // and as iMessage once the service is stamped, so leaving the rows pending is
+  // what lets a later turn deliver them. Claiming here would burn them.
   if (!isRichLinqThread(thread, state)) return;
-  try {
-    const screenshots =
-      await consumePendingApplicationSubmissionScreenshots(scope);
-    // A review is scroll-stitched across several captures, so post each one in
-    // page order rather than only the last. The batch can also carry an older
-    // undelivered proof, so number the review pages among themselves.
-    const reviewPages = screenshots.filter(
-      (screenshot) => screenshot.kind === "review"
-    ).length;
-    let reviewPage = 0;
-    for (const [position, screenshot] of screenshots.entries()) {
-      const review = screenshot.kind === "review";
-      if (review) reviewPage += 1;
+  // Delivery used to fail silently, exactly as job cards did. A candidate asked
+  // to approve a form they cannot see is the worst failure this channel has, so
+  // it must never have to be inferred from an absence of logs. `warn`, not
+  // `info`: the log search does not index info lines.
+  const screenshots = await claimPendingApplicationSubmissionScreenshots(
+    scope
+  ).catch((error: unknown) => {
+    console.error("[submission-screenshot] could not claim a batch", {
+      message: error instanceof Error ? error.message : String(error),
+      workspaceId: scope.workspaceId,
+    });
+    return [];
+  });
+  if (screenshots.length === 0) return;
+  console.warn("[submission-screenshot] delivering", {
+    count: screenshots.length,
+    role: roleLabel(screenshots[0]?.role),
+    sessionId: screenshots[0]?.sessionId,
+  });
+
+  // A review is scroll-stitched across several captures, so post each one in
+  // page order rather than only the last. The batch is one session's, so the
+  // review pages number among themselves and the caption can name the role.
+  const reviewPages = screenshots.filter(
+    (screenshot) => screenshot.kind === "review"
+  ).length;
+  const undelivered: number[] = [];
+  let reviewPage = 0;
+  for (const [position, screenshot] of screenshots.entries()) {
+    const review = screenshot.kind === "review";
+    if (review) reviewPage += 1;
+    try {
       await thread.post({
         markdown: review
-          ? `Before I submit — page ${String(reviewPage)} of ${String(reviewPages)}. Reply *yes* to submit, or tell me what to change.`
+          ? `${reviewCaption(screenshot.role, reviewPage, reviewPages)} Reply *yes* to submit, or tell me what to change.`
           : "",
         files: [
           {
@@ -896,20 +922,91 @@ async function deliverSubmissionScreenshot(
           },
         ],
       });
-      void recordConversationMessage({
-        scope,
-        conversationId: `linq:${scope.userId}`,
-        channel: "linq",
-        direction: "outbound",
-        body: review
-          ? "application review screenshot"
-          : "application submitted screenshot",
-        sourceMessageId: `linq:${turnId}:${screenshot.kind}-screenshot:${String(position)}`,
-      }).catch(() => undefined);
+    } catch (error) {
+      // Claiming stamps `deliveredAt` up front so two turns cannot post the
+      // same image. That stamp has to come back off when the post fails, or the
+      // candidate is asked to approve a form that was never shown to them.
+      undelivered.push(screenshot.id);
+      console.error("[submission-screenshot] post failed", {
+        kind: screenshot.kind,
+        message: error instanceof Error ? error.message : String(error),
+        role: roleLabel(screenshot.role),
+        workspaceId: scope.workspaceId,
+      });
+      continue;
     }
-  } catch {
-    // The coordinator's text confirmation remains useful if media upload fails.
+    void recordConversationMessage({
+      scope,
+      conversationId: `linq:${scope.userId}`,
+      channel: "linq",
+      direction: "outbound",
+      body: review
+        ? "application review screenshot"
+        : "application submitted screenshot",
+      sourceMessageId: `linq:${turnId}:${screenshot.kind}-screenshot:${String(position)}`,
+    }).catch(() => undefined);
   }
+
+  if (undelivered.length === 0) return;
+  await releaseApplicationSubmissionScreenshots(scope, undelivered).catch(
+    (error: unknown) => {
+      console.error("[submission-screenshot] could not release a batch", {
+        count: undelivered.length,
+        message: error instanceof Error ? error.message : String(error),
+        workspaceId: scope.workspaceId,
+      });
+    }
+  );
+  // The candidate is being asked to approve something they cannot fully see.
+  // Say so instead of letting the coordinator's "reply yes" stand on its own —
+  // and say it for a partial review too, which is the worse case: approving a
+  // form having been shown only the half of it that uploaded.
+  const lostReviewPages = screenshots.filter(
+    (screenshot) =>
+      screenshot.kind === "review" && undelivered.includes(screenshot.id)
+  ).length;
+  if (lostReviewPages > 0) {
+    await thread
+      .post({
+        markdown: reviewFallbackMessage(
+          screenshots[0]?.role,
+          lostReviewPages < reviewPages
+        ),
+      })
+      .catch(() => undefined);
+  }
+}
+
+/** Rows written before migration 0017 carry an empty role, not a missing one. */
+function roleLabel(role: string | undefined) {
+  return role?.trim() ? role : "unknown";
+}
+
+/** Names the application when the row carries it; rows predating 0017 do not. */
+function reviewCaption(role: string, page: number, pages: number) {
+  const name = role.trim();
+  const counter =
+    pages > 1 ? ` — page ${String(page)} of ${String(pages)}` : "";
+  return name
+    ? `Before I submit ${name.toLowerCase()}${counter}.`
+    : `Before I submit${counter}.`;
+}
+
+/**
+ * `partial` is the dangerous case: some pages arrived, so the candidate has a
+ * form in front of them and no reason to think they are missing any of it.
+ */
+function reviewFallbackMessage(role: string | undefined, partial: boolean) {
+  const name = role?.trim();
+  const subject = name
+    ? `the filled form for ${name.toLowerCase()}`
+    : "the filled form";
+  return [
+    partial
+      ? `heads up, i could only send you part of ${subject}.`
+      : `i could not send you ${subject}.`,
+    "tell me to walk you through it and i will read the answers back before anything is submitted.",
+  ].join("\n\n");
 }
 
 async function deliverJobCards(

@@ -90,6 +90,7 @@
     "lint": "turbo run lint:app",
     "lint:app": "oxlint . --deny-warnings",
     "lint:fix": "oxlint . --fix",
+    "linq:reactions": "node --experimental-strip-types scripts/linq-reaction-subscription.ts",
     "start": "turbo run start:app",
     "start:app": "next start",
     "test": "turbo run test:app",

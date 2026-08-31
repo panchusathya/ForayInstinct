@@ -97,6 +97,24 @@ from contacts that are not on this allowlist. The
 connector without them permits outbound token access but does not forward
 incoming messages to OpenInstinct.
 
+#### Enable thumbs-up to apply
+
+A thumbs-up tapback on a role card is the candidate applying to that role, but
+only if Linq actually sends the reaction webhook. That subscription lives in
+Linq, not in this repository, so it is not created by a deploy and its absence
+is silent: the tapback simply does nothing. Check it, then enable it:
+
+```bash
+LINQ_API_KEY=<key-from-the-linq-dashboard> pnpm linq:reactions          # report, exits non-zero if missing
+LINQ_API_KEY=<key-from-the-linq-dashboard> pnpm linq:reactions --apply  # subscribe
+```
+
+This is deliberately a one-off rather than part of `pnpm build:vercel`: it
+changes live provider configuration, so running it on every deploy would make a
+Linq outage fail the build. Production reaches Linq through Vercel Connect and
+has no `LINQ_API_KEY` of its own, so take a key from the Linq dashboard for this
+step. Re-run the report after changing the webhook subscription in Linq.
+
 ## Google Workspace connection
 
 OpenInstinct can use a user's Gmail, Calendar, and read-only Contacts through a

@@ -41,6 +41,54 @@ export function describeBrowserSessionFailure(error: unknown) {
 
 export const browserSessionNotOwnedMessage = "Browser session not found.";
 
+/**
+ * A Playwright call that returned rather than threw, reporting a browser that is
+ * no longer there.
+ *
+ * Kernel answers a reclaimed session with an HTTP 410/404, which
+ * `describeBrowserSessionFailure` already classifies. This is the other shape:
+ * the request succeeds, `success` is `false`, and the only detail is a message
+ * string (`PlaywrightExecuteResponse.error`) — so a browser that died *during*
+ * execution reads as an ordinary code failure and the worker retries it.
+ *
+ * Matched on text only because the API offers no code here, and kept
+ * deliberately narrow: these phrases mean the target is gone, not that a
+ * selector missed.
+ */
+export function isDeadBrowserExecutionError(error: string | undefined) {
+  if (!error) return false;
+  return /target (?:page|frame|context)?\s*(?:closed|crashed)|browser has (?:been )?(?:closed|disconnected)|session (?:closed|gone|no longer exists)|browser is not connected/iu.test(
+    error
+  );
+}
+
+/**
+ * Which layer rejected a browser call, for the checkpoint trail.
+ *
+ * One copy: this used to be reimplemented in `manage_browsers`,
+ * `execute_playwright_code`, and `computer_action`, and the three had already
+ * drifted — one returned `undefined` for a non-Error, one had no `selector`
+ * branch — so the same failure was recorded differently depending on which tool
+ * saw it.
+ */
+export function diagnosticErrorCode(error: unknown) {
+  // No error at all is not a code. `manage_browsers` passes
+  // `response.error`, which is absent on a successful route, and stamping that
+  // as a failure would mark every resolved Workday route as broken.
+  if (error === undefined || error === null || error === "") return undefined;
+  if (typeof error !== "string" && !(error instanceof Error)) {
+    return "playwright_execution";
+  }
+  const message = typeof error === "string" ? error : error.message;
+  if (/timeout/iu.test(message)) return "timeout";
+  if (/407|proxy.*auth|wrong_password|auth failed/iu.test(message)) {
+    return "proxy_auth";
+  }
+  if (/chrome-error|net::/iu.test(message)) return "navigation";
+  if (/selector|locator/iu.test(message)) return "selector";
+  return "playwright_execution";
+}
+
 /** Kernel has reclaimed the session, whatever the local row still says. */
 export function isKernelSessionDead(
   failure: ReturnType<typeof describeBrowserSessionFailure>

@@ -3,6 +3,8 @@ import {
   browserSessionEndedError,
   browserSessionNotOwnedMessage,
   describeBrowserSessionFailure,
+  diagnosticErrorCode,
+  isDeadBrowserExecutionError,
   isKernelSessionDead,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
 
@@ -34,6 +36,54 @@ describe("browser session failure classification", () => {
     ).toBeUndefined();
     expect(describeBrowserSessionFailure(undefined)).toBeUndefined();
     expect(describeBrowserSessionFailure("Playwright failed")).toBeUndefined();
+  });
+
+  it("recognises a dead browser reported as a soft execution failure", () => {
+    // Kernel answers a reclaimed session with a 410, which the classifier above
+    // handles. A browser that dies *during* execution comes back as an HTTP 200
+    // carrying `success: false` and a message string, so it read as an ordinary
+    // code failure and the worker retried against a browser that was gone.
+    expect(
+      isDeadBrowserExecutionError(
+        "Target page, context or browser has been closed"
+      )
+    ).toBe(true);
+    expect(isDeadBrowserExecutionError("Browser has been closed")).toBe(true);
+    expect(
+      isDeadBrowserExecutionError("browser session no longer exists")
+    ).toBe(true);
+
+    // Kept narrow on purpose: an ordinary failure must stay retryable, or the
+    // worker throws away a live browser over a missed selector.
+    expect(
+      isDeadBrowserExecutionError("locator.click: Timeout 5000ms exceeded.")
+    ).toBe(false);
+    expect(
+      isDeadBrowserExecutionError("strict mode violation: 2 elements match")
+    ).toBe(false);
+    expect(isDeadBrowserExecutionError(undefined)).toBe(false);
+  });
+
+  it("classifies a failure the same way whichever tool saw it", () => {
+    // Three tools each had their own copy and they had already drifted, so the
+    // same error landed on the checkpoint trail under different codes.
+    expect(diagnosticErrorCode(new Error("Timeout 5000ms exceeded"))).toBe(
+      "timeout"
+    );
+    expect(diagnosticErrorCode("locator.click failed")).toBe("selector");
+    expect(diagnosticErrorCode(new Error("net::ERR_ABORTED"))).toBe(
+      "navigation"
+    );
+    expect(diagnosticErrorCode(new Error("407 proxy auth required"))).toBe(
+      "proxy_auth"
+    );
+    expect(diagnosticErrorCode({ unexpected: true })).toBe(
+      "playwright_execution"
+    );
+    // A successful Playwright route carries no `error`, and stamping that as a
+    // failure would mark every resolved Workday route as broken on the trail.
+    expect(diagnosticErrorCode(undefined)).toBeUndefined();
+    expect(diagnosticErrorCode("")).toBeUndefined();
   });
 
   it("treats only a Kernel-side death as reclaimed", () => {

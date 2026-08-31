@@ -106,9 +106,14 @@ export async function recordSubmissionReviewEvidence(
   const captures = await captureMaskedReviewScreenshots(sessionId, signal);
   for (const png of captures) {
     await saveApplicationSubmissionScreenshot(scope, sessionId, {
+      // The delivering channel captions by role, so the image has to carry the
+      // assignment: a thread with two applications in flight cannot tell them
+      // apart from the session id alone.
+      applyUrl: assignment.applyUrl,
       kind: "review",
       page: browserPageLocation(page),
       png,
+      role: assignment.role,
     });
   }
   await recordBrowserRunCheckpoint(scope, sessionId, {

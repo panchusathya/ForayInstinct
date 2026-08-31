@@ -19,13 +19,22 @@ export async function listPresentedRoles(scope: AccessScope, limit = 300) {
       .select({
         postingId: goforayWorkspacePresentedRoles.postingId,
         roleKey: goforayWorkspacePresentedRoles.roleKey,
+        url: goforayWorkspacePresentedRoles.url,
       })
       .from(goforayWorkspacePresentedRoles)
       .where(eq(goforayWorkspacePresentedRoles.workspaceId, scope.workspaceId))
       .orderBy(desc(goforayWorkspacePresentedRoles.createdAt))
       .limit(limit);
     return {
-      keys: new Set(rows.map((row) => row.roleKey)),
+      // Both identities, not just the primary key. A row stored as
+      // `posting:<id>` also holds its normalized URL, and that is the only form
+      // a public hit for the same posting can be recognised by. Reading one
+      // column and writing two is what let an already-shown role come back.
+      keys: new Set(
+        rows.flatMap((row) =>
+          row.url ? [row.roleKey, `url:${row.url}`] : [row.roleKey]
+        )
+      ),
       postingIds: rows
         .map((row) => row.postingId)
         .filter((postingId) => postingId.length > 0),

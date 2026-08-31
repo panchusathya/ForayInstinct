@@ -11,7 +11,8 @@ const previewDeployment = process.env.VERCEL_ENV === "preview";
 // Vercel evaluates route modules while building a preview. Previews do not
 // receive production database credentials, but a Pool can be constructed with
 // this inert URL without attempting a connection. Production remains strict.
-const previewDatabaseUrl = "postgresql://preview:preview@localhost:5432/preview";
+const previewDatabaseUrl =
+  "postgresql://preview:preview@localhost:5432/preview";
 
 const requiredValue = z
   .string()

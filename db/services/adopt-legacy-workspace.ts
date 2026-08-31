@@ -80,7 +80,8 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
       .limit(1);
     if (
       legacyProfile[0] &&
-      (!targetProfile[0] || legacyProfile[0].updatedAt > targetProfile[0].updatedAt)
+      (!targetProfile[0] ||
+        legacyProfile[0].updatedAt > targetProfile[0].updatedAt)
     ) {
       await transaction
         .delete(candidateProfiles)
@@ -154,7 +155,10 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
               encryptedSecrets.namespace,
               encryptedSecrets.id,
             ],
-            set: { encryptedValue: secret.encryptedValue, updatedAt: secret.updatedAt },
+            set: {
+              encryptedValue: secret.encryptedValue,
+              updatedAt: secret.updatedAt,
+            },
           });
       }
     }
@@ -178,7 +182,9 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
     await transaction
       .update(applicationSubmissionScreenshots)
       .set({ workspaceId: target.workspaceId })
-      .where(eq(applicationSubmissionScreenshots.workspaceId, legacy.workspaceId));
+      .where(
+        eq(applicationSubmissionScreenshots.workspaceId, legacy.workspaceId)
+      );
     await transaction
       .update(vaultItems)
       .set({ workspaceId: target.workspaceId })
@@ -196,7 +202,10 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
         .where(eq(workspaces.id, legacy.workspaceId))
         .limit(1),
     ]);
-    if (!targetWorkspace[0]?.kernelProfileId && legacyWorkspace[0]?.kernelProfileId) {
+    if (
+      !targetWorkspace[0]?.kernelProfileId &&
+      legacyWorkspace[0]?.kernelProfileId
+    ) {
       await transaction
         .update(workspaces)
         .set({ kernelProfileId: legacyWorkspace[0].kernelProfileId })
@@ -211,7 +220,9 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
           orgId: goforayLinks.orgId,
         })
         .from(goforayLinks)
-        .where(eq(goforayLinks.userId, legacy.userId.slice("better-auth:".length)))
+        .where(
+          eq(goforayLinks.userId, legacy.userId.slice("better-auth:".length))
+        )
         .limit(1);
       if (oldLink[0]) {
         await transaction
