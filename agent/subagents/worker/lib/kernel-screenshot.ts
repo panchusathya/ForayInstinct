@@ -1,35 +1,54 @@
 import { z } from "zod";
 import { kernel } from "@/lib/kernel";
+import {
+  vaultScreenshotMaskCss,
+  vaultScreenshotMaskStyleId,
+} from "@/lib/vault-screenshot-mask";
 
-export async function maskVaultFields(sessionId: string, signal?: AbortSignal) {
-  const styleId = "vault-screenshot-mask";
-  const selector = '[data-vault-secret="true"]';
+type VaultMaskRemoval = (() => Promise<void>) & { readonly applied: boolean };
+
+export async function maskVaultFields(
+  sessionId: string,
+  signal?: AbortSignal
+): Promise<VaultMaskRemoval> {
   const addCode = `
 for (const currentContext of browser.contexts()) {
   for (const currentPage of currentContext.pages()) {
     for (const frame of currentPage.frames()) {
-      await frame.evaluate(({ styleId, selector }) => {
+      await frame.evaluate(({ styleId, css }) => {
         if (document.getElementById(styleId)) return;
         const style = document.createElement("style");
         style.id = styleId;
-        style.textContent = selector + " { color: transparent !important; text-shadow: 0 0 8px black !important; -webkit-text-security: disc !important; }";
+        style.textContent = css;
         document.documentElement.append(style);
-      }, ${JSON.stringify({ selector, styleId })}).catch(() => undefined);
+      }, ${JSON.stringify({ css: vaultScreenshotMaskCss, styleId: vaultScreenshotMaskStyleId })}).catch(() => undefined);
     }
   }
 }
 return true;`;
-  await kernel.browsers.playwright.execute(
-    sessionId,
-    { code: addCode, timeout_sec: 10 },
-    { signal }
-  );
-  return async () => {
+  const response = await kernel.browsers.playwright
+    .execute(sessionId, { code: addCode, timeout_sec: 10 }, { signal })
+    .catch((error: unknown) => {
+      console.warn("[vault-screenshot-mask] could not apply", {
+        error: error instanceof Error ? error.message : "execution_failed",
+        session_id: sessionId,
+      });
+      return undefined;
+    });
+  const applied = response?.success === true;
+  if (!applied && response !== undefined) {
+    console.warn("[vault-screenshot-mask] could not apply", {
+      error: response.error ?? "execution_failed",
+      session_id: sessionId,
+    });
+  }
+  const remove = async () => {
+    if (!applied) return;
     const removeCode = `
 for (const currentContext of browser.contexts()) {
   for (const currentPage of currentContext.pages()) {
     for (const frame of currentPage.frames()) {
-      await frame.evaluate((styleId) => document.getElementById(styleId)?.remove(), ${JSON.stringify(styleId)}).catch(() => undefined);
+      await frame.evaluate((styleId) => document.getElementById(styleId)?.remove(), ${JSON.stringify(vaultScreenshotMaskStyleId)}).catch(() => undefined);
     }
   }
 }
@@ -38,6 +57,7 @@ return true;`;
       .execute(sessionId, { code: removeCode, timeout_sec: 10 }, { signal })
       .catch(() => undefined);
   };
+  return Object.assign(remove, { applied });
 }
 
 export async function captureMaskedKernelScreenshot(

@@ -9,7 +9,11 @@ import {
 } from "@/agent/subagents/worker/lib/captcha-solver";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
-import { handleBrowserToolFailure } from "@/agent/subagents/worker/lib/challenge-diagnostics";
+import {
+  browserExecutionFailureDetails,
+  diagnoseBrowserExecutionFailure,
+  handleBrowserToolFailure,
+} from "@/agent/subagents/worker/lib/challenge-diagnostics";
 import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoints";
 import { kernel } from "@/lib/kernel";
 
@@ -31,7 +35,7 @@ export default defineTool({
     // invocation is recorded even when the session is already gone. "The solver
     // was never called" and "the solver was called too late" are different
     // bugs, and every other line in this tool is downstream of a live session.
-    console.info("[captcha-solver] invoked", {
+    console.warn("[captcha-solver] invoked", {
       browser_session_id: input.session_id,
       workspace_id: scope.workspaceId,
     });
@@ -49,24 +53,38 @@ export default defineTool({
     }
     const signal = context.abortSignal;
 
-    const inspected = normalizeCaptchaInspectResult(
-      await kernel.browsers.playwright.execute(
-        input.session_id,
-        { code: captchaInspectCode, timeout_sec: 30 },
-        { signal }
-      )
+    const inspectResponse = await executeCaptchaPlaywright(
+      input.session_id,
+      captchaInspectCode,
+      "inspect",
+      scope,
+      signal
     );
+    if (inspectResponse && !inspectResponse.success) {
+      await diagnoseBrowserExecutionFailure({
+        error: inspectResponse.error,
+        scope,
+        sessionId: input.session_id,
+        signal,
+        tool: "solve_captcha",
+        trigger: "solve_captcha_inspect_failed",
+      });
+    }
+    const inspected = inspectResponse
+      ? normalizeCaptchaInspectResult(inspectResponse)
+      : undefined;
     if (!inspected) {
       await checkpoint(scope, input.session_id, {
         action: "inspect",
-        errorCode: "playwright_execution",
+        errorCode: browserExecutionFailureDetails(inspectResponse?.error)
+          .errorCode,
         phase: "captcha",
         state: "execution_failed",
       });
       return { kinds: [], state: "execution_failed" };
     }
 
-    console.info("[captcha-solver] inspect", {
+    console.warn("[captcha-solver] inspect", {
       browser_session_id: input.session_id,
       kernel_declined: inspected.kernelDeclined,
       kernel_messages: inspected.kernelMessages,
@@ -94,7 +112,7 @@ export default defineTool({
 
     if (inspected.clicked) {
       if (inspected.kernelDeclined) {
-        console.info("[captcha-solver] kernel declined visible hCaptcha", {
+        console.warn("[captcha-solver] kernel declined visible hCaptcha", {
           browser_session_id: input.session_id,
           kernel_messages: inspected.kernelMessages,
         });
@@ -112,13 +130,26 @@ export default defineTool({
       );
     }
 
-    const completed = normalizeCaptchaCompleteResult(
-      await kernel.browsers.playwright.execute(
-        input.session_id,
-        { code: captchaCompleteCode, timeout_sec: 30 },
-        { signal }
-      )
+    const completeResponse = await executeCaptchaPlaywright(
+      input.session_id,
+      captchaCompleteCode,
+      "complete",
+      scope,
+      signal
     );
+    if (completeResponse && !completeResponse.success) {
+      await diagnoseBrowserExecutionFailure({
+        error: completeResponse.error,
+        scope,
+        sessionId: input.session_id,
+        signal,
+        tool: "solve_captcha",
+        trigger: "solve_captcha_complete_failed",
+      });
+    }
+    const completed = completeResponse
+      ? normalizeCaptchaCompleteResult(completeResponse)
+      : undefined;
     const state = !completed
       ? ("execution_failed" as const)
       : completed.token
@@ -160,7 +191,7 @@ export default defineTool({
         ...inspected.kernelMessages,
       ],
     });
-    console.info("[captcha-solver] complete", {
+    console.warn("[captcha-solver] complete", {
       browser_session_id: input.session_id,
       click: inspected.clicked,
       injected: completed?.injected,
@@ -185,4 +216,35 @@ async function checkpoint(
       });
     }
   );
+}
+
+async function executeCaptchaPlaywright(
+  sessionId: string,
+  code: string,
+  phase: "inspect" | "complete",
+  scope: Awaited<ReturnType<typeof requireWorkerScope>>,
+  signal?: AbortSignal
+) {
+  try {
+    return await kernel.browsers.playwright.execute(
+      sessionId,
+      { code, timeout_sec: 30 },
+      { signal }
+    );
+  } catch (error: unknown) {
+    const surfaced = await handleBrowserToolFailure({
+      error,
+      scope,
+      sessionId,
+      signal,
+      tool: "solve_captcha",
+      trigger: `solve_captcha_${phase}_threw`,
+    });
+    console.warn(`[captcha-solver] ${phase} failed`, {
+      browser_session_id: sessionId,
+      ...browserExecutionFailureDetails(surfaced),
+      workspace_id: scope.workspaceId,
+    });
+    return undefined;
+  }
 }

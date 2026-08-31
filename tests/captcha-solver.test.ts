@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       (_sessionId: string, _input: unknown, _options: unknown) => Promise<void>
     >(),
+  deleteBrowserSession:
+    vi.fn<(_scope: unknown, _sessionId: string) => Promise<void>>(),
   executePlaywright: vi.fn<
     (
       _sessionId: string,
@@ -49,6 +51,10 @@ vi.mock("@/db/services/browser-run-checkpoints", () => ({
   recordBrowserRunCheckpoint: mocks.recordBrowserRunCheckpoint,
 }));
 
+vi.mock("@/db/services/browsers", () => ({
+  deleteBrowserSession: mocks.deleteBrowserSession,
+}));
+
 vi.mock("@/lib/kernel", () => ({
   kernel: {
     browsers: {
@@ -61,6 +67,7 @@ vi.mock("@/lib/kernel", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "info").mockImplementation(() => undefined);
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
   mocks.requireWorkerScope.mockResolvedValue({
     userId: "user-1",
     workspaceId: "workspace-1",
@@ -69,6 +76,7 @@ beforeEach(() => {
     sessionId: "browser-1",
   });
   mocks.recordBrowserRunCheckpoint.mockResolvedValue();
+  mocks.deleteBrowserSession.mockResolvedValue();
   mocks.clickMouse.mockResolvedValue();
   mocks.executePlaywright
     .mockResolvedValueOnce({
@@ -149,6 +157,96 @@ describe("checkbox CAPTCHA solver", () => {
         success: false,
       })
     ).toBeUndefined();
+  });
+
+  it("returns an execution failure and redacted Kernel reason when inspect is rejected", async () => {
+    mocks.executePlaywright.mockReset();
+    mocks.executePlaywright
+      .mockResolvedValueOnce({
+        error: "Timeout while reading token=browser-secret",
+        success: false,
+      })
+      .mockResolvedValueOnce({ error: "probe unavailable", success: false });
+
+    const result = await solveCaptcha.execute(
+      { session_id: "browser-1" },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state.
+      {} as never
+    );
+
+    expect(result).toEqual({ kinds: [], state: "execution_failed" });
+    expect(mocks.recordBrowserRunCheckpoint).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      "browser-1",
+      expect.objectContaining({
+        errorCode: "timeout",
+        phase: "captcha",
+        state: "execution_failed",
+      })
+    );
+    expect(console.warn).toHaveBeenCalledWith(
+      "[playwright] execution failed",
+      expect.objectContaining({
+        error: "Timeout while reading token=[redacted]",
+        tool: "solve_captcha",
+      })
+    );
+  });
+
+  it("reconciles a browser that returns a dead-session failure", async () => {
+    mocks.executePlaywright.mockReset();
+    mocks.executePlaywright.mockResolvedValueOnce({
+      error: "Target page has been closed",
+      success: false,
+    });
+
+    const result = await solveCaptcha.execute(
+      { session_id: "browser-1" },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state.
+      {} as never
+    );
+
+    expect(result).toEqual({ kinds: [], state: "execution_failed" });
+    expect(mocks.deleteBrowserSession).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      "browser-1"
+    );
+  });
+
+  it("returns an execution failure when completion throws instead of propagating a retryable tool error", async () => {
+    mocks.executePlaywright.mockReset();
+    mocks.executePlaywright
+      .mockResolvedValueOnce({
+        result: {
+          kernelDeclined: false,
+          kernelMessages: [],
+          kinds: ["hcaptcha"],
+          token: false,
+          url: "https://jobs.example/apply",
+        },
+        success: true,
+      })
+      .mockRejectedValueOnce(new Error("Target page has been closed"));
+
+    const result = await solveCaptcha.execute(
+      { session_id: "browser-1" },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({ state: "execution_failed" });
+    expect(mocks.recordBrowserRunCheckpoint).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      "browser-1",
+      expect.objectContaining({
+        phase: "captcha",
+        state: "execution_failed",
+      })
+    );
+    expect(console.warn).toHaveBeenCalledWith(
+      "[captcha-solver] complete failed",
+      expect.objectContaining({ error: "Target page has been closed" })
+    );
   });
 
   it("clicks with Kernel computer controls after Kernel declines auto-solve", async () => {

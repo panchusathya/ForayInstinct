@@ -1,4 +1,8 @@
 import type { AutofillClaim } from "../vault-autofill-protocol";
+import {
+  vaultScreenshotMaskCss,
+  vaultScreenshotMaskStyleId,
+} from "@/lib/vault-screenshot-mask";
 
 const nativeLoginPurposes = ["sign_in", "sign_up"] as const;
 export type NativeLoginPurpose = (typeof nativeLoginPurposes)[number];
@@ -212,6 +216,13 @@ export const nativeLoginControlInspectionExpression = `(() => {
 
 export const nativeLoginFillFunctionDeclaration = `function(value) {
   if (!(this instanceof HTMLInputElement)) return false;
+  const maskStyleId = ${JSON.stringify(vaultScreenshotMaskStyleId)};
+  if (!document.getElementById(maskStyleId)) {
+    const maskStyle = document.createElement("style");
+    maskStyle.id = maskStyleId;
+    maskStyle.textContent = ${JSON.stringify(vaultScreenshotMaskCss)};
+    document.documentElement.append(maskStyle);
+  }
   this.dataset.vaultSecret = "true";
   this.click();
   this.focus();

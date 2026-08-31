@@ -488,9 +488,120 @@ describe("the review gate pauses an application before its final submit", () => 
       {} as never
     );
 
-    expect(result).toMatchObject({ captured: 0, status: "awaiting_approval" });
+    expect(result).toMatchObject({
+      captured: 0,
+      capture_status: "unavailable",
+      status: "awaiting_approval",
+    });
     // With no screenshot, the candidate needs the live view to check the form.
     expect(JSON.stringify(result)).toContain("live-view URL");
     expect(mocks.saveApplicationSubmissionScreenshot).not.toHaveBeenCalled();
+  });
+
+  it("still pauses and records zero review screenshots when capture throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.captureScreenshot.mockRejectedValueOnce(
+      new Error("capture unavailable")
+    );
+    const { default: requestSubmissionApproval } =
+      await import("../agent/subagents/worker/tools/request_submission_approval");
+
+    const result = await requestSubmissionApproval.execute(
+      {
+        apply_url:
+          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+        role: "Staff Engineer",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({
+      captured: 0,
+      capture_status: "unavailable",
+      status: "awaiting_approval",
+    });
+    expect(JSON.stringify(result)).toContain("could not be sent");
+    expect(mocks.recordBrowserRunCheckpoint).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      "browser-1",
+      {
+        action: "review",
+        actions: [
+          "role: Staff Engineer",
+          "apply_url: https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+          "review screenshots: 0",
+        ],
+        page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review",
+        phase: "submission_approval",
+        state: "awaiting_approval",
+      }
+    );
+    expect(mocks.saveApplicationSubmissionScreenshot).not.toHaveBeenCalled();
+  });
+
+  it("captures the review when the secondary screenshot mask is rejected", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.executePlaywright.mockImplementation(async (_sessionId, { code }) => {
+      executedCode.push(code);
+      if (code.includes(maskAddCode)) {
+        return { error: "mask execution rejected", success: false };
+      }
+      if (!code.includes(scrollAdvanceCode)) return { success: true };
+      return { result: { atBottom: true }, success: true };
+    });
+    const { default: requestSubmissionApproval } =
+      await import("../agent/subagents/worker/tools/request_submission_approval");
+
+    const result = await requestSubmissionApproval.execute(
+      {
+        apply_url:
+          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+        role: "Staff Engineer",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({ captured: 1, capture_status: "captured" });
+    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledOnce();
+    expect(console.warn).toHaveBeenCalledWith(
+      "[vault-screenshot-mask] could not apply",
+      expect.objectContaining({ error: "mask execution rejected" })
+    );
+  });
+
+  it("captures the review when the secondary screenshot mask throws", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.executePlaywright.mockImplementation(async (_sessionId, { code }) => {
+      executedCode.push(code);
+      if (code.includes(maskAddCode)) {
+        throw new Error("mask transport unavailable");
+      }
+      if (!code.includes(scrollAdvanceCode)) return { success: true };
+      return { result: { atBottom: true }, success: true };
+    });
+    const { default: requestSubmissionApproval } =
+      await import("../agent/subagents/worker/tools/request_submission_approval");
+
+    const result = await requestSubmissionApproval.execute(
+      {
+        apply_url:
+          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+        role: "Staff Engineer",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({ captured: 1, capture_status: "captured" });
+    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledOnce();
+    expect(console.warn).toHaveBeenCalledWith(
+      "[vault-screenshot-mask] could not apply",
+      expect.objectContaining({ error: "mask transport unavailable" })
+    );
   });
 });

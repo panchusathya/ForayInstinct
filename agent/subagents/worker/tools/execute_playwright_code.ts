@@ -7,10 +7,8 @@ import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/brow
 import {
   browserSessionEndedError,
   diagnosticErrorCode,
-  forgetDeadBrowserSession,
+  diagnoseBrowserExecutionFailure,
   handleBrowserToolFailure,
-  isDeadBrowserExecutionError,
-  logChallengeProbe,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
 
 const inputSchema = z.object({
@@ -56,11 +54,16 @@ export default defineTool({
       });
     }
 
-    // A call that returned rather than threw can still be reporting a browser
-    // that is gone. Handled outside the catch above so reconciling it does not
-    // also fire the challenge probe against a session that no longer exists.
-    const dead =
-      !response.success && isDeadBrowserExecutionError(response.error);
+    const executionFailure = response.success
+      ? undefined
+      : await diagnoseBrowserExecutionFailure({
+          error: response.error,
+          scope,
+          sessionId: input.session_id,
+          signal: context.abortSignal,
+          tool: "execute_playwright_code",
+          trigger: "playwright_execution_failed",
+        });
     await recordBrowserActionCheckpoint(
       scope,
       input.session_id,
@@ -68,38 +71,18 @@ export default defineTool({
         action: "execute",
         errorCode: response.success
           ? undefined
-          : dead
+          : executionFailure?.sessionEnded
             ? "session_gone"
-            : "playwright_execution",
+            : executionFailure?.errorCode,
         phase: "playwright",
         state: response.success ? "completed" : "failed",
       },
       context.abortSignal
     );
-    if (dead) {
-      console.warn("[browser-session] unusable", {
-        browser_session_id: input.session_id,
-        reason: "execution_reported_dead",
-        tool: "execute_playwright_code",
-        workspace_id: scope.workspaceId,
-      });
-      await forgetDeadBrowserSession(scope, input.session_id);
+    if (executionFailure?.sessionEnded) {
       // The model sees only the error text, and "code failed" reads as worth
       // retrying. Say the session is unrecoverable instead.
       throw browserSessionEndedError(input.session_id);
-    }
-    if (!response.success) {
-      console.warn("[playwright] execution failed", {
-        browser_session_id: input.session_id,
-        error: response.error?.slice(0, 500) ?? "unknown",
-        workspace_id: scope.workspaceId,
-      });
-      await logChallengeProbe({
-        sessionId: input.session_id,
-        signal: context.abortSignal,
-        trigger: "playwright_execution_failed",
-        workspaceId: scope.workspaceId,
-      });
     }
     return response;
   },

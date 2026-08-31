@@ -5,9 +5,14 @@ import { serializePaymentCard } from "../lib/manager/payment-card";
 import {
   classifyNativeLoginControl,
   loginTokensForPurpose,
+  nativeLoginFillFunctionDeclaration,
   selectNativeLoginFills,
   type NativeLoginControlDescriptor,
 } from "../lib/manager/server/kernel-login-autofill";
+import {
+  vaultScreenshotMaskCss,
+  vaultScreenshotMaskStyleId,
+} from "../lib/vault-screenshot-mask";
 import {
   buildNativeAutofillPayload,
   nativeAutofillTokens,
@@ -54,6 +59,18 @@ const addressSurface = surface("postal-address", [
 ]);
 
 describe("vault browser autofill", () => {
+  it("installs the same vault mask while filling a native login control", () => {
+    expect(nativeLoginFillFunctionDeclaration).toContain(
+      JSON.stringify(vaultScreenshotMaskStyleId)
+    );
+    expect(nativeLoginFillFunctionDeclaration).toContain(
+      JSON.stringify(vaultScreenshotMaskCss)
+    );
+    expect(nativeLoginFillFunctionDeclaration).toContain(
+      'this.dataset.vaultSecret = "true"'
+    );
+  });
+
   it("uses the encrypted local vault instead of a development card fixture", async () => {
     const card = {
       account: "Visa · •••• 1111",

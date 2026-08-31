@@ -57,7 +57,7 @@ export const browserSessionNotOwnedMessage = "Browser session not found.";
  */
 export function isDeadBrowserExecutionError(error: string | undefined) {
   if (!error) return false;
-  return /target (?:page|frame|context)?\s*(?:closed|crashed)|browser has (?:been )?(?:closed|disconnected)|session (?:closed|gone|no longer exists)|browser is not connected/iu.test(
+  return /target (?:page|frame|context)?\s*(?:has been )?(?:closed|crashed)|browser has (?:been )?(?:closed|disconnected)|session (?:closed|gone|no longer exists)|browser is not connected/iu.test(
     error
   );
 }
@@ -87,6 +87,36 @@ export function diagnosticErrorCode(error: unknown) {
   if (/chrome-error|net::/iu.test(message)) return "navigation";
   if (/selector|locator/iu.test(message)) return "selector";
   return "playwright_execution";
+}
+
+/**
+ * Keep returned Kernel failures useful in production without copying secrets
+ * from a browser request into logs. Kernel can include a quoted token, cookie,
+ * or URL query value in an otherwise helpful rejection message.
+ */
+export function browserExecutionFailureDetails(error: unknown) {
+  const raw =
+    typeof error === "string"
+      ? error
+      : error instanceof Error
+        ? error.message
+        : undefined;
+  const message = raw
+    ?.replace(
+      /((?:password|token|secret|authorization|cookie)\s*[:=]\s*["']?)[^\s,"']+/giu,
+      "$1[redacted]"
+    )
+    .replace(
+      /([?&](?:access_token|token|key|password|secret))=[^&\s]+/giu,
+      "$1=[redacted]"
+    )
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 500);
+  return {
+    error: message === undefined || message === "" ? "unknown" : message,
+    errorCode: diagnosticErrorCode(error) ?? "playwright_execution",
+  };
 }
 
 /** Kernel has reclaimed the session, whatever the local row still says. */
@@ -166,6 +196,47 @@ export async function handleBrowserToolFailure(input: {
 }
 
 /**
+ * A Kernel execution can return `success: false` rather than throw. Treat it
+ * as the same observability boundary as a thrown browser failure while keeping
+ * its raw response out of callers and logs.
+ */
+export async function diagnoseBrowserExecutionFailure(input: {
+  readonly error: string | undefined;
+  readonly scope: AccessScope;
+  readonly sessionId: string;
+  readonly signal?: AbortSignal;
+  readonly tool: string;
+  readonly trigger: string;
+}) {
+  const details = browserExecutionFailureDetails(input.error);
+  const sessionEnded = isDeadBrowserExecutionError(input.error);
+  console.warn("[playwright] execution failed", {
+    browser_session_id: input.sessionId,
+    error: details.error,
+    error_code: sessionEnded ? "session_gone" : details.errorCode,
+    tool: input.tool,
+    workspace_id: input.scope.workspaceId,
+  });
+  if (sessionEnded) {
+    console.warn("[browser-session] unusable", {
+      browser_session_id: input.sessionId,
+      reason: "execution_reported_dead",
+      tool: input.tool,
+      workspace_id: input.scope.workspaceId,
+    });
+    await forgetDeadBrowserSession(input.scope, input.sessionId);
+  } else {
+    await logChallengeProbe({
+      sessionId: input.sessionId,
+      signal: input.signal,
+      trigger: input.trigger,
+      workspaceId: input.scope.workspaceId,
+    });
+  }
+  return { ...details, sessionEnded };
+}
+
+/**
  * Records whether a challenge widget was on screen at a moment the worker could
  * not make progress. The probe is read-only, and its own failure is the other
  * half of the answer: a `session_gone` here means the session died before any
@@ -178,16 +249,16 @@ export async function logChallengeProbe(input: {
   readonly workspaceId: string;
 }) {
   try {
-    const probe = normalizeCaptchaProbeResult(
-      await kernel.browsers.playwright.execute(
-        input.sessionId,
-        { code: captchaProbeCode, timeout_sec: 10 },
-        { signal: input.signal }
-      )
+    const response = await kernel.browsers.playwright.execute(
+      input.sessionId,
+      { code: captchaProbeCode, timeout_sec: 10 },
+      { signal: input.signal }
     );
+    const probe = normalizeCaptchaProbeResult(response);
     if (!probe) {
       console.warn("[challenge-probe] page could not be observed", {
         browser_session_id: input.sessionId,
+        ...browserExecutionFailureDetails(response.error),
         trigger: input.trigger,
         workspace_id: input.workspaceId,
       });

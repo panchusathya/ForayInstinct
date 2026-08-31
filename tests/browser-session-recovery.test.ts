@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   browserSessionEndedError,
   browserSessionNotOwnedMessage,
+  browserExecutionFailureDetails,
   describeBrowserSessionFailure,
   diagnosticErrorCode,
   isDeadBrowserExecutionError,
@@ -84,6 +85,18 @@ describe("browser session failure classification", () => {
     // failure would mark every resolved Workday route as broken on the trail.
     expect(diagnosticErrorCode(undefined)).toBeUndefined();
     expect(diagnosticErrorCode("")).toBeUndefined();
+  });
+
+  it("keeps a returned Kernel reason useful without logging credentials", () => {
+    expect(
+      browserExecutionFailureDetails(
+        "locator timeout token=secret-value at https://example.com/?key=abc"
+      )
+    ).toEqual({
+      error:
+        "locator timeout token=[redacted] at https://example.com/?key=[redacted]",
+      errorCode: "timeout",
+    });
   });
 
   it("treats only a Kernel-side death as reclaimed", () => {

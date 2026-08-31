@@ -103,19 +103,13 @@ export async function recordSubmissionReviewEvidence(
     browserSessionId: sessionId,
     signal,
   }).catch(() => undefined);
-  const captures = await captureMaskedReviewScreenshots(sessionId, signal);
-  for (const png of captures) {
-    await saveApplicationSubmissionScreenshot(scope, sessionId, {
-      // The delivering channel captions by role, so the image has to carry the
-      // assignment: a thread with two applications in flight cannot tell them
-      // apart from the session id alone.
-      applyUrl: assignment.applyUrl,
-      kind: "review",
-      page: browserPageLocation(page),
-      png,
-      role: assignment.role,
-    });
-  }
+  const captures = await captureAndSaveReviewScreenshots(
+    scope,
+    sessionId,
+    assignment,
+    page,
+    signal
+  );
   await recordBrowserRunCheckpoint(scope, sessionId, {
     action: "review",
     // The coordinator matches a paused worker to the posting under discussion
@@ -135,6 +129,37 @@ export async function recordSubmissionReviewEvidence(
     });
   });
   return captures.length;
+}
+
+async function captureAndSaveReviewScreenshots(
+  scope: AccessScope,
+  sessionId: string,
+  assignment: { applyUrl: string; role: string },
+  page: string | undefined,
+  signal?: AbortSignal
+) {
+  try {
+    const captures = await captureMaskedReviewScreenshots(sessionId, signal);
+    for (const png of captures) {
+      await saveApplicationSubmissionScreenshot(scope, sessionId, {
+        // The delivering channel captions by role, so the image has to carry the
+        // assignment: a thread with two applications in flight cannot tell them
+        // apart from the session id alone.
+        applyUrl: assignment.applyUrl,
+        kind: "review",
+        page: browserPageLocation(page),
+        png,
+        role: assignment.role,
+      });
+    }
+    return captures;
+  } catch (error: unknown) {
+    console.error("[submission-approval] capture failed", {
+      error: evidenceErrorMessage(error),
+      session_id: sessionId,
+    });
+    return [];
+  }
 }
 
 function evidenceErrorMessage(error: unknown) {

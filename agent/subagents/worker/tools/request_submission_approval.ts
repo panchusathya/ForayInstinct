@@ -13,6 +13,7 @@ const inputSchema = z.object({
 
 const outputSchema = z.object({
   captured: z.number(),
+  capture_status: z.enum(["captured", "unavailable"]),
   next_action: z.string(),
   status: z.literal("awaiting_approval"),
 });
@@ -34,10 +35,11 @@ export default defineTool({
       );
       return {
         captured,
+        capture_status: captured > 0 ? "captured" : "unavailable",
         next_action:
           captured > 0
             ? "Call final_output with `failure` and a message beginning `Needs submission approval:` naming the role, the apply URL, and what will be submitted. Do not activate the submit control until the coordinator resumes you with the candidate's approval."
-            : "No screenshot could be captured. Still call final_output with `failure` and a message beginning `Needs submission approval:`, and include the browser live-view URL so the candidate can check the form directly. Do not submit unreviewed.",
+            : "No screenshot could be captured. Still call final_output with `failure` and a message beginning `Needs submission approval:`; include the browser live-view URL and say that the filled form could not be sent but you can walk the candidate through the answers. Do not submit unreviewed.",
         status: "awaiting_approval",
       };
     } catch (error: unknown) {
