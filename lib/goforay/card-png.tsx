@@ -1,4 +1,3 @@
-import { ImageResponse } from "next/og";
 import { fetchEmployerLogo } from "./card-logo";
 import { NEUTRAL_PALETTE } from "./card-palette";
 import { jobCardFilename, jobCardView, type GoForayJobCard } from "./job-cards";
@@ -15,6 +14,11 @@ export async function renderJobCardPng(
   total: number
 ) {
   try {
+    // Eve cannot load `next/og` (extensionless subpath). The compiled Node
+    // entry is a real file, and a dynamic import keeps it off the authored
+    // channel's startup graph.
+    const { ImageResponse } =
+      await import("next/dist/compiled/@vercel/og/index.node.js");
     const logo = await fetchEmployerLogo(card.url);
     const view = jobCardView(card, index, total);
     const logoSrc = logo
