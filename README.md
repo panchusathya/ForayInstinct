@@ -109,9 +109,13 @@ pnpm linq:reactions          # report, exits non-zero if missing
 pnpm linq:reactions --apply  # subscribe
 ```
 
-With no Linq credentials in the environment it asks the Vercel CLI to find the
-connector and mint an app-subject token, so a logged-in `vercel` is normally the
-only prerequisite. To supply a token yourself instead:
+It asks the Vercel CLI to find the connector and mint an app-subject token, so a
+logged-in `vercel` is normally the only prerequisite. Credentials are tried in
+order of how likely they are to be the deployment's account: `LINQ_ACCESS_TOKEN`,
+then `LINQ_CONNECTOR`, then CLI discovery, and a local `LINQ_API_KEY` only as a
+last resort — the reverse of the channel's own order, because a key on a
+developer's laptop is usually a personal or sandbox one. To supply a token
+yourself instead:
 
 ```bash
 vercel connect list                             # find the linq connector uid

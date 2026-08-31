@@ -144,25 +144,24 @@ const subscriptionSchema = z.object({
 const listSchema = z.object({ data: z.array(subscriptionSchema).default([]) });
 
 /**
- * The same resolution order as `linqAdapterConfig` in the channel, so this
- * script always talks to the account the deployment talks to.
+ * Ordered by how likely a source is to be the account the DEPLOYMENT uses,
+ * which is not the same order the channel uses.
+ *
+ * The channel reads its own runtime environment, so a local `LINQ_API_KEY` there
+ * is by definition the right one. Here the environment is a developer's laptop,
+ * where that variable is very often a personal or sandbox key -- so a
+ * Connect-minted token comes first and a raw key is the last resort. Preferring
+ * it is what made this script read the wrong account and report the webhook as
+ * unregistered while iMessage was replying normally.
  */
 async function resolveApiKey() {
   const suppliedToken = process.env.LINQ_ACCESS_TOKEN;
   const directKey = process.env.LINQ_API_KEY;
   const connector = process.env.LINQ_CONNECTOR;
-  // An already-minted Connect token, for when this cannot reach Connect itself
-  // (no OIDC token to hand, or LINQ_CONNECTOR lives only in the production
-  // environment): `vercel connect token <connector-uid>` prints one.
+  // Explicit and unambiguous: somebody minted this for this purpose.
   if (suppliedToken) {
     console.log("using LINQ_ACCESS_TOKEN as supplied");
     return suppliedToken;
-  }
-  // Direct mode wins only when it is the mode the app is in: the channel also
-  // requires the signing secret before it uses a raw key.
-  if (directKey && process.env.LINQ_WEBHOOK_SECRET) {
-    console.log("using LINQ_API_KEY (direct mode)");
-    return directKey;
   }
   if (connector) {
     console.log(`minting a Linq app token through Connect (${connector})`);
@@ -177,16 +176,22 @@ async function resolveApiKey() {
       );
     }
   }
-  // Before the error branches, and deliberately ahead of complaining about a
-  // half-configured LINQ_API_KEY: a stale dashboard key sitting in .env.local
-  // should not stop the CLI from finding the right credentials.
   const minted = mintTokenWithCli();
   if (minted) return minted;
 
+  // Last, and only with its signing secret, which is what makes it a
+  // deliberately configured direct-mode line rather than a stray key. Loud,
+  // because on a laptop this is usually not the deployment's account.
+  if (directKey && process.env.LINQ_WEBHOOK_SECRET) {
+    console.warn(
+      "falling back to LINQ_API_KEY (direct mode). If this reports no subscriptions while iMessage is working, this key is for a different Linq account than the deployment: unset it, or set LINQ_ACCESS_TOKEN."
+    );
+    return directKey;
+  }
   if (directKey) {
     throw new Error(
       [
-        "LINQ_API_KEY is set but LINQ_WEBHOOK_SECRET is not, so the app is not in direct mode and a personal dashboard key would read the wrong Linq account.",
+        "LINQ_API_KEY is set but LINQ_WEBHOOK_SECRET is not, so this is not a configured direct-mode line and a personal dashboard key would read the wrong Linq account.",
         "",
         "The Vercel CLI could not mint the right token either -- it may be missing, logged out (`vercel login`), or the team may have several Linq connectors. To do it by hand:",
         "  vercel connect list                        # find the linq connector uid",
