@@ -145,6 +145,26 @@ const { bot, channel, send } = chatSdkChannel({
   turnPolicy: "steer",
   userName: "Foray",
   events: {
+    async "turn.started"(event, context, session) {
+      // Recover a capture left behind by an interrupted coordinator turn before
+      // asking the model to do anything. This means an upstream model failure
+      // cannot prevent the candidate from seeing the already-captured form.
+      if (!context.thread) return;
+      const pendingScreenshot = pendingSubmissionScreenshotSchema.safeParse(
+        context.state.pendingSubmissionScreenshot
+      );
+      if (!pendingScreenshot.success) return;
+      const caller =
+        session.session.auth?.current ?? session.session.auth?.initiator;
+      if (!caller) return;
+      const delivered = await deliverSubmissionScreenshot(
+        context.thread,
+        scopeFromPrincipal(caller),
+        event.turnId,
+        context.state
+      );
+      if (delivered) context.state.pendingSubmissionScreenshot = undefined;
+    },
     async "authorization.required"(event, context) {
       // Eve's default handler posts Vercel Connect's device-pairing code and
       // its URL. iMessage collapses that into one run-together line the
@@ -174,7 +194,7 @@ const { bot, channel, send } = chatSdkChannel({
       // instead of completing the device flow.
       context.state.authorizationNoticesSent = { ...sent, [event.name]: true };
     },
-    async "action.result"(event, context) {
+    async "action.result"(event, context, session) {
       if (context.thread) rememberLinqService(context.thread, context.state);
       const result = taskCancelResultSchema.safeParse(event.result);
       const sourceMessageId = context.thread?.toJSON().currentMessage?.id;
@@ -186,9 +206,25 @@ const { bot, channel, send } = chatSdkChannel({
           .trimStart()
           .startsWith(submissionApprovalPrefix);
         if (submitted || awaitingApproval) {
-          context.state.pendingSubmissionScreenshot = {
-            turnId: event.turnId,
-          };
+          const caller =
+            session.session.auth?.current ?? session.session.auth?.initiator;
+          const delivered =
+            caller && context.thread
+              ? await deliverSubmissionScreenshot(
+                  context.thread,
+                  scopeFromPrincipal(caller),
+                  event.turnId,
+                  context.state
+                )
+              : false;
+          // Do not let a later model response control whether a candidate can
+          // inspect the form. Keep a retry marker only when the channel could
+          // not deliver it directly (for example, an explicit SMS thread).
+          if (!delivered) {
+            context.state.pendingSubmissionScreenshot = {
+              turnId: event.turnId,
+            };
+          }
           // A review pause must not read as a finished application, so the two
           // outcomes get different reactions.
           await reactToCurrentMessage(
@@ -272,16 +308,18 @@ const { bot, channel, send } = chatSdkChannel({
         context.state.pendingSubmissionScreenshot
       );
       if (pendingScreenshot.success) {
-        context.state.pendingSubmissionScreenshot = undefined;
         const caller =
           session.session.auth?.current ?? session.session.auth?.initiator;
-        if (caller) {
-          await deliverSubmissionScreenshot(
+        const delivered =
+          caller &&
+          (await deliverSubmissionScreenshot(
             context.thread,
             scopeFromPrincipal(caller),
             event.turnId,
             context.state
-          );
+          ));
+        if (delivered) {
+          context.state.pendingSubmissionScreenshot = undefined;
         }
       }
 
@@ -873,7 +911,7 @@ async function deliverSubmissionScreenshot(
   // Try the attachment unless the transport is explicitly SMS: an unknown
   // thread can still be iMessage, whereas returning would leave a successfully
   // captured review stranded forever.
-  if (!canDeliverSubmissionScreenshot(thread, state)) return;
+  if (!canDeliverSubmissionScreenshot(thread, state)) return false;
   // Delivery used to fail silently, exactly as job cards did. A candidate asked
   // to approve a form they cannot see is the worst failure this channel has, so
   // it must never have to be inferred from an absence of logs. `warn`, not
@@ -885,9 +923,10 @@ async function deliverSubmissionScreenshot(
       message: error instanceof Error ? error.message : String(error),
       workspaceId: scope.workspaceId,
     });
-    return [];
+    return undefined;
   });
-  if (screenshots.length === 0) return;
+  if (screenshots === undefined) return false;
+  if (screenshots.length === 0) return true;
   console.warn("[submission-screenshot] delivering", {
     count: screenshots.length,
     role: roleLabel(screenshots[0]?.role),
@@ -945,7 +984,7 @@ async function deliverSubmissionScreenshot(
     }).catch(() => undefined);
   }
 
-  if (undelivered.length === 0) return;
+  if (undelivered.length === 0) return true;
   await releaseApplicationSubmissionScreenshots(scope, undelivered).catch(
     (error: unknown) => {
       console.error("[submission-screenshot] could not release a batch", {
@@ -973,6 +1012,7 @@ async function deliverSubmissionScreenshot(
       })
       .catch(() => undefined);
   }
+  return false;
 }
 
 /** Rows written before migration 0017 carry an empty role, not a missing one. */

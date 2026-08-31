@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
 import { applicationSubmissionScreenshots, db } from "@/db";
 
@@ -54,10 +54,11 @@ export async function saveApplicationSubmissionScreenshot(
 /**
  * Claims one application's pending screenshots for delivery.
  *
- * Scoped to a single browser session, oldest first: a scroll-stitched review is
+ * Scoped to a single browser session, newest first: a scroll-stitched review is
  * several rows and the candidate has to read down the page, but two
  * applications in flight must not be posted as one numbered run under a caption
- * that names neither.
+ * that names neither. Selecting the newest session ensures a just-captured
+ * review is never displaced by a stale delivery retry from an earlier form.
  *
  * Claiming inside the transaction keeps two concurrent turns from posting the
  * same image twice. The claim is the `deliveredAt` stamp, so a caller that
@@ -89,7 +90,7 @@ export async function claimPendingApplicationSubmissionScreenshots(
         )
       );
 
-    const [oldest] = await transaction
+    const [newest] = await transaction
       .select({ sessionId: applicationSubmissionScreenshots.sessionId })
       .from(applicationSubmissionScreenshots)
       .where(
@@ -98,9 +99,9 @@ export async function claimPendingApplicationSubmissionScreenshots(
           isNull(applicationSubmissionScreenshots.deliveredAt)
         )
       )
-      .orderBy(asc(applicationSubmissionScreenshots.createdAt))
+      .orderBy(desc(applicationSubmissionScreenshots.createdAt))
       .limit(1);
-    if (!oldest) return [];
+    if (!newest) return [];
 
     const rows = await transaction
       .select({
@@ -116,7 +117,7 @@ export async function claimPendingApplicationSubmissionScreenshots(
       .where(
         and(
           eq(applicationSubmissionScreenshots.workspaceId, scope.workspaceId),
-          eq(applicationSubmissionScreenshots.sessionId, oldest.sessionId),
+          eq(applicationSubmissionScreenshots.sessionId, newest.sessionId),
           isNull(applicationSubmissionScreenshots.deliveredAt)
         )
       )

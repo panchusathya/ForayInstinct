@@ -63,8 +63,13 @@ const channelEvents = (
 ).events;
 const trackWorkerCancellation = channelEvents?.["action.result"];
 const deliverCompletedMessage = channelEvents?.["message.completed"];
+const recoverPendingScreenshot = channelEvents?.["turn.started"];
 const requestAuthorization = channelEvents?.["authorization.required"];
-if (!trackWorkerCancellation || !deliverCompletedMessage) {
+if (
+  !trackWorkerCancellation ||
+  !deliverCompletedMessage ||
+  !recoverPendingScreenshot
+) {
   throw new Error("Linq event handlers are not configured.");
 }
 if (!requestAuthorization) {
@@ -105,6 +110,44 @@ describe("Linq message delivery", () => {
     expect(post).toHaveBeenCalledExactlyOnceWith({
       markdown: message.toLowerCase(),
     });
+  });
+
+  it("delivers a queued review before a model turn can fail", async () => {
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        {
+          applyUrl: "https://example.com/apply",
+          id: 1,
+          kind: "review",
+          mimeType: "image/png",
+          png: Buffer.from("review-png"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
+        },
+      ]
+    );
+    const { context, post, state } = handlerContext("message-1", {
+      pendingSubmissionScreenshot: { turnId: "interrupted-turn" },
+    });
+
+    await recoverPendingScreenshot(
+      { sequence: 0, turnId: "retry-turn" },
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      files: [
+        {
+          data: Buffer.from("review-png"),
+          filename: "application-review-1.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown:
+        "Before I submit staff engineer. Reply *yes* to submit, or tell me what to change.",
+    });
+    expect(state.pendingSubmissionScreenshot).toBeUndefined();
   });
 
   it("delivers Exa role cards with their apply URL instead of the model reply", async () => {
@@ -668,7 +711,7 @@ describe("Linq message delivery", () => {
     });
   });
 
-  it("posts a confirmation screenshot when only the inbound webhook names iMessage", async () => {
+  it("posts a confirmation screenshot immediately when only the inbound webhook names iMessage", async () => {
     screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
       [
         {
@@ -682,11 +725,16 @@ describe("Linq message delivery", () => {
         },
       ]
     );
-    const { context, state } = handlerContext("message-1", {}, undefined, {
-      direction: "inbound",
-      id: "msg-1",
-      service: "iMessage",
-    });
+    const { context, post, state } = handlerContext(
+      "message-1",
+      {},
+      undefined,
+      {
+        direction: "inbound",
+        id: "msg-1",
+        service: "iMessage",
+      }
+    );
 
     await trackWorkerCancellation(
       submittedApplicationResult(),
@@ -694,17 +742,7 @@ describe("Linq message delivery", () => {
       sessionContext({ id: "user-1", workspaceId: "workspace-1" })
     );
     expect(state.lastLinqService).toBe("iMessage");
-
-    // Worker completion is a later turn; Chat SDK no longer serializes the
-    // inbound webhook, so delivery has to reuse the stamped protocol.
-    const later = handlerContext("message-later", state);
-    await deliverCompletedMessage(
-      completedEvent({ message: "Applied to Staff Engineer at Acme." }),
-      later.context,
-      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
-    );
-
-    expect(later.post).toHaveBeenNthCalledWith(1, {
+    expect(post).toHaveBeenNthCalledWith(1, {
       files: [
         {
           data: Buffer.from("png-bytes"),
@@ -713,6 +751,19 @@ describe("Linq message delivery", () => {
         },
       ],
       markdown: "",
+    });
+
+    // The coordinator can still complete on a later turn without posting the
+    // image a second time.
+    const later = handlerContext("message-later", state);
+    await deliverCompletedMessage(
+      completedEvent({ message: "Applied to Staff Engineer at Acme." }),
+      later.context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(later.post).toHaveBeenNthCalledWith(1, {
+      markdown: "applied to staff engineer at acme.",
     });
   });
 

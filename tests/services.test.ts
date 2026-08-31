@@ -464,23 +464,23 @@ describe("database services", () => {
       png: Buffer.from("other-workspace"),
     });
 
-    // A scroll-stitched review must arrive whole and top-first: the candidate
-    // is approving the form, so dropping a capture hides what they approved.
-    // A second application in flight must NOT be numbered into the same run —
-    // one "yes" cannot mean two different jobs.
+    // The most recently captured application must arrive first. A scroll-
+    // stitched review still arrives whole and top-first, and a second
+    // application must NOT be numbered into the same run — one "yes" cannot
+    // mean two different jobs.
     const first =
       await screenshots.claimPendingApplicationSubmissionScreenshots(alice);
     expect(
       first.map((row) => [row.role, row.png.toString(), row.sessionId])
-    ).toEqual([
-      ["Staff Engineer", "review-top", "browser-review"],
-      ["Staff Engineer", "review-bottom", "browser-review"],
-    ]);
+    ).toEqual([["Product Manager", "second-application", "browser-other"]]);
 
     const second =
       await screenshots.claimPendingApplicationSubmissionScreenshots(alice);
-    expect(second.map((row) => [row.role, row.png.toString()])).toEqual([
-      ["Product Manager", "second-application"],
+    expect(
+      second.map((row) => [row.role, row.png.toString(), row.sessionId])
+    ).toEqual([
+      ["Staff Engineer", "review-top", "browser-review"],
+      ["Staff Engineer", "review-bottom", "browser-review"],
     ]);
     await expect(
       screenshots.claimPendingApplicationSubmissionScreenshots(alice)
@@ -502,8 +502,7 @@ describe("database services", () => {
     const reoffered =
       await screenshots.claimPendingApplicationSubmissionScreenshots(alice);
     expect(reoffered.map((row) => row.png.toString())).toEqual([
-      "review-top",
-      "review-bottom",
+      "second-application",
     ]);
 
     // Releasing is workspace-scoped: one workspace must not be able to put
