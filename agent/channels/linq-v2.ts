@@ -133,6 +133,7 @@ const { bot, channel, send } = chatSdkChannel({
   userName: "Foray",
   events: {
     async "action.result"(event, context) {
+      if (context.thread) rememberLinqService(context.thread, context.state);
       const result = taskCancelResultSchema.safeParse(event.result);
       const sourceMessageId = context.thread?.toJSON().currentMessage?.id;
       const workerResult = workerResultSchema.safeParse(event.result);
@@ -187,6 +188,7 @@ const { bot, channel, send } = chatSdkChannel({
       context.state.workerCancellations = cancellations;
     },
     async "message.completed"(event, context, session) {
+      if (context.thread) rememberLinqService(context.thread, context.state);
       if (event.finishReason === "tool-calls") {
         context.state.pendingToolCallMessage = event.message
           ? (event.message
@@ -791,14 +793,24 @@ function rememberSentLinqJobCard(
   );
 }
 
+function rememberLinqService(
+  thread: { toJSON: () => unknown },
+  state: Record<string, unknown>
+) {
+  const fromThread = linqServiceFromUnknown(thread.toJSON());
+  if (fromThread) state.lastLinqService = fromThread;
+  return (
+    fromThread ||
+    (typeof state.lastLinqService === "string" ? state.lastLinqService : "")
+  );
+}
+
 function isRichLinqThread(
   thread: { toJSON: () => unknown },
   state?: Record<string, unknown>
 ) {
-  const fromThread = linqServiceFromUnknown(thread.toJSON());
-  if (fromThread && state) state.lastLinqService = fromThread;
-  const service =
-    fromThread ||
-    (typeof state?.lastLinqService === "string" ? state.lastLinqService : "");
+  const service = state
+    ? rememberLinqService(thread, state)
+    : linqServiceFromUnknown(thread.toJSON());
   return isRichLinqService(service);
 }

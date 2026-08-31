@@ -619,6 +619,50 @@ describe("Linq message delivery", () => {
     });
   });
 
+  it("posts a confirmation screenshot when only the inbound webhook names iMessage", async () => {
+    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        {
+          kind: "submitted",
+          mimeType: "image/png",
+          png: Buffer.from("png-bytes"),
+        },
+      ]
+    );
+    const { context, state } = handlerContext("message-1", {}, undefined, {
+      direction: "inbound",
+      id: "msg-1",
+      service: "iMessage",
+    });
+
+    await trackWorkerCancellation(
+      submittedApplicationResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    expect(state.lastLinqService).toBe("iMessage");
+
+    // Worker completion is a later turn; Chat SDK no longer serializes the
+    // inbound webhook, so delivery has to reuse the stamped protocol.
+    const later = handlerContext("message-later", state);
+    await deliverCompletedMessage(
+      completedEvent({ message: "Applied to Staff Engineer at Acme." }),
+      later.context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(later.post).toHaveBeenNthCalledWith(1, {
+      files: [
+        {
+          data: Buffer.from("png-bytes"),
+          filename: "application-submitted.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown: "",
+    });
+  });
+
   it("keeps SMS on the text confirmation when a screenshot is available", async () => {
     screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
       [
