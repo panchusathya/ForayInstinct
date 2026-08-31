@@ -2,6 +2,7 @@
 import type { chatSdkChannel } from "eve/channels/chat-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import workerCancellationHook from "../agent/hooks/worker-cancellation-delivery";
+import { env } from "../lib/env";
 
 const channelCapture = vi.hoisted(() => ({ config: undefined as unknown }));
 const screenshotMocks = vi.hoisted(() => ({
@@ -43,8 +44,12 @@ const channelEvents = (
 ).events;
 const trackWorkerCancellation = channelEvents?.["action.result"];
 const deliverCompletedMessage = channelEvents?.["message.completed"];
+const requestAuthorization = channelEvents?.["authorization.required"];
 if (!trackWorkerCancellation || !deliverCompletedMessage) {
   throw new Error("Linq event handlers are not configured.");
+}
+if (!requestAuthorization) {
+  throw new Error("Linq does not override Eve's authorization prompt.");
 }
 
 type HandlerParameters = Parameters<typeof deliverCompletedMessage>;
@@ -847,6 +852,64 @@ function completedEvent(
     ...overrides,
   };
 }
+
+describe("Linq authorization prompts", () => {
+  const authorizationEvent = (overrides: Record<string, unknown> = {}) =>
+    ({
+      authorization: {
+        displayName: "Google",
+        instructions: "Open the link and enter the code.",
+        url: "https://connect.vercel.com",
+        userCode: "PHV-HMB",
+      },
+      description: "Authorization required for Google.",
+      name: "google",
+      sequence: 0,
+      stepIndex: 0,
+      turnId: "turn-1",
+      ...overrides,
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- The fixture supplies only the event fields this handler reads.
+    }) as unknown as Parameters<typeof requestAuthorization>[0];
+
+  it("asks the candidate to connect on the web instead of sending a pairing code", async () => {
+    const { context, post, state } = handlerContext();
+
+    await requestAuthorization(authorizationEvent(), context, sessionContext());
+
+    const posted = post.mock.calls
+      .map(([message]) => (message as { markdown: string }).markdown)
+      .join("\n");
+    // A device-pairing code reaches iMessage as an unusable run-together line,
+    // and it is never the answer to a task already in flight.
+    expect(posted).not.toContain("PHV-HMB");
+    expect(posted).not.toContain("connect.vercel.com");
+    expect(posted).toContain("google");
+    expect(posted).toContain(new URL("/", env.BETTER_AUTH_URL).toString());
+    expect(state.authorizationNoticesSent).toEqual({ google: true });
+  });
+
+  it("asks once per connection", async () => {
+    const { context, post } = handlerContext();
+
+    await requestAuthorization(authorizationEvent(), context, sessionContext());
+    const afterFirst = post.mock.calls.length;
+    await requestAuthorization(authorizationEvent(), context, sessionContext());
+
+    expect(post.mock.calls.length).toBe(afterFirst);
+  });
+
+  it("leaves an approval candidate to the approval handlers", async () => {
+    const { context, post } = handlerContext();
+
+    await requestAuthorization(
+      authorizationEvent({ candidateId: "candidate-1" }),
+      context,
+      sessionContext()
+    );
+
+    expect(post).not.toHaveBeenCalled();
+  });
+});
 
 function handlerContext(
   currentMessageId = "message-1",

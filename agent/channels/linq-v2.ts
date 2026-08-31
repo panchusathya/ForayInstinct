@@ -88,6 +88,8 @@ const jobCardResultSchema = z.object({
   output: z.object({ cards: z.array(goForayJobCardSchema) }),
   toolName: z.enum(["find_goforay_roles", "find_next_goforay_roles"]),
 });
+/** Connections this thread has already been asked to connect, by name. */
+const linqAuthorizationNoticesSchema = z.record(z.string(), z.boolean());
 const pendingJobCardsSchema = z.object({
   cards: z.array(goForayJobCardSchema),
   turnId: z.string(),
@@ -136,6 +138,35 @@ const { bot, channel, send } = chatSdkChannel({
   turnPolicy: "steer",
   userName: "Foray",
   events: {
+    async "authorization.required"(event, context) {
+      // Eve's default handler posts Vercel Connect's device-pairing code and
+      // its URL. iMessage collapses that into one run-together line the
+      // candidate cannot act on, and a code is never the answer to a task in
+      // flight: point them at the workspace page, which holds the connect
+      // button for the same phone-derived Connect subject this channel uses.
+      if (!context.thread || event.candidateId !== undefined) return;
+      const notified = linqAuthorizationNoticesSchema.safeParse(
+        context.state.authorizationNoticesSent
+      );
+      const sent = notified.success ? notified.data : {};
+      if (sent[event.name]) return;
+      const displayName = event.authorization?.displayName ?? event.name;
+      const delivery = formatCandidateDelivery(
+        [
+          `Foray needs access to your ${displayName} account to finish that.`,
+          "Connect it on your workspace page, then send me a message and I'll pick up where I left off.",
+          new URL("/", env.BETTER_AUTH_URL).toString(),
+        ].join("\n\n")
+      );
+      for (const body of delivery.bubbles) {
+        await context.thread.post({ markdown: body });
+      }
+      // Deliberately not `pendingAuthMessageIds`: that key makes Eve's default
+      // `authorization.completed` handler edit this notice into an
+      // authorization-timed-out line when the candidate connects on the web
+      // instead of completing the device flow.
+      context.state.authorizationNoticesSent = { ...sent, [event.name]: true };
+    },
     async "action.result"(event, context) {
       if (context.thread) rememberLinqService(context.thread, context.state);
       const result = taskCancelResultSchema.safeParse(event.result);
