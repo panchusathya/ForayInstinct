@@ -28,8 +28,8 @@ describe("root and worker capability boundaries", () => {
     const workerAgent = readFileSync(`${workerRoot}/agent.ts`, "utf8");
     const models = readFileSync("lib/model-config.ts", "utf8");
 
-    expect(chatGatewayModel).toBe("zai/glm-5.3-flash");
-    expect(browserGatewayModel).toBe("zai/glm-5.3-flash");
+    expect(chatGatewayModel).toBe("zai/glm-5.3");
+    expect(browserGatewayModel).toBe("zai/glm-5.3");
     expect(models).toContain(`chatGatewayModel = "${chatGatewayModel}"`);
     expect(models).toContain(`browserGatewayModel = "${browserGatewayModel}"`);
     expect(rootAgent).toContain("model: chatGatewayModel");
