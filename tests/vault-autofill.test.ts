@@ -568,11 +568,11 @@ describe("vault browser autofill", () => {
     ]);
   });
 
-  it("requires a focused login control and supports identifier-only steps", () => {
+  it("selects the best visible login form without requiring focus", () => {
     const identifier = classifiedLoginControl({ token: "username" });
     expect(
       selectNativeLoginFills([identifier], [claim("username", "member-1")])
-    ).toEqual([]);
+    ).toEqual([{ control: identifier, value: "member-1" }]);
 
     const focusedIdentifier = { ...identifier, focused: true };
     expect(

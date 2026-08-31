@@ -235,20 +235,22 @@ async function fillNativeLoginControls(
     purpose
   );
   const focused = controls.find((control) => control.focused);
-  if (!focused) {
-    throw new Error(
-      "Focus a visible username, email, phone, or current-password field and retry."
-    );
-  }
-  const sameFrame = controls.filter(
-    (control) =>
-      control.frameId === focused.frameId &&
-      control.sessionId === focused.sessionId
-  );
-  const fills = selectNativeLoginFills(sameFrame, claims, purpose);
+  const frameControls = focused
+    ? [
+        controls.filter(
+          (control) =>
+            control.frameId === focused.frameId &&
+            control.sessionId === focused.sessionId
+        ),
+      ]
+    : [...groupLoginControlsByFrame(controls).values()];
+  const fills =
+    frameControls
+      .map((candidate) => selectNativeLoginFills(candidate, claims, purpose))
+      .toSorted((left, right) => right.length - left.length)[0] ?? [];
   if (fills.length === 0) {
     throw new Error(
-      "The focused login form does not accept a field available in this saved login."
+      "No visible login form accepts a field available in this saved login."
     );
   }
 
@@ -259,6 +261,19 @@ async function fillNativeLoginControls(
     }
   }
   return fills.length;
+}
+
+function groupLoginControlsByFrame<
+  T extends { readonly frameId: string; readonly sessionId: string },
+>(controls: readonly T[]) {
+  const frames = new Map<string, T[]>();
+  for (const control of controls) {
+    const key = `${control.sessionId}:${control.frameId}`;
+    const frame = frames.get(key);
+    if (frame) frame.push(control);
+    else frames.set(key, [control]);
+  }
+  return frames;
 }
 
 async function inspectNativeLoginControls(

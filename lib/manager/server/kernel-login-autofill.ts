@@ -115,13 +115,29 @@ export function selectNativeLoginFills<T extends ClassifiedNativeLoginControl>(
   claims: readonly Pick<AutofillClaim, "token" | "value">[],
   purpose: NativeLoginPurpose = "sign_in"
 ) {
-  const focused = controls.find((control) => control.focused);
+  const values = new Map(claims.map(({ token, value }) => [token, value]));
+  // Most hosted account forms do not autofocus a field. In that case, choose
+  // the strongest visible field that can receive a saved identifier instead
+  // of abandoning a safe, origin-bound autofill attempt.
+  const focused =
+    controls.find((control) => control.focused) ??
+    controls
+      .filter(
+        (control) =>
+          !isPasswordToken(control.token) &&
+          (values.has(control.token) || values.has("username"))
+      )
+      .toSorted(compareLoginControls)[0] ??
+    controls
+      .filter(
+        (control) => isPasswordToken(control.token) && values.has(control.token)
+      )
+      .toSorted(compareLoginControls)[0];
   if (!focused) return [];
 
   const sameSurface = controls
     .filter((control) => control.formIndex === focused.formIndex)
     .toSorted(compareLoginControls);
-  const values = new Map(claims.map(({ token, value }) => [token, value]));
   const selected: { readonly control: T; readonly value: string }[] = [];
 
   const identifier = sameSurface.find(

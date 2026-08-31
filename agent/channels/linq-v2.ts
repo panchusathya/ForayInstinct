@@ -2,7 +2,7 @@
 import { connectLinqCredentials } from "@vercel/connect/eve";
 import { createLinqAdapter } from "@linqapp/chat-sdk-adapter";
 import { defaultLinqAuth } from "eve/channels/linq";
-import { chatSdkChannel, messageToUserContent } from "eve/channels/chat-sdk";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
 import type { Message, Thread } from "chat";
 import { z } from "zod";
 import { auth } from "@/auth";
@@ -328,7 +328,10 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
   await send(
     {
       context: inbound.context,
-      message: messageToUserContent(message),
+      // Persist attachments before this turn and place their extracted text in
+      // workspace context. Passing the provider's raw PDF URL to the model
+      // gateway makes every configured provider reject the request.
+      message: message.text || "The candidate attached a file.",
     },
     { auth: inbound.auth, thread }
   );
