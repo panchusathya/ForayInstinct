@@ -106,9 +106,13 @@ is silent: the tapback simply does nothing. Check it, then enable it:
 
 ```bash
 vercel connect list                             # find the linq connector uid
-LINQ_ACCESS_TOKEN=$(vercel connect token <uid>) pnpm linq:reactions
-LINQ_ACCESS_TOKEN=$(vercel connect token <uid>) pnpm linq:reactions --apply
+LINQ_ACCESS_TOKEN=$(vercel connect token <uid> --subject app) pnpm linq:reactions
+LINQ_ACCESS_TOKEN=$(vercel connect token <uid> --subject app) pnpm linq:reactions --apply
 ```
+
+`--subject app` is not optional. The CLI defaults to `--subject user`, and Linq
+answers a user-subject token with `401 invalid_token`, because the channel
+authenticates as the app (`subject: { type: "app" }`).
 
 The token has to belong to the account the deployment talks to. **Do not
 substitute a personal Linq dashboard key for a Connect-managed line.** Connect

@@ -18,8 +18,15 @@
  * the same app token the channel does whenever LINQ_CONNECTOR is set, and take
  * LINQ_API_KEY only for a direct-mode line (a Linq sandbox account).
  *
- * Minting needs a Vercel OIDC token, so locally run `vercel env pull` first (or
- * export VERCEL_OIDC_TOKEN); on a deployment it is already present.
+ * Simplest route is a token straight from the CLI:
+ *
+ *   vercel connect list
+ *   vercel connect token <uid> --subject app
+ *
+ * `--subject app` matters -- the CLI defaults to `user` and Linq answers a
+ * user-subject token with 401 invalid_token, because the channel authenticates
+ * as the app. Otherwise set LINQ_CONNECTOR and this mints the token itself,
+ * which needs a Vercel OIDC token (`vercel link` writes one into .env.local).
  *
  * Deliberately a one-off rather than something the app does at boot: it changes
  * live provider configuration.
@@ -99,8 +106,9 @@ async function resolveApiKey() {
         "",
         "Use the deployment's own credentials instead:",
         "  vercel connect list                     # find the linq connector uid",
-        "  vercel connect token <connector-uid>    # print a token",
+        "  vercel connect token <uid> --subject app   # print the app-subject token",
         "then set LINQ_ACCESS_TOKEN to it, or set LINQ_CONNECTOR and let this mint one.",
+        "`--subject app` is required: the CLI defaults to `user`, and Linq answers a user-subject token with 401 invalid_token because the channel authenticates as the app.",
       ].join("\n")
     );
   }
@@ -110,8 +118,10 @@ async function resolveApiKey() {
       "",
       "LINQ_CONNECTOR is commonly set only in the production environment, so a development `vercel env pull` will not include it. Either way:",
       "  vercel connect list                     # find the linq connector uid",
-      "  vercel connect token <connector-uid>    # print a token",
-      "then set LINQ_ACCESS_TOKEN to it. Or set LINQ_CONNECTOR yourself and this mints a token, which needs VERCEL_OIDC_TOKEN (vercel link writes one into .env.local).",
+      "  vercel connect token <uid> --subject app   # print the app-subject token",
+      "then set LINQ_ACCESS_TOKEN to it.",
+      "`--subject app` is required: the CLI defaults to `user`, and Linq answers a user-subject token with 401 invalid_token because the channel authenticates as the app.",
+      "Or set LINQ_CONNECTOR yourself and this mints one, which needs VERCEL_OIDC_TOKEN (vercel link writes one into .env.local).",
     ].join("\n")
   );
 }
@@ -144,7 +154,7 @@ if (!subscriptions.length) {
     [
       "These Linq credentials list no webhook subscriptions.",
       "",
-      "If inbound iMessages are arriving, the subscription exists and this key is simply for a different Linq account than the deployment uses. Run `vercel env pull` and re-run so LINQ_CONNECTOR mints the deployment's own token.",
+      "If inbound iMessages are arriving, the subscription exists and these credentials are simply for a different Linq account than the deployment uses. Get the deployment's own token with `vercel connect token <uid> --subject app` and set LINQ_ACCESS_TOKEN to it.",
       "",
       "Only if inbound messages are NOT arriving is the endpoint genuinely unregistered; attach the connector with --triggers --trigger-path /eve/v1/linq (see the README).",
     ].join("\n")
