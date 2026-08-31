@@ -4,6 +4,7 @@ import type { ToolContext } from "eve/tools";
 import { z } from "zod";
 import {
   getGoogleAuthClient,
+  googleDisconnectedResult,
   isMissingGoogleGrant,
   withGoogleAuth,
 } from "./client";
@@ -38,7 +39,7 @@ export async function searchGmail(
   query: string,
   maxResults: number
 ) {
-  return withGmail(ctx, async (client) => {
+  return withGmailRead(ctx, async (client) => {
     const listed = await client.users.messages.list(
       { maxResults, q: query, userId: "me" },
       { signal: ctx.abortSignal }
@@ -75,7 +76,7 @@ export async function downloadGmailAttachment(
   messageId: string,
   attachmentId: string
 ) {
-  return withGmail(ctx, async (client) => {
+  return withGmailRead(ctx, async (client) => {
     const { data } = await client.users.messages.attachments.get(
       {
         id: attachmentId,
@@ -92,7 +93,7 @@ export async function downloadGmailAttachment(
 }
 
 export async function readGmailThread(ctx: ToolContext, threadId: string) {
-  return withGmail(ctx, async (client) => {
+  return withGmailRead(ctx, async (client) => {
     const { data: thread } = await client.users.threads.get(
       { format: "full", id: threadId, userId: "me" },
       { signal: ctx.abortSignal }
@@ -131,7 +132,7 @@ export async function waitForEmailOtp(
     const authClient = await getGoogleAuthClient(ctx);
     client = gmail({ auth: authClient, version: "v1" });
   } catch (error) {
-    if (isMissingGoogleGrant(error)) return missingGoogleGrantResult();
+    if (isMissingGoogleGrant(error)) return missingEmailOtpGrantResult();
     throw error;
   }
 
@@ -140,7 +141,7 @@ export async function waitForEmailOtp(
       const found = await findEmailOtp(client, ctx.abortSignal, query);
       if (found) return found;
     } catch (error) {
-      if (isMissingGoogleGrant(error)) return missingGoogleGrantResult();
+      if (isMissingGoogleGrant(error)) return missingEmailOtpGrantResult();
       throw error;
     }
 
@@ -157,6 +158,12 @@ export async function waitForEmailOtp(
       "No verification email arrived in time. Ask the candidate for the email code and resume the worker.",
     status: "timeout" as const,
   };
+}
+
+function missingEmailOtpGrantResult() {
+  return googleDisconnectedResult(
+    "Ask the candidate to paste the emailed code in chat, then resume the same worker with it."
+  );
 }
 
 export async function updateGmail(
@@ -313,6 +320,20 @@ function withGmail<T>(
   return withGoogleAuth(ctx, (auth) => execute(gmail({ auth, version: "v1" })));
 }
 
+/**
+ * A Gmail read supports a larger task, so it must never start Google consent:
+ * Eve's authorization prompt reaches iMessage as a pairing code and a
+ * run-together connect.vercel.com URL the candidate cannot act on. Let the
+ * missing grant surface as an error and let the tool report it as disconnected.
+ */
+async function withGmailRead<T>(
+  ctx: ToolContext,
+  execute: (client: ReturnType<typeof gmail>) => Promise<T>
+) {
+  const authClient = await getGoogleAuthClient(ctx);
+  return execute(gmail({ auth: authClient, version: "v1" }));
+}
+
 async function findEmailOtp(
   client: ReturnType<typeof gmail>,
   signal: AbortSignal,
@@ -353,14 +374,6 @@ function emailOtpFromMessage(message: GmailMessage) {
     receivedAt: header(message.payload, "Date"),
     status: "found" as const,
     subject,
-  };
-}
-
-function missingGoogleGrantResult() {
-  return {
-    message:
-      "Gmail is not connected. Ask the candidate for the email code and resume the worker.",
-    status: "disconnected" as const,
   };
 }
 

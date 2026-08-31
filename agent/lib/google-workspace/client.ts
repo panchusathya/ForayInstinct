@@ -45,6 +45,15 @@ export async function withGoogleAuth<T>(
   }
 }
 
+/** What a tool returns instead of starting Google consent mid-task. */
+export function googleDisconnectedResult(instruction: string) {
+  return {
+    connectUrl: new URL("/", env.BETTER_AUTH_URL).toString(),
+    message: `Google is not connected for this candidate. ${instruction} Never show the candidate an authorization code or a connect.vercel.com URL.`,
+    status: "disconnected" as const,
+  };
+}
+
 export function googleApiErrorStatus(error: unknown) {
   if (!error || typeof error !== "object" || !("response" in error)) return;
   const { response } = error;
@@ -57,9 +66,12 @@ export function googleApiErrorStatus(error: unknown) {
 export function isMissingGoogleGrant(error: unknown) {
   if (googleApiErrorStatus(error) === 401) return true;
   if (!error || typeof error !== "object" || !("name" in error)) return false;
+  // Connect names these errors NoValidTokenError,
+  // UserAuthorizationRequiredError, and ConnectionAuthorizationRequiredError.
+  // Match the shape rather than that exact list: a rename upstream would
+  // otherwise turn every graceful fallback back into a pairing-code prompt.
   return (
-    error.name === "NoValidTokenError" ||
-    error.name === "UserAuthorizationRequiredError" ||
-    error.name === "ConnectionAuthorizationRequiredError"
+    typeof error.name === "string" &&
+    /AuthorizationRequired|NoValidToken|NoGrant/u.test(error.name)
   );
 }

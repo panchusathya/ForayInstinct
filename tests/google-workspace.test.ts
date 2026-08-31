@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   getTokenResponse,
   NoValidTokenError,
@@ -60,6 +61,23 @@ describe("Google Workspace connection", () => {
       issuer: "openinstinct",
       type: "user",
     });
+  });
+
+  it("forwards one principal id from every surface so Connect sees one subject", () => {
+    const webChannel = readFileSync("agent/channels/eve.ts", "utf8");
+    const linqChannel = readFileSync("agent/channels/linq-v2.ts", "utf8");
+    const schedule = readFileSync(
+      "agent/schedules/goforay-role-searches.ts",
+      "utf8"
+    );
+
+    // createSubject derives the Connect subject from the forwarded principal
+    // id, so a surface that forwards anything else cannot see a Google grant
+    // made from the web: it mints a fresh pairing code on every Gmail call.
+    expect(webChannel).toContain("principalId: scope.userId");
+    expect(schedule).toContain("principalId: delivery.scope.userId");
+    expect(linqChannel).toContain("principalId: scope.userId");
+    expect(linqChannel).not.toContain("principalId: auth.principalId");
   });
 
   it("reports connected accounts without exposing tokens", async () => {
