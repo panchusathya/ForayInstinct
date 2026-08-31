@@ -68,6 +68,25 @@ function readableAccent(ground: string, wanted: string, ink: string) {
   return shade;
 }
 
+/**
+ * Gradient stops for a ground colour.
+ *
+ * Lightening a ground that already sits near `MAX_GROUND_LUMINANCE` can push it
+ * under the readable threshold: `#767676` clears white ink at 4.54, but mixing
+ * 8% white gives `#818181` at 3.90. So walk the weight down until the lifted
+ * stop still clears, the same way `readableAccent` walks toward the ink.
+ */
+function groundStops(ground: string, ink: string) {
+  let from = ground;
+  for (const weight of [0.1, 0.07, 0.05, 0.03, 0]) {
+    from = mix(ground, ink, weight);
+    if (contrastRatio(from, ink) >= MIN_CONTRAST) break;
+  }
+  // Darkening away from the ink never reduces contrast, so it needs no guard.
+  const away = relativeLuminance(ground) < 0.4 ? "#000000" : "#ffffff";
+  return { groundFrom: from, groundTo: mix(ground, away, 0.28) };
+}
+
 export function paletteFor(brand?: { accent?: string; primary?: string }) {
   const primary = brand?.primary ?? "";
   const accent = brand?.accent ?? "";
@@ -80,6 +99,7 @@ export function paletteFor(brand?: { accent?: string; primary?: string }) {
         accent: readableAccent(ground, accent || primary, ink),
         branded: true,
         ground,
+        ...groundStops(ground, ink),
         ink,
         muted: mix(ground, ink, 0.72),
       };
@@ -91,6 +111,7 @@ export function paletteFor(brand?: { accent?: string; primary?: string }) {
       accent: readableAccent(LIGHT_GROUND, primary, INK_DARK),
       branded: true,
       ground: LIGHT_GROUND,
+      ...groundStops(LIGHT_GROUND, INK_DARK),
       ink: INK_DARK,
       muted: mix(LIGHT_GROUND, INK_DARK, 0.66),
     };
@@ -100,6 +121,7 @@ export function paletteFor(brand?: { accent?: string; primary?: string }) {
     accent: NEUTRAL_ACCENT,
     branded: false,
     ground: NEUTRAL_GROUND,
+    ...groundStops(NEUTRAL_GROUND, INK_LIGHT),
     ink: INK_LIGHT,
     muted: mix(NEUTRAL_GROUND, INK_LIGHT, 0.7),
   };
@@ -172,6 +194,52 @@ export function brandFromPixels(
     accent: chosen[1] ?? "",
     primary: chosen[0] ?? "",
   };
+}
+
+/** Stable 32-bit hash, so an employer keeps the same colour between batches. */
+function fnv1a(value: string) {
+  let hash = 0x811c9dc5;
+  for (const character of value) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash;
+}
+
+function hslHex(
+  hue: number,
+  saturationPercent: number,
+  lightnessPercent: number
+) {
+  const h = ((hue % 360) + 360) % 360;
+  const s = saturationPercent / 100;
+  const l = lightnessPercent / 100;
+  const amplitude = s * Math.min(l, 1 - l);
+  const channel = (offset: number) => {
+    const k = (offset + h / 30) % 12;
+    const value =
+      l - amplitude * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)));
+    return Math.round(value * 255);
+  };
+  return hexOf([channel(0), channel(8), channel(4)]);
+}
+
+/**
+ * A distinct readable colour for an employer we could not sample a logo from —
+ * every ATS and aggregator host lands here, so it is the common case, not an
+ * edge one. Seeded from the employer key so a role keeps its colour, and run
+ * through `paletteFor` so contrast is guaranteed rather than assumed. Held at a
+ * dark lightness band that clears white ink across the whole hue circle.
+ */
+export function seededPaletteFor(employerKey: string) {
+  const key = employerKey.trim().toLowerCase();
+  if (!key) return NEUTRAL_PALETTE;
+  const hash = fnv1a(key);
+  const lightness = [24, 25, 26][(hash >>> 12) % 3] ?? 25;
+  return paletteFor({
+    accent: hslHex((hash % 360) + 32, 70, 62),
+    primary: hslHex(hash % 360, 62, lightness),
+  });
 }
 
 export const NEUTRAL_PALETTE = paletteFor();

@@ -3,7 +3,7 @@ import { connectLinqCredentials } from "@vercel/connect/eve";
 import { createLinqAdapter } from "@linqapp/chat-sdk-adapter";
 import { defaultLinqAuth } from "eve/channels/linq";
 import { chatSdkChannel } from "eve/channels/chat-sdk";
-import type { Message, Thread } from "chat";
+import type { Message, ReactionEvent, Thread } from "chat";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
@@ -18,6 +18,7 @@ import { env } from "@/lib/env";
 import { formatCandidateDelivery } from "@/lib/goforay/delivery";
 import {
   goForayJobCardSchema,
+  jobCardView,
   renderGoForayJobCard,
   type GoForayJobCard,
 } from "@/lib/goforay/job-cards";
@@ -26,12 +27,12 @@ import {
   isRichLinqService,
   linqServiceFromUnknown,
 } from "@/lib/goforay/linq-service";
+import { linqReplyToMessageId } from "@/lib/goforay/linq-replies";
 import {
-  linqJobCardRepliesSchema,
-  linqReplyToMessageId,
-  rememberLinqJobCardReply,
-  resolveLinqJobCardReply,
-} from "@/lib/goforay/linq-replies";
+  linqJobCardForMessageId,
+  readLinqJobCards,
+  rememberLinqJobCard,
+} from "@/lib/goforay/linq-job-card-state";
 import { createPostgresState } from "@/lib/linq-state";
 import {
   normalizeLinqDocument,
@@ -119,7 +120,10 @@ holding back, batching, or delaying roles. Speed never means repeating:
 find_goforay_roles already excludes roles this candidate has seen, so a
 request for more roles goes to a role tool, never to your memory of an earlier
 batch and never to web_search. If a role tool reports nothing new, say so
-instead of resending.
+instead of resending. A thumbs-up tapback on a role card is that candidate
+applying to that role: the channel resolves the card and attaches its apply
+URL, so never answer a tapback by asking which role they meant, and never tell
+a candidate to reply with a number when a tapback will do.
 `.trim();
 
 // oxlint-disable-next-line typescript/unbound-method -- external factory, not an instance method.
@@ -303,9 +307,160 @@ const { bot, channel, send } = chatSdkChannel({
 
 bot.onDirectMessage(dispatchLinqMessage);
 bot.onNewMessage(/[\s\S]/u, dispatchLinqMessage);
+// A thumbs-up on a role card is the candidate applying to that role. Reactions
+// are not eve session events, so this is the only place they arrive. The string
+// filter matches both the emoji name and Linq's own `like`.
+bot.onReaction(["thumbs_up"], dispatchLinqJobCardTapback);
 
 export default channel;
 export { channel };
+
+/** Claims survive as long as the card mapping they resolve against. */
+const APPLY_CLAIM_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function applyClaimKey(threadId: string, messageId: string) {
+  return `goforay-card-apply:${threadId}:${messageId}`;
+}
+
+/**
+ * One application per card, whatever the provider does.
+ *
+ * `reaction.added` can be redelivered, a candidate can remove and re-add a
+ * tapback, and two lambdas can race the same webhook. `setIfNotExists` is a
+ * single INSERT ... ON CONFLICT, so the winner is decided in Postgres rather
+ * than in whichever instance happens to be first.
+ */
+async function claimLinqCardApply(threadId: string, messageId: string) {
+  try {
+    const won: unknown = await bot
+      .getState()
+      .setIfNotExists(
+        applyClaimKey(threadId, messageId),
+        { at: new Date().toISOString() },
+        APPLY_CLAIM_TTL_MS
+      );
+    return won === true;
+  } catch (error) {
+    // Fail closed: a duplicate application is worse than a missed tapback.
+    console.error("[goforay] tapback claim store unavailable", {
+      message: error instanceof Error ? error.message : String(error),
+      threadId,
+    });
+    return false;
+  }
+}
+
+async function releaseLinqCardApply(threadId: string, messageId: string) {
+  try {
+    await bot.getState().delete(applyClaimKey(threadId, messageId));
+  } catch {
+    // The claim expires on its own; a stuck claim only costs one retry.
+  }
+}
+
+/**
+ * The workspace behind a reaction. `ReactionEvent.user` is the same `Author`
+ * shape a message carries, so the same auth derivation applies — and without
+ * `attributes.workspaceId` the worker would run with no profile and no resume.
+ */
+function linqPrincipalFromAuthor(author: Message["author"]) {
+  // `defaultLinqAuth` reads only `message.author`, and a reaction carries the
+  // same `Author`, so this is the whole input it needs.
+  const auth = defaultLinqAuth({ author });
+  const authorUserName: unknown = author.userName;
+  const phoneNumber =
+    typeof authorUserName === "string"
+      ? normalizeAuthPhoneNumber(authorUserName)
+      : undefined;
+  const scope = phoneNumber
+    ? accessScopeForPhone(phoneNumber)
+    : accessScopeForUser(auth.principalId);
+  return {
+    auth: {
+      ...auth,
+      attributes: { ...auth.attributes, workspaceId: scope.workspaceId },
+      principalId: auth.principalId,
+    },
+    scope,
+  };
+}
+
+async function dispatchLinqJobCardTapback(event: ReactionEvent) {
+  // A removed tapback is not a decision, and our own outbound reactions come
+  // back through here too. `isBot` is `boolean | "unknown"` and Linq derives it
+  // from `is_from_me`, so compare strictly or real candidates get dropped.
+  if (!event.added) return;
+  if (event.user.isMe || event.user.isBot === true) return;
+
+  const thread = event.thread;
+  const card = linqJobCardForMessageId(
+    await readLinqJobCards(thread),
+    event.messageId
+  );
+  if (!card) {
+    // Silence. Most tapbacks land on ordinary messages, and an expired card
+    // mapping is indistinguishable from a like on the candidate's own text.
+    console.warn("[goforay] tapback with no card mapping", {
+      messageId: event.messageId,
+      threadId: event.threadId,
+    });
+    return;
+  }
+
+  let principal: ReturnType<typeof linqPrincipalFromAuthor>;
+  try {
+    principal = linqPrincipalFromAuthor(event.user);
+  } catch (error) {
+    console.error("[goforay] tapback from an unusable handle", {
+      message: error instanceof Error ? error.message : String(error),
+      threadId: event.threadId,
+    });
+    return;
+  }
+
+  if (!(await claimLinqCardApply(event.threadId, event.messageId))) return;
+
+  const view = jobCardView(card, 1, 1);
+  // Name the role rather than tapping back: the candidate's own thumbs-up is
+  // already on that message, so an echo would not tell them we resolved the
+  // right card. If the mapping is wrong they see it in one line.
+  await thread.post({
+    markdown: `on it, applying to ${view.title.toLowerCase()} at ${view.company.toLowerCase()}`,
+  });
+  void recordConversationMessage({
+    scope: principal.scope,
+    conversationId: `linq:${principal.scope.userId}`,
+    channel: "linq",
+    direction: "inbound",
+    body: `thumbs-up apply: ${view.title} at ${view.company}`,
+    sourceMessageId: `linq:reaction:${event.messageId}`,
+  }).catch(() => undefined);
+
+  try {
+    await send(
+      {
+        context: [
+          CURRENT_FORAY_POLICY,
+          `The candidate reacted with a thumbs-up to this role card: ${card.title} at ${card.company} (${card.location}). Its apply URL is ${card.url}. On iMessage a thumbs-up on a role card is an explicit instruction to apply to that exact role, the same as a threaded reply saying "apply to this". Start the worker assignment against this exact URL now. Do not call a role search tool, do not ask which role they meant, and do not ask them to restate the company, title, number, or URL. The channel has already told the candidate you are applying to this role, so do not repeat that acknowledgement.`,
+        ],
+        message: "apply to this",
+      },
+      {
+        auth: principal.auth,
+        thread,
+        // The channel default steers, which cancels the running turn: two quick
+        // tapbacks would cancel the first application. Queue them instead.
+        turnPolicy: "queue",
+      }
+    );
+  } catch (error) {
+    await releaseLinqCardApply(event.threadId, event.messageId);
+    console.error("[goforay] tapback apply failed to start", {
+      message: error instanceof Error ? error.message : String(error),
+      threadId: event.threadId,
+    });
+  }
+}
 
 function linqAdapterConfig(): Parameters<typeof createLinqAdapter>[0] {
   const apiKey = env.LINQ_API_KEY;
@@ -469,13 +624,10 @@ async function resolveLinqReplyTarget(
 ): Promise<LinqReplyTarget | undefined> {
   const replyToMessageId = linqReplyToMessageId(message.raw);
   if (!replyToMessageId) return undefined;
-  const state = await thread.state;
-  const cards = linqJobCardRepliesSchema.safeParse(
-    state?.linqJobCardsByMessageId
+  const role = linqJobCardForMessageId(
+    await readLinqJobCards(thread),
+    replyToMessageId
   );
-  const role = cards.success
-    ? resolveLinqJobCardReply(message.raw, cards.data)
-    : undefined;
   if (role) return { message: renderGoForayJobCard(role, 1, 1), role };
 
   let inspected = 0;
@@ -730,6 +882,8 @@ async function deliverJobCards(
       markdown: string;
       files?: { data: Buffer; filename: string; mimeType: string }[];
     }) => Promise<unknown>;
+    setState: (patch: Record<string, unknown>) => Promise<unknown>;
+    readonly state: Promise<Record<string, unknown> | null | undefined>;
     toJSON: () => unknown;
   },
   cards: GoForayJobCard[],
@@ -743,7 +897,9 @@ async function deliverJobCards(
   // both used to fail silently. Name which one ran so a single iMessage turn
   // says whether text arrived because the thread read as SMS or because the
   // PNG never painted.
-  console.info("[goforay] delivering Linq job cards", {
+  // `warn`, not `info`: the log search does not index info lines, and a
+  // diagnostic nobody can find is not one.
+  console.warn("[goforay] delivering Linq job cards", {
     cards: cards.length,
     rich,
     service: service || "unknown",
@@ -761,6 +917,10 @@ async function deliverJobCards(
         )
       )
     : [];
+  // Read the mapping once, then extend it per post. A thumbs-up or a threaded
+  // reply resolves against this, so it has to live where the webhook can read
+  // it: Chat SDK thread state, not eve channel state.
+  let delivered = await readLinqJobCards(thread);
   for (const [offset, card] of cards.entries()) {
     const index = offset + 1;
     const text = renderGoForayJobCard(card, index, cards.length);
@@ -778,7 +938,7 @@ async function deliverJobCards(
             },
           ],
         });
-        rememberSentLinqJobCard(state, sent, card);
+        delivered = await rememberDeliveredCard(thread, delivered, sent, card);
         sentImage = true;
       } catch {
         // The text card remains useful if media upload is unavailable.
@@ -786,7 +946,7 @@ async function deliverJobCards(
     }
     if (!sentImage) {
       const sent = await thread.post({ markdown: text });
-      rememberSentLinqJobCard(state, sent, card);
+      delivered = await rememberDeliveredCard(thread, delivered, sent, card);
     }
     if (scope) {
       void recordConversationMessage({
@@ -801,21 +961,15 @@ async function deliverJobCards(
   }
 }
 
-function rememberSentLinqJobCard(
-  state: Record<string, unknown>,
+async function rememberDeliveredCard(
+  thread: Parameters<typeof rememberLinqJobCard>[0],
+  previous: Record<string, GoForayJobCard>,
   sent: unknown,
   card: GoForayJobCard
 ) {
   const message = z.object({ id: z.string().min(1) }).safeParse(sent);
-  if (!message.success) return;
-  const stored = linqJobCardRepliesSchema.safeParse(
-    state.linqJobCardsByMessageId
-  );
-  state.linqJobCardsByMessageId = rememberLinqJobCardReply(
-    stored.success ? stored.data : {},
-    message.data.id,
-    card
-  );
+  if (!message.success) return previous;
+  return await rememberLinqJobCard(thread, previous, message.data.id, card);
 }
 
 function rememberLinqService(

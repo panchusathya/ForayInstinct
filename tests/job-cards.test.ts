@@ -44,7 +44,10 @@ describe("job card projection", () => {
     );
     expect(view.reasons).toHaveLength(2);
     expect(view.footerPosition).toBe("2 of 3");
-    expect(view.sourceLabel).toBe("O P E N   M A R K E T");
+    // Letters are tracked with ordinary spaces; the word gap is non-breaking,
+    // because the renderer collapses runs of ordinary spaces and "OPEN MARKET"
+    // would come out as one word.
+    expect(view.sourceLabel).toBe("O P E N\u00a0\u00a0 M A R K E T");
     expect(view.applyReply).toBe("apply 2");
   });
 
