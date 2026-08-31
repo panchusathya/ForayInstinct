@@ -21,7 +21,11 @@ import {
   renderGoForayJobCard,
   type GoForayJobCard,
 } from "@/lib/goforay/job-cards";
-import { renderJobCardPng } from "@/lib/goforay/request-job-card-png";
+import { renderJobCardPng } from "@/lib/goforay/card-png";
+import {
+  isRichLinqService,
+  linqServiceFromUnknown,
+} from "@/lib/goforay/linq-service";
 import {
   linqJobCardRepliesSchema,
   linqReplyToMessageId,
@@ -234,7 +238,8 @@ const { bot, channel, send } = chatSdkChannel({
           await deliverSubmissionScreenshot(
             context.thread,
             scopeFromPrincipal(caller),
-            event.turnId
+            event.turnId,
+            context.state
           );
         }
       }
@@ -666,9 +671,10 @@ async function deliverSubmissionScreenshot(
     toJSON: () => unknown;
   },
   scope: ReturnType<typeof scopeFromPrincipal>,
-  turnId: string
+  turnId: string,
+  state: Record<string, unknown>
 ) {
-  if (!isRichLinqThread(thread)) return;
+  if (!isRichLinqThread(thread, state)) return;
   try {
     const screenshots =
       await consumePendingApplicationSubmissionScreenshots(scope);
@@ -725,7 +731,7 @@ async function deliverJobCards(
   turnId: string,
   state: Record<string, unknown>
 ) {
-  const rich = isRichLinqThread(thread);
+  const rich = isRichLinqThread(thread, state);
   for (const [offset, card] of cards.entries()) {
     const index = offset + 1;
     const text = renderGoForayJobCard(card, index, cards.length);
@@ -785,15 +791,14 @@ function rememberSentLinqJobCard(
   );
 }
 
-function isRichLinqThread(thread: { toJSON: () => unknown }) {
-  const value = z
-    .object({
-      lastService: z.string().optional(),
-      service: z.string().optional(),
-    })
-    .safeParse(thread.toJSON());
-  const service = value.success
-    ? (value.data.lastService ?? value.data.service ?? "")
-    : "";
-  return service === "iMessage" || service === "RCS";
+function isRichLinqThread(
+  thread: { toJSON: () => unknown },
+  state?: Record<string, unknown>
+) {
+  const fromThread = linqServiceFromUnknown(thread.toJSON());
+  if (fromThread && state) state.lastLinqService = fromThread;
+  const service =
+    fromThread ||
+    (typeof state?.lastLinqService === "string" ? state.lastLinqService : "");
+  return isRichLinqService(service);
 }

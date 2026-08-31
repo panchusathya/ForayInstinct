@@ -33,7 +33,7 @@ vi.mock("@/db/services/application-submission-screenshots", () => ({
   consumePendingApplicationSubmissionScreenshots:
     screenshotMocks.consumePendingApplicationSubmissionScreenshots,
 }));
-vi.mock("@/lib/goforay/request-job-card-png", () => ({
+vi.mock("@/lib/goforay/card-png", () => ({
   renderJobCardPng: cardPngMocks.renderJobCardPng,
 }));
 await import("../agent/channels/linq-v2");
@@ -163,6 +163,67 @@ describe("Linq message delivery", () => {
       completedEvent({
         message: "here is a toro role",
         turnId: "turn-png",
+      }),
+      context,
+      sessionContext()
+    );
+
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      files: [
+        {
+          data: Buffer.from("png-bytes"),
+          filename: "the-toro-company-role.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown: "",
+    });
+  });
+
+  it("treats a Linq webhook service on the inbound message as iMessage", async () => {
+    cardPngMocks.renderJobCardPng.mockResolvedValueOnce({
+      bytes: Buffer.from("png-bytes"),
+      filename: "the-toro-company-role.png",
+    });
+    const { context, post } = handlerContext("message-1", {}, undefined, {
+      chat: { id: "chat-1", is_group: false },
+      direction: "inbound",
+      id: "msg-1",
+      service: "iMessage",
+    });
+
+    await trackWorkerCancellation(
+      {
+        result: {
+          callId: "call-roles",
+          kind: "tool-result",
+          output: {
+            cards: [
+              {
+                company: "The Toro Company",
+                location: "Remote, USA",
+                reasons: ["M&A modeling"],
+                title: "Sr. Analyst, Corporate Development",
+                url: "https://jobs.thetorocompany.com/job/bloomington/corp-dev/1",
+              },
+            ],
+            source: "exa",
+          },
+          toolName: "find_goforay_roles",
+        },
+        sequence: 0,
+        status: "completed",
+        stepIndex: 0,
+        turnId: "turn-webhook-service",
+      },
+      context,
+      sessionContext()
+    );
+
+    await deliverCompletedMessage(
+      completedEvent({
+        message: "here is a toro role",
+        turnId: "turn-webhook-service",
       }),
       context,
       sessionContext()
@@ -746,7 +807,8 @@ function completedEvent(
 function handlerContext(
   currentMessageId = "message-1",
   state: Record<string, unknown> = {},
-  lastService?: string
+  lastService?: string,
+  raw?: unknown
 ) {
   const post = vi.fn<(message: unknown) => Promise<unknown>>();
   post.mockResolvedValue(undefined);
@@ -768,7 +830,10 @@ function handlerContext(
         _type: "chat:Thread",
         adapterName: "linq",
         channelId: "linq:dm:chat-1",
-        currentMessage: { id: currentMessageId },
+        currentMessage: {
+          id: currentMessageId,
+          ...(raw === undefined ? {} : { raw }),
+        },
         id: "linq:dm:chat-1",
         isDM: true,
         ...(lastService ? { lastService } : {}),
