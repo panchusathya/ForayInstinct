@@ -208,6 +208,24 @@ describe("database migrations", () => {
       rows: [{ delivered_at: null, png_base64: "iVBORw0KGgo=" }],
     });
     expect(await pendingConstraintCount(database)).toBe(0);
+
+    // 0017 adds the attribution the caption needs. Additive, re-appliable, and
+    // no backfill is possible: a row written before it never carried a role, so
+    // the empty default is what the caption's fallback reads.
+    await applyMigration(
+      database,
+      "0017_submission_screenshot_attribution.sql"
+    );
+    await applyMigration(
+      database,
+      "0017_submission_screenshot_attribution.sql"
+    );
+    await expect(
+      database.query<{ apply_url: string; role: string }>(
+        `SELECT role, apply_url FROM application_submission_screenshots
+         WHERE session_id = 'browser-1'`
+      )
+    ).resolves.toMatchObject({ rows: [{ apply_url: "", role: "" }] });
   }, 15_000);
 
   it("stores the candidate ATS profile beside the workspace Kernel profile id", async () => {

@@ -5,7 +5,11 @@ import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/browser-run-evidence";
 import {
+  browserSessionEndedError,
+  diagnosticErrorCode,
+  forgetDeadBrowserSession,
   handleBrowserToolFailure,
+  isDeadBrowserExecutionError,
   logChallengeProbe,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
 
@@ -21,32 +25,15 @@ export default defineTool({
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
     await requireOwnedBrowserSession(scope, input.session_id);
+    let response: Awaited<
+      ReturnType<typeof kernel.browsers.playwright.execute>
+    >;
     try {
-      const response = await kernel.browsers.playwright.execute(
+      response = await kernel.browsers.playwright.execute(
         input.session_id,
         { code: input.code, timeout_sec: 30 },
         { signal: context.abortSignal }
       );
-      await recordBrowserActionCheckpoint(
-        scope,
-        input.session_id,
-        {
-          action: "execute",
-          errorCode: response.success ? undefined : "playwright_execution",
-          phase: "playwright",
-          state: response.success ? "completed" : "failed",
-        },
-        context.abortSignal
-      );
-      if (!response.success) {
-        await logChallengeProbe({
-          sessionId: input.session_id,
-          signal: context.abortSignal,
-          trigger: "playwright_execution_failed",
-          workspaceId: scope.workspaceId,
-        });
-      }
-      return response;
     } catch (error) {
       await recordBrowserActionCheckpoint(
         scope,
@@ -68,19 +55,47 @@ export default defineTool({
         trigger: "playwright_threw",
       });
     }
+
+    // A call that returned rather than threw can still be reporting a browser
+    // that is gone. Handled outside the catch above so reconciling it does not
+    // also fire the challenge probe against a session that no longer exists.
+    const dead =
+      !response.success && isDeadBrowserExecutionError(response.error);
+    await recordBrowserActionCheckpoint(
+      scope,
+      input.session_id,
+      {
+        action: "execute",
+        errorCode: response.success
+          ? undefined
+          : dead
+            ? "session_gone"
+            : "playwright_execution",
+        phase: "playwright",
+        state: response.success ? "completed" : "failed",
+      },
+      context.abortSignal
+    );
+    if (dead) {
+      console.warn("[browser-session] unusable", {
+        browser_session_id: input.session_id,
+        reason: "execution_reported_dead",
+        tool: "execute_playwright_code",
+        workspace_id: scope.workspaceId,
+      });
+      await forgetDeadBrowserSession(scope, input.session_id);
+      // The model sees only the error text, and "code failed" reads as worth
+      // retrying. Say the session is unrecoverable instead.
+      throw browserSessionEndedError(input.session_id);
+    }
+    if (!response.success) {
+      await logChallengeProbe({
+        sessionId: input.session_id,
+        signal: context.abortSignal,
+        trigger: "playwright_execution_failed",
+        workspaceId: scope.workspaceId,
+      });
+    }
+    return response;
   },
 });
-
-function diagnosticErrorCode(error: unknown) {
-  if (typeof error !== "string" && !(error instanceof Error)) {
-    return "playwright_execution";
-  }
-  const message = typeof error === "string" ? error : error.message;
-  if (/timeout/i.test(message)) return "timeout";
-  if (/407|proxy.*auth|wrong_password|auth failed/i.test(message)) {
-    return "proxy_auth";
-  }
-  if (/chrome-error|net::/i.test(message)) return "navigation";
-  if (/selector|locator/i.test(message)) return "selector";
-  return "playwright_execution";
-}

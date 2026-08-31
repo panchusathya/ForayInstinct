@@ -67,3 +67,19 @@ export function roleKey(card: Pick<GoForayJobCard, "posting_id" | "url">) {
   if (postingId) return `posting:${postingId}`;
   return `url:${normalizeJobUrl(card.url)}`;
 }
+
+/**
+ * Every identity this card could have been recorded under.
+ *
+ * `roleKey` returns one form, and the two sources supply different ones: the
+ * curated feed carries a posting id, public search never does. Matching on the
+ * primary key alone therefore missed the case the presented-roles store exists
+ * for — a curated role reappearing as a public hit, and the reverse. An
+ * exclusion check has to try both.
+ */
+export function roleKeys(card: Pick<GoForayJobCard, "posting_id" | "url">) {
+  const keys = [roleKey(card)];
+  const urlKey = card.url.trim() ? `url:${normalizeJobUrl(card.url)}` : "";
+  if (urlKey && !keys.includes(urlKey)) keys.push(urlKey);
+  return keys;
+}

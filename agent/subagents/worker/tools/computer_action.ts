@@ -5,7 +5,10 @@ import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/browser-run-evidence";
 import { maskVaultFields } from "@/agent/subagents/worker/lib/kernel-screenshot";
-import { handleBrowserToolFailure } from "@/agent/subagents/worker/lib/challenge-diagnostics";
+import {
+  diagnosticErrorCode,
+  handleBrowserToolFailure,
+} from "@/agent/subagents/worker/lib/challenge-diagnostics";
 
 const actionSchema = z.object({
   type: z.enum([
@@ -291,17 +294,4 @@ function requiredAction<T>(value: T | undefined, action: string): T {
     throw new Error(`Computer action ${action} is missing its payload.`);
   }
   return value;
-}
-
-function diagnosticErrorCode(error: unknown) {
-  if (typeof error !== "string" && !(error instanceof Error)) {
-    return "computer_action";
-  }
-  const message = typeof error === "string" ? error : error.message;
-  if (/timeout/i.test(message)) return "timeout";
-  if (/407|proxy.*auth|wrong_password|auth failed/i.test(message)) {
-    return "proxy_auth";
-  }
-  if (/chrome-error|net::/i.test(message)) return "navigation";
-  return "computer_action";
 }

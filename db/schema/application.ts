@@ -193,6 +193,12 @@ export const applicationSubmissionScreenshots = pgTable(
     createdAt: text("created_at").notNull(),
     page: text("page"),
     kind: text("kind").notNull().default("submitted"),
+    // The role and posting this image belongs to, so a thread with two
+    // applications in flight can caption each batch by name rather than
+    // numbering both into one ambiguous run. Empty for rows written before
+    // migration 0017, which is why the caption has a fallback.
+    role: text("role").notNull().default(""),
+    applyUrl: text("apply_url").notNull().default(""),
     mimeType: text("mime_type").notNull().default("image/png"),
     pngBase64: text("png_base64").notNull(),
     deliveredAt: text("delivered_at"),

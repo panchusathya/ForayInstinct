@@ -65,6 +65,36 @@ describe("next goforay roles", () => {
     ]);
   });
 
+  it("excludes a role already shown under its other identity", async () => {
+    // The candidate saw this posting as a public hit, so the store holds it
+    // keyed by URL only — public search has no posting id. It now comes back
+    // from the curated feed *with* a posting id, so its primary key is
+    // `posting:...` and does not match. Checking only the primary key resent a
+    // role they had already seen, which is the whole reason this store exists.
+    const { nextGoforayRoles } = await load({
+      curatedCards: [
+        {
+          company: "Example Co",
+          location: "Remote",
+          posting_id: "posting-9",
+          reasons: ["Owns the annual plan"],
+          title: "Senior Analyst, Strategic Finance",
+          url: "https://boards.greenhouse.io/example/jobs/4123456",
+        },
+      ],
+      keys: new Set(["url:boards.greenhouse.io/example/jobs/4123456"]),
+      link: { candidateId: "candidate-1", orgId: "org-1" },
+    });
+
+    const feed = await nextGoforayRoles(scope(), {
+      location: "Remote",
+      query: "senior strategic finance",
+      role: "strategic finance",
+    });
+
+    expect(feed.cards).toEqual([]);
+  });
+
   it("never asks the feed for more than five roles at a time", async () => {
     const { nextGoforayRoles, fetch } = await load({
       link: { candidateId: "candidate-1", orgId: "org-1" },
@@ -95,9 +125,13 @@ function scope() {
 }
 
 async function load({
+  curatedCards,
+  keys = new Set<string>(),
   link,
   postingIds = [],
 }: {
+  curatedCards?: unknown[];
+  keys?: Set<string>;
   link?: { candidateId: string; orgId: string };
   postingIds?: string[];
 }) {
@@ -106,8 +140,7 @@ async function load({
   vi.stubEnv("OPENINSTINCT_SHARED_SECRET", "s".repeat(32));
 
   vi.doMock("@/db/services/goforay-presented-roles", () => ({
-    listPresentedRoles: () =>
-      Promise.resolve({ keys: new Set<string>(), postingIds }),
+    listPresentedRoles: () => Promise.resolve({ keys, postingIds }),
     rememberPresentedRoles: () => Promise.resolve(),
   }));
   vi.doMock("@/db", async () => ({
@@ -121,6 +154,9 @@ async function load({
 
   const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation((input) => {
     if (calledUrl(input).includes("api.example.test")) {
+      if (curatedCards) {
+        return Promise.resolve(Response.json({ cards: curatedCards }));
+      }
       return Promise.resolve(
         Response.json(
           { detail: "OpenInstinct account is not linked" },

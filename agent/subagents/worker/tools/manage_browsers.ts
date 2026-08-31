@@ -19,6 +19,7 @@ import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import {
   describeBrowserSessionFailure,
+  diagnosticErrorCode,
   forgetDeadBrowserSession,
   isKernelSessionDead,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
@@ -407,18 +408,6 @@ async function recordCheckpoint(
       session_id: sessionId,
     });
   }
-}
-
-function diagnosticErrorCode(error: unknown) {
-  if (typeof error !== "string" && !(error instanceof Error)) return undefined;
-  const message = typeof error === "string" ? error : error.message;
-  if (/timeout/i.test(message)) return "timeout";
-  if (/407|proxy.*auth|wrong_password|auth failed/i.test(message)) {
-    return "proxy_auth";
-  }
-  if (/chrome-error|net::/i.test(message)) return "navigation";
-  if (/selector|locator/i.test(message)) return "selector";
-  return "playwright_execution";
 }
 
 function safeWorkdayLocation(value: string | undefined) {

@@ -53,7 +53,16 @@ export async function rememberLinqJobCard(
   messageId: string,
   card: GoForayJobCard
 ) {
-  const next = rememberLinqJobCardReply(previous, messageId, card);
+  // Merge against what the store holds now, not only against what this loop
+  // started with. `setState` rewrites the whole map, so a scheduled role-search
+  // delivery and a chat-driven one running together would each drop the other's
+  // cards, and a tapback on a dropped card silently resolves to nothing.
+  const stored = await readLinqJobCards(thread);
+  const next = rememberLinqJobCardReply(
+    { ...stored, ...previous },
+    messageId,
+    card
+  );
   try {
     await thread.setState({ [LINQ_JOB_CARDS_KEY]: next });
   } catch (error) {

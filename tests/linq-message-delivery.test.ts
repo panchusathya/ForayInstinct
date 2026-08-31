@@ -1,17 +1,27 @@
 /* oxlint-disable typescript/no-unsafe-type-assertion -- Eve's Linq adapter exposes the handler context through a transitive Chat SDK `any`; the fixture supplies only the fields exercised here. */
 import type { chatSdkChannel } from "eve/channels/chat-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import workerCancellationHook from "../agent/hooks/worker-cancellation-delivery";
 import { env } from "../lib/env";
 
 const channelCapture = vi.hoisted(() => ({ config: undefined as unknown }));
 const screenshotMocks = vi.hoisted(() => ({
-  consumePendingApplicationSubmissionScreenshots:
-    vi.fn<
-      (
-        _scope: unknown
-      ) => Promise<{ kind: string; mimeType: string; png: Buffer }[]>
-    >(),
+  claimPendingApplicationSubmissionScreenshots: vi.fn<
+    (_scope: unknown) => Promise<
+      {
+        applyUrl: string;
+        id: number;
+        kind: string;
+        mimeType: string;
+        png: Buffer;
+        role: string;
+        sessionId: string;
+      }[]
+    >
+  >(),
+  releaseApplicationSubmissionScreenshots:
+    vi.fn<(_scope: unknown, _ids: readonly number[]) => Promise<void>>(),
 }));
 const cardPngMocks = vi.hoisted(() => ({
   renderJobCardPng:
@@ -36,8 +46,10 @@ vi.mock("eve/channels/chat-sdk", () => ({
   },
 }));
 vi.mock("@/db/services/application-submission-screenshots", () => ({
-  consumePendingApplicationSubmissionScreenshots:
-    screenshotMocks.consumePendingApplicationSubmissionScreenshots,
+  claimPendingApplicationSubmissionScreenshots:
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots,
+  releaseApplicationSubmissionScreenshots:
+    screenshotMocks.releaseApplicationSubmissionScreenshots,
 }));
 vi.mock("@/lib/goforay/request-job-card-png", () => ({
   renderJobCardPng: cardPngMocks.renderJobCardPng,
@@ -63,9 +75,13 @@ type HandlerParameters = Parameters<typeof deliverCompletedMessage>;
 
 describe("Linq message delivery", () => {
   beforeEach(() => {
-    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockReset();
-    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockReset();
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
       []
+    );
+    screenshotMocks.releaseApplicationSubmissionScreenshots.mockReset();
+    screenshotMocks.releaseApplicationSubmissionScreenshots.mockResolvedValue(
+      undefined
     );
     cardPngMocks.renderJobCardPng.mockReset();
     cardPngMocks.renderJobCardPng.mockResolvedValue(undefined);
@@ -605,12 +621,16 @@ describe("Linq message delivery", () => {
   });
 
   it("posts a confirmation screenshot on rich iMessage after a submitted report", async () => {
-    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
       [
         {
+          applyUrl: "https://example.com/apply",
+          id: 1,
           kind: "submitted",
           mimeType: "image/png",
           png: Buffer.from("png-bytes"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
         },
       ]
     );
@@ -628,7 +648,7 @@ describe("Linq message delivery", () => {
     );
 
     expect(
-      screenshotMocks.consumePendingApplicationSubmissionScreenshots
+      screenshotMocks.claimPendingApplicationSubmissionScreenshots
     ).toHaveBeenCalledWith({
       userId: "user-1",
       workspaceId: "workspace-1",
@@ -649,12 +669,16 @@ describe("Linq message delivery", () => {
   });
 
   it("posts a confirmation screenshot when only the inbound webhook names iMessage", async () => {
-    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
       [
         {
+          applyUrl: "https://example.com/apply",
+          id: 1,
           kind: "submitted",
           mimeType: "image/png",
           png: Buffer.from("png-bytes"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
         },
       ]
     );
@@ -693,12 +717,16 @@ describe("Linq message delivery", () => {
   });
 
   it("keeps SMS on the text confirmation when a screenshot is available", async () => {
-    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
       [
         {
+          applyUrl: "https://example.com/apply",
+          id: 1,
           kind: "submitted",
           mimeType: "image/png",
           png: Buffer.from("png-bytes"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
         },
       ]
     );
@@ -716,7 +744,7 @@ describe("Linq message delivery", () => {
     );
 
     expect(
-      screenshotMocks.consumePendingApplicationSubmissionScreenshots
+      screenshotMocks.claimPendingApplicationSubmissionScreenshots
     ).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledExactlyOnceWith({
       markdown: "applied to staff engineer at acme.",
@@ -724,10 +752,26 @@ describe("Linq message delivery", () => {
   });
 
   it("posts every review slice before the candidate approves a submission", async () => {
-    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
       [
-        { kind: "review", mimeType: "image/png", png: Buffer.from("top") },
-        { kind: "review", mimeType: "image/png", png: Buffer.from("bottom") },
+        {
+          applyUrl: "https://example.com/apply",
+          id: 1,
+          kind: "review",
+          mimeType: "image/png",
+          png: Buffer.from("top"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
+        },
+        {
+          applyUrl: "https://example.com/apply",
+          id: 2,
+          kind: "review",
+          mimeType: "image/png",
+          png: Buffer.from("bottom"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
+        },
       ]
     );
     const { context, post } = handlerContext("message-1", {}, "iMessage");
@@ -756,7 +800,7 @@ describe("Linq message delivery", () => {
         },
       ],
       markdown:
-        "Before I submit — page 1 of 2. Reply *yes* to submit, or tell me what to change.",
+        "Before I submit staff engineer — page 1 of 2. Reply *yes* to submit, or tell me what to change.",
     });
     expect(post).toHaveBeenNthCalledWith(2, {
       files: [
@@ -767,16 +811,136 @@ describe("Linq message delivery", () => {
         },
       ],
       markdown:
-        "Before I submit — page 2 of 2. Reply *yes* to submit, or tell me what to change.",
+        "Before I submit staff engineer — page 2 of 2. Reply *yes* to submit, or tell me what to change.",
     });
     expect(post).toHaveBeenNthCalledWith(3, {
       markdown: "ready to submit staff engineer at acme. reply yes.",
     });
   });
 
+  it("re-offers a review slice whose upload failed instead of losing it", async () => {
+    // Claiming stamps `deliveredAt` before anything is posted, so a failed
+    // upload used to destroy the review while the candidate was still asked to
+    // reply yes. The ids have to go back so the next turn can re-offer them.
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        {
+          applyUrl: "https://example.com/apply",
+          id: 41,
+          kind: "review",
+          mimeType: "image/png",
+          png: Buffer.from("top"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
+        },
+        {
+          applyUrl: "https://example.com/apply",
+          id: 42,
+          kind: "review",
+          mimeType: "image/png",
+          png: Buffer.from("bottom"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
+        },
+      ]
+    );
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+    // Page one uploads, page two fails: a partial review is worse than none,
+    // because the candidate approves having seen only half the form.
+    post.mockImplementation((message: unknown) =>
+      Buffer.from("bottom").equals(attachedBytes(message))
+        ? Promise.reject(new Error("media upload rejected"))
+        : Promise.resolve({ id: "posted" })
+    );
+
+    await trackWorkerCancellation(
+      submissionApprovalResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    await deliverCompletedMessage(
+      completedEvent({
+        message: "Ready to submit Staff Engineer at Acme. Reply yes.",
+      }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(
+      screenshotMocks.releaseApplicationSubmissionScreenshots
+    ).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      [42]
+    );
+    // A partial review is the dangerous case: page one is on screen, so the
+    // candidate has no reason to think they are missing the rest of the form.
+    const posted = post.mock.calls.map(([message]) => postedMarkdown(message));
+    expect(posted).toContain(
+      "heads up, i could only send you part of the filled form for staff engineer.\n\ntell me to walk you through it and i will read the answers back before anything is submitted."
+    );
+  });
+
+  it("says the form could not be sent rather than asking for a blind approval", async () => {
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        {
+          applyUrl: "https://example.com/apply",
+          id: 51,
+          kind: "review",
+          mimeType: "image/png",
+          png: Buffer.from("top"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
+        },
+      ]
+    );
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+    post.mockImplementation((message: unknown) =>
+      attachedBytes(message).byteLength > 0
+        ? Promise.reject(new Error("media upload rejected"))
+        : Promise.resolve({ id: "posted" })
+    );
+
+    await trackWorkerCancellation(
+      submissionApprovalResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    await deliverCompletedMessage(
+      completedEvent({
+        message: "Ready to submit Staff Engineer at Acme. Reply yes.",
+      }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(
+      screenshotMocks.releaseApplicationSubmissionScreenshots
+    ).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      [51]
+    );
+    // Nothing reached the thread, so the candidate must be told, not left with
+    // the coordinator's "reply yes" standing on its own.
+    const posted = post.mock.calls.map(([message]) => postedMarkdown(message));
+    expect(posted).toContain(
+      "i could not send you the filled form for staff engineer.\n\ntell me to walk you through it and i will read the answers back before anything is submitted."
+    );
+  });
+
   it("leaves an ordinary worker failure without a screenshot post", async () => {
-    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
-      [{ kind: "review", mimeType: "image/png", png: Buffer.from("top") }]
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        {
+          applyUrl: "https://example.com/apply",
+          id: 1,
+          kind: "review",
+          mimeType: "image/png",
+          png: Buffer.from("top"),
+          role: "Staff Engineer",
+          sessionId: "browser-1",
+        },
+      ]
     );
     const { context, post } = handlerContext("message-1", {}, "iMessage");
 
@@ -792,7 +956,7 @@ describe("Linq message delivery", () => {
     );
 
     expect(
-      screenshotMocks.consumePendingApplicationSubmissionScreenshots
+      screenshotMocks.claimPendingApplicationSubmissionScreenshots
     ).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledExactlyOnceWith({
       markdown: "when can you start?",
@@ -1030,4 +1194,19 @@ async function recordCancellationThroughHook(
       session: { id: sessionId },
     } as Parameters<typeof handler>[1]
   );
+}
+
+/** The bytes a posted message attached, or empty when it was text only. */
+function attachedBytes(message: unknown) {
+  const parsed = z
+    .object({ files: z.array(z.object({ data: z.instanceof(Buffer) })).min(1) })
+    .safeParse(message);
+  return parsed.success
+    ? (parsed.data.files[0]?.data ?? Buffer.alloc(0))
+    : Buffer.alloc(0);
+}
+
+function postedMarkdown(message: unknown) {
+  const parsed = z.object({ markdown: z.string() }).safeParse(message);
+  return parsed.success ? parsed.data.markdown : undefined;
 }

@@ -361,10 +361,16 @@ describe("the review gate pauses an application before its final submit", () => 
     expect(result).toMatchObject({ captured: 2, status: "awaiting_approval" });
     expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(2);
     for (const call of mocks.saveApplicationSubmissionScreenshot.mock.calls) {
+      // The role and apply URL travel with the image: the delivering channel
+      // captions by name, so a thread with two applications in flight can tell
+      // them apart instead of numbering both into one ambiguous run.
       expect(call[2]).toEqual({
+        applyUrl:
+          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
         kind: "review",
         page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review",
         png: Buffer.from([137, 80, 78, 71]),
+        role: "Staff Engineer",
       });
     }
     // The trail is how the coordinator matches a paused worker to a posting.

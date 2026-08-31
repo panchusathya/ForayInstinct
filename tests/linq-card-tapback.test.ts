@@ -138,10 +138,17 @@ describe("Linq job-card tapback", () => {
     expect(JSON.stringify(input)).toContain(card.url);
     // Steering would cancel the previous application on a second tapback.
     expect(options).toMatchObject({ turnPolicy: "queue" });
-    expect(
-      (options as { auth: { attributes: { workspaceId: string } } }).auth
-        .attributes.workspaceId
-    ).toMatch(/^phone:/u);
+    const auth = (
+      options as {
+        auth: { attributes: { workspaceId: string }; principalId: string };
+      }
+    ).auth;
+    expect(auth.attributes.workspaceId).toMatch(/^phone:/u);
+    // The principal id is the Vercel Connect subject. A text forwards the
+    // phone-derived id; a tapback used to forward Linq's own, so a Google grant
+    // made on the web was invisible and every Gmail call asked the candidate to
+    // authorize Google again. Both paths must agree.
+    expect(auth.principalId).toBe(auth.attributes.workspaceId);
     // Naming the role is how a wrong mapping becomes visible immediately.
     expect(post).toHaveBeenCalledExactlyOnceWith({
       markdown: "on it, applying to head of fp&a at ramp",

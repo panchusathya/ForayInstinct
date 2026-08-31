@@ -16,7 +16,7 @@ import { ensureScope } from "@/db/services/scope";
 import { searchExaRoles } from "./exa";
 import { goForayJobCardSchema, type GoForayJobCard } from "./job-cards";
 import { relevanceTokens } from "./relevance";
-import { roleKey } from "./role-identity";
+import { roleKeys } from "./role-identity";
 import {
   listPresentedRoles,
   rememberPresentedRoles,
@@ -381,9 +381,11 @@ export async function findGoforayRoles(
       ) {
         return { ...feed, searching: true, source: "juicebox" };
       }
-      // The feed's own exclusion is capped, so re-check locally.
+      // The feed's own exclusion is capped, so re-check locally. Check every
+      // identity the card could have been recorded under: this posting may have
+      // been shown before as a public hit, which carries no posting id.
       const fresh = feed.cards.filter(
-        (card) => !presented.keys.has(roleKey(card))
+        (card) => !roleKeys(card).some((key) => presented.keys.has(key))
       );
       if (fresh.length) {
         await rememberPresentedRoles(scope, fresh);
@@ -418,7 +420,7 @@ export async function findGoforayRoles(
       wanted: relevanceTokens(role, input.seniority),
     });
     const cards = candidates
-      .filter((card) => !presented.keys.has(roleKey(card)))
+      .filter((card) => !roleKeys(card).some((key) => presented.keys.has(key)))
       .slice(0, limit);
     if (cards.length) await rememberPresentedRoles(scope, cards);
     return {

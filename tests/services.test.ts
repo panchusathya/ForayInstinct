@@ -404,12 +404,13 @@ describe("database services", () => {
     expect(stored?.extractedText).toContain("Ada Lovelace");
   });
 
-  it("hands every undelivered screenshot to the next consumer in page order", async () => {
+  it("claims one application's screenshots in page order, not the whole workspace", async () => {
     const client = new PGlite();
     databases.push(client);
     await applyInitialMigration(client);
     await applyMigration(client, "0010_application_submission_screenshots.sql");
     await applyMigration(client, "0015_submission_review_screenshots.sql");
+    await applyMigration(client, "0017_submission_screenshot_attribution.sql");
 
     const pgliteDatabase = drizzle(client, { schema });
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
@@ -429,27 +430,33 @@ describe("database services", () => {
       alice,
       "browser-review",
       {
+        applyUrl: "https://example.com/apply",
         kind: "review",
         page: "https://example.com/apply",
         png: Buffer.from("review-top"),
+        role: "Staff Engineer",
       }
     );
     await screenshots.saveApplicationSubmissionScreenshot(
       alice,
       "browser-review",
       {
+        applyUrl: "https://example.com/apply",
         kind: "review",
         page: "https://example.com/apply",
         png: Buffer.from("review-bottom"),
+        role: "Staff Engineer",
       }
     );
     await screenshots.saveApplicationSubmissionScreenshot(
       alice,
-      "browser-done",
+      "browser-other",
       {
-        kind: "submitted",
-        page: "https://example.com/confirmation",
-        png: Buffer.from("proof"),
+        applyUrl: "https://other.example.com/apply",
+        kind: "review",
+        page: "https://other.example.com/apply",
+        png: Buffer.from("second-application"),
+        role: "Product Manager",
       }
     );
     await screenshots.saveApplicationSubmissionScreenshot(bob, "browser-bob", {
@@ -459,33 +466,96 @@ describe("database services", () => {
 
     // A scroll-stitched review must arrive whole and top-first: the candidate
     // is approving the form, so dropping a capture hides what they approved.
-    await expect(
-      screenshots.consumePendingApplicationSubmissionScreenshots(alice)
-    ).resolves.toEqual([
-      {
-        kind: "review",
-        mimeType: "image/png",
-        png: Buffer.from("review-top"),
-      },
-      {
-        kind: "review",
-        mimeType: "image/png",
-        png: Buffer.from("review-bottom"),
-      },
-      { kind: "submitted", mimeType: "image/png", png: Buffer.from("proof") },
+    // A second application in flight must NOT be numbered into the same run —
+    // one "yes" cannot mean two different jobs.
+    const first =
+      await screenshots.claimPendingApplicationSubmissionScreenshots(alice);
+    expect(
+      first.map((row) => [row.role, row.png.toString(), row.sessionId])
+    ).toEqual([
+      ["Staff Engineer", "review-top", "browser-review"],
+      ["Staff Engineer", "review-bottom", "browser-review"],
+    ]);
+
+    const second =
+      await screenshots.claimPendingApplicationSubmissionScreenshots(alice);
+    expect(second.map((row) => [row.role, row.png.toString()])).toEqual([
+      ["Product Manager", "second-application"],
     ]);
     await expect(
-      screenshots.consumePendingApplicationSubmissionScreenshots(alice)
+      screenshots.claimPendingApplicationSubmissionScreenshots(alice)
     ).resolves.toEqual([]);
+
+    const others =
+      await screenshots.claimPendingApplicationSubmissionScreenshots(bob);
+    expect(others.map((row) => row.png.toString())).toEqual([
+      "other-workspace",
+    ]);
+
+    // Claiming stamps `deliveredAt` before anything is posted, so a failed
+    // upload used to destroy the review while the candidate was still being
+    // asked to reply yes. The ids have to go back on the queue.
+    await screenshots.releaseApplicationSubmissionScreenshots(
+      alice,
+      first.map((row) => row.id)
+    );
+    const reoffered =
+      await screenshots.claimPendingApplicationSubmissionScreenshots(alice);
+    expect(reoffered.map((row) => row.png.toString())).toEqual([
+      "review-top",
+      "review-bottom",
+    ]);
+
+    // Releasing is workspace-scoped: one workspace must not be able to put
+    // another's rows back on the queue by id.
+    await screenshots.releaseApplicationSubmissionScreenshots(
+      bob,
+      reoffered.map((row) => row.id)
+    );
     await expect(
-      screenshots.consumePendingApplicationSubmissionScreenshots(bob)
-    ).resolves.toEqual([
+      screenshots.claimPendingApplicationSubmissionScreenshots(alice)
+    ).resolves.toEqual([]);
+  }, 20_000);
+
+  it("excludes an already-shown role under either of its identities", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    // 0016 backfills from the table 0012 creates.
+    await applyMigration(client, "0012_phone_workspaces.sql");
+    await applyMigration(client, "0016_goforay_presented_roles.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, presented] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/goforay-presented-roles"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    // Shown from the curated feed, which is the only source that has a posting
+    // id. The row records the normalized URL too.
+    await presented.rememberPresentedRoles(alice, [
       {
-        kind: "submitted",
-        mimeType: "image/png",
-        png: Buffer.from("other-workspace"),
+        company: "Acme",
+        location: "Remote",
+        posting_id: "posting-1",
+        reasons: [],
+        title: "Staff Engineer",
+        url: "https://boards.greenhouse.io/acme/jobs/1?utm_source=email",
       },
     ]);
+
+    // Public search finds the same posting and carries no posting id, so the
+    // only identity it can be recognised by is the URL. Writing the url column
+    // and never reading it is what let the role come back a second time.
+    const { keys } = await presented.listPresentedRoles(alice);
+    expect(keys).toContain("posting:posting-1");
+    expect(keys).toContain("url:boards.greenhouse.io/acme/jobs/1");
   }, 15_000);
 
   it("rejects a screenshot kind the delivering channel cannot caption", async () => {

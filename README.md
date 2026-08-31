@@ -97,6 +97,59 @@ from contacts that are not on this allowlist. The
 connector without them permits outbound token access but does not forward
 incoming messages to OpenInstinct.
 
+#### Enable thumbs-up to apply
+
+A thumbs-up tapback on a role card is the candidate applying to that role, but
+only if Linq actually sends the reaction webhook. That subscription lives in
+Linq, not in this repository, so it is not created by a deploy and its absence
+is silent: the tapback simply does nothing. Check it, then enable it:
+
+```bash
+pnpm linq:reactions          # report, exits non-zero if missing
+pnpm linq:reactions --apply  # subscribe
+```
+
+It asks the Vercel CLI to find the connector and mint an app-subject token, so a
+logged-in `vercel` is normally the only prerequisite. Credentials are tried in
+order of how likely they are to be the deployment's account: `LINQ_ACCESS_TOKEN`,
+then `LINQ_CONNECTOR`, then CLI discovery, and a local `LINQ_API_KEY` only as a
+last resort — the reverse of the channel's own order, because a key on a
+developer's laptop is usually a personal or sandbox one. To supply a token
+yourself instead:
+
+```bash
+vercel connect list                             # find the linq connector uid
+LINQ_ACCESS_TOKEN=$(vercel connect token <uid> --subject app) pnpm linq:reactions
+```
+
+`--subject app` is not optional. The CLI defaults to `--subject user`, and Linq
+answers a user-subject token with `401 invalid_token`, because the channel
+authenticates as the app (`subject: { type: "app" }`).
+
+The token has to belong to the account the deployment talks to. **Do not
+substitute a personal Linq dashboard key for a Connect-managed line.** Connect
+provisions its own Linq line, so a dashboard key authenticates successfully and
+then lists a different account's subscriptions — which looks exactly like the
+webhook never having been registered, even while inbound iMessages arrive
+normally. `LINQ_API_KEY` is therefore honored only alongside
+`LINQ_WEBHOOK_SECRET`, which is direct mode (a Linq sandbox account), matching
+how the channel itself chooses credentials.
+
+Setting `LINQ_CONNECTOR` instead lets the script mint the token itself, the same
+way the channel does — but that variable is typically set only in the production
+environment, so a development `vercel env pull` will not include it. The script
+reads `.env.local` as well as the shell, since `vercel env pull` writes there.
+
+If the report says these credentials list no subscriptions, check whether
+inbound messages still work before treating it as an outage. If Foray replies to
+a text, the subscription exists and the credentials are pointed at the wrong
+account. Only if Foray does not reply is the endpoint genuinely unregistered,
+which the connector attachment above fixes.
+
+This is deliberately a one-off rather than part of `pnpm build:vercel`: it
+changes live provider configuration, so running it on every deploy would make a
+Linq outage fail the build.
+
 ## Google Workspace connection
 
 OpenInstinct can use a user's Gmail, Calendar, and read-only Contacts through a
