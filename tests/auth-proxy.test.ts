@@ -27,6 +27,7 @@ describe("auth proxy allowlist", () => {
     "/eve/v1/linq",
     "/eve/v1/session/abc/stream",
     "/api/goforay/conversations",
+    "/api/job-card-png",
   ])("lets %s through without a session cookie", async (pathname) => {
     expect(isPublicPath(pathname)).toBe(true);
     const response = await proxy(

@@ -21,7 +21,7 @@ import {
   renderGoForayJobCard,
   type GoForayJobCard,
 } from "@/lib/goforay/job-cards";
-import { renderJobCardPng } from "@/lib/goforay/card-png";
+import { renderJobCardPng } from "@/lib/goforay/request-job-card-png";
 import {
   linqJobCardRepliesSchema,
   linqReplyToMessageId,

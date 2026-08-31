@@ -8,7 +8,10 @@ export function isPublicPath(pathname: string) {
     pathname.startsWith("/api/auth/") ||
     // Eve service routes authenticate their own signed webhook requests.
     pathname.startsWith("/eve/v1/") ||
-    pathname === "/api/goforay/conversations"
+    pathname === "/api/goforay/conversations" ||
+    // Eve's Linq channel cannot import next/og; it paints cards through this
+    // route with a shared secret instead of a browser session.
+    pathname === "/api/job-card-png"
   );
 }
 
