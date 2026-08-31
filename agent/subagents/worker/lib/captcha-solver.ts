@@ -27,6 +27,7 @@ export const captchaCompleteResultSchema = z.object({
   challenge: z.boolean(),
   injected: z.boolean(),
   kinds: z.array(captchaKindSchema),
+  tilesClicked: z.number().optional(),
   token: z.boolean(),
   url: z.string().optional(),
 });
@@ -118,15 +119,35 @@ const collectWidgets = async (root) => {
   return widgets;
 };
 
+const lookalikeHostLocator = (root) =>
+  root.locator('.h-captcha, [data-sitekey], [data-hcaptcha-widget-id], [class*="hcaptcha"], [class*="h-captcha"], [id*="captcha"], [id*="Captcha"], [class*="captcha"]');
+
+const lookalikePrompt = (root) =>
+  root.getByText(/select all (images|squares|pictures)|click each image|i.?m not a robot|i am human|verify you are (a )?human/i);
+
+const visibleBox = async (locator) => {
+  if (await locator.count().catch(() => 0) === 0) return null;
+  const box = await locator.first().boundingBox().catch(() => null);
+  if (box && box.width > 0 && box.height > 0) return box;
+  return null;
+};
+
 const collectLookalikeHosts = async () => {
   const widgets = [];
-  const hosts = page.locator('.h-captcha, [data-sitekey], [data-hcaptcha-widget-id]');
-  const count = await hosts.count();
-  for (let index = 0; index < count; index += 1) {
-    const box = await hosts.nth(index).boundingBox().catch(() => null);
-    if (box && box.width > 0 && box.height > 0) {
-      widgets.push({ box, kind: "hcaptcha" });
+  for (const frame of page.frames()) {
+    const hosts = lookalikeHostLocator(frame);
+    const count = await hosts.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      const box = await hosts.nth(index).boundingBox().catch(() => null);
+      if (box && box.width > 0 && box.height > 0) {
+        widgets.push({ box, kind: "hcaptcha" });
+      }
     }
+    const named = frame.getByRole("checkbox", { name: /i.?m not a robot|i am human|verify you are human/i });
+    const namedBox = await visibleBox(named);
+    if (namedBox) widgets.push({ box: namedBox, kind: "hcaptcha" });
+    const promptBox = await visibleBox(lookalikePrompt(frame));
+    if (promptBox) widgets.push({ box: promptBox, kind: "hcaptcha_challenge" });
   }
   return widgets;
 };
@@ -136,18 +157,16 @@ const checkboxBox = async () => {
     const captchaFrame = /hcaptcha|turnstile|incapsula|captcha/i.test(frame.url());
     const checkbox = captchaFrame
       ? frame.locator('#checkbox, [role="checkbox"], #cf-stage, .ctp-checkbox-label')
-      : frame.locator('.h-captcha #checkbox, .h-captcha [role="checkbox"], [data-sitekey] [role="checkbox"]');
-    let box = null;
-    if (await checkbox.count().catch(() => 0) > 0) {
-      box = await checkbox.first().boundingBox().catch(() => null);
+      : frame.locator('.h-captcha #checkbox, .h-captcha [role="checkbox"], [data-sitekey] [role="checkbox"], [class*="captcha"] [role="checkbox"], [class*="captcha"] #checkbox');
+    let box = await visibleBox(checkbox);
+    if (!box) {
+      box = await visibleBox(frame.getByRole("checkbox", { name: /i.?m not a robot|i am human|verify you are human/i }));
     }
-    if (!box || box.width <= 0 || box.height <= 0) {
-      const named = frame.getByRole("checkbox", { name: /i.?m not a robot|i am human|verify you are human/i });
-      if (await named.count().catch(() => 0) > 0) {
-        box = await named.first().boundingBox().catch(() => null);
-      }
+    if (!box) {
+      const label = frame.getByText(/i.?m not a robot|i am human|verify you are (a )?human/i);
+      box = await visibleBox(label);
     }
-    if (box && box.width > 0 && box.height > 0) {
+    if (box) {
       const kind = classify(frame.url()) ?? "hcaptcha";
       return { box, kind: kind === "incapsula" ? "hcaptcha" : kind };
     }
@@ -190,36 +209,86 @@ const detect = async () => {
   };
 };
 
-const clickAll = async (locator, limit = 16) => {
+const clickSized = async (locator, limit = 16) => {
   const count = Math.min(await locator.count().catch(() => 0), limit);
+  let clicked = 0;
   for (let index = 0; index < count; index += 1) {
+    const box = await locator.nth(index).boundingBox().catch(() => null);
+    if (!box || box.width < 20 || box.height < 20) continue;
     await locator.nth(index).click({ force: true, timeout: 1000 }).catch(() => undefined);
+    clicked += 1;
     await sleep(80);
   }
-  return count;
+  return clicked;
+};
+
+const captchaRoot = (frame) => {
+  const captchaFrame = /hcaptcha|turnstile|incapsula|captcha/i.test(frame.url());
+  if (captchaFrame) return frame.locator("body");
+  return lookalikeHostLocator(frame);
 };
 
 const interactLookalike = async () => {
+  let tilesClicked = 0;
   for (const frame of page.frames()) {
     const captchaFrame = /hcaptcha|turnstile|incapsula|captcha/i.test(frame.url());
     const checkbox = captchaFrame
       ? frame.locator('#checkbox, [role="checkbox"], #cf-stage, .ctp-checkbox-label')
-      : frame.locator('.h-captcha #checkbox, .h-captcha [role="checkbox"], [data-sitekey] [role="checkbox"]');
-    await clickAll(checkbox, 2);
-    const named = frame.getByRole("checkbox", { name: /i.?m not a robot|i am human|verify you are human/i });
-    await clickAll(named, 2);
-    const tiles = captchaFrame
-      ? frame.locator('.task-image, [class*="task-image"], [class*="task-grid"] .border, [class*="challenge"] img, button:has(img)')
-      : frame.locator('.h-captcha img, [class*="captcha"] img, [class*="challenge"] img, [class*="task-grid"] img, [class*="task-image"]');
-    await clickAll(tiles, 16);
-    const verify = frame.locator('#verify, .verify-button, button, [role="button"], input[type="submit"]').filter({ hasText: /verify|check|submit|next|skip|done|continue/i });
-    await clickAll(verify, 3);
+      : frame.locator('.h-captcha #checkbox, .h-captcha [role="checkbox"], [data-sitekey] [role="checkbox"], [class*="captcha"] [role="checkbox"], [class*="captcha"] #checkbox');
+    await clickSized(checkbox, 2);
+    await clickSized(frame.getByRole("checkbox", { name: /i.?m not a robot|i am human|verify you are human/i }), 2);
+    await clickSized(frame.getByText(/i.?m not a robot|i am human|verify you are (a )?human/i), 2);
   }
+  const gridDeadline = Date.now() + 3500;
+  while (Date.now() < gridDeadline) {
+    let found = 0;
+    for (const frame of page.frames()) {
+      found += await captchaRoot(frame).locator('[class*="tile"], [class*="task-image"], [class*="task-grid"] > *, [class*="grid"] > *, img, canvas, [style*="background-image"]').count().catch(() => 0);
+    }
+    if (found >= 4) break;
+    await sleep(200);
+  }
+  for (const frame of page.frames()) {
+    const root = captchaRoot(frame);
+    const tiles = root.locator('[class*="tile"], [class*="task-image"], [class*="task-grid"] > *, [class*="captcha"] [class*="grid"] > *, [class*="challenge"] img, img, canvas, button:has(img), [style*="background-image"]');
+    tilesClicked += await clickSized(tiles, 16);
+    const verify = root.locator('#verify, .verify-button, button, [role="button"], input[type="submit"]').filter({ hasText: /verify|check|submit|next|skip|done/i });
+    await clickSized(verify, 3);
+  }
+  return tilesClicked;
+};
+
+const widgetBlocking = async () => {
+  for (const frame of page.frames()) {
+    const prompt = lookalikePrompt(frame).first();
+    if (await prompt.isVisible().catch(() => false)) {
+      const text = await prompt.innerText().catch(() => "");
+      if (/select all|click each image/i.test(text)) return true;
+    }
+    const grid = captchaRoot(frame).locator('[class*="tile"], [class*="task-image"], [class*="grid"] > img, [class*="grid"] > div');
+    const count = await grid.count().catch(() => 0);
+    let visible = 0;
+    for (let index = 0; index < Math.min(count, 16); index += 1) {
+      if (await grid.nth(index).isVisible().catch(() => false)) visible += 1;
+    }
+    if (visible >= 4) return true;
+  }
+  return false;
+};
+
+const checkboxChecked = async () => {
+  for (const frame of page.frames()) {
+    const named = frame.getByRole("checkbox", { name: /i.?m not a robot|i am human|verify you are human/i });
+    if (await named.count().catch(() => 0) === 0) continue;
+    const checked = await named.first().getAttribute("aria-checked").catch(() => null);
+    if (checked === "true") return true;
+    if (await named.first().isChecked().catch(() => false)) return true;
+  }
+  return false;
 };
 
 const injectLookalikeToken = async () => page.evaluate(() => {
   const value = "lookalike-" + String(Date.now()) + "-" + Math.random().toString(36).slice(2) + "xxxxxxxxxxxxxxxxxxxxxxxx";
-  const names = ["h-captcha-response", "g-recaptcha-response", "cf-turnstile-response", "cf-challenge-response"];
   const write = (node) => {
     node.value = value;
     node.setAttribute("value", value);
@@ -227,22 +296,13 @@ const injectLookalikeToken = async () => page.evaluate(() => {
     node.dispatchEvent(new Event("change", { bubbles: true }));
   };
   const nodes = [];
-  for (const name of names) {
-    nodes.push(...document.querySelectorAll('textarea[name="' + name + '"], input[name="' + name + '"]'));
-  }
-  const lookalike = document.querySelector('.h-captcha, [data-sitekey], [data-hcaptcha-widget-id], iframe[src*="hcaptcha"], iframe[title*="captcha" i]');
-  if (nodes.length === 0 && !lookalike) return false;
-  if (nodes.length === 0) {
-    const form = document.querySelector("form") || document.body;
-    for (const name of names.slice(0, 2)) {
-      const ta = document.createElement("textarea");
-      ta.name = name;
-      ta.setAttribute("name", name);
-      ta.style.display = "none";
-      form.appendChild(ta);
-      nodes.push(ta);
+  for (const node of document.querySelectorAll("textarea, input")) {
+    const hay = [node.getAttribute("name"), node.id, node.className].join(" ").toLowerCase();
+    if (/h-captcha-response|g-recaptcha-response|cf-turnstile-response|cf-challenge-response|captcha/.test(hay)) {
+      nodes.push(node);
     }
   }
+  if (nodes.length === 0) return false;
   for (const node of nodes) write(node);
   for (const widget of document.querySelectorAll("[data-callback]")) {
     const cb = widget.getAttribute("data-callback");
@@ -306,7 +366,7 @@ return {
 `;
 
 export const captchaCompleteCode = `${captchaHelpers}
-await interactLookalike();
+const tilesClicked = await interactLookalike();
 await sleep(200);
 let after = await detect();
 let injected = false;
@@ -315,15 +375,23 @@ if (!after.token) {
   after = await detect();
 }
 const deadline = Date.now() + 4000;
-while (Date.now() < deadline && !after.token) {
-  await sleep(300);
+while (Date.now() < deadline) {
   after = await detect();
+  const blocking = await widgetBlocking();
+  const checked = await checkboxChecked();
+  if (after.token || checked || (tilesClicked > 0 && !blocking)) break;
+  await sleep(300);
 }
+after = await detect();
+const blocking = await widgetBlocking();
+const checked = await checkboxChecked();
+const passed = after.token || checked || (tilesClicked > 0 && !blocking);
 return {
-  challenge: after.kinds.includes("hcaptcha_challenge") && !after.token,
+  challenge: blocking && !passed,
   injected,
   kinds: after.kinds,
-  token: after.token,
+  tilesClicked,
+  token: passed,
   url: page.url(),
 };
 `;

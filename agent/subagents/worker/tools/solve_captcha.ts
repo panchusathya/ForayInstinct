@@ -136,6 +136,7 @@ export default defineTool({
           ? `${inspected.clicked.kind}:${String(inspected.clicked.x)},${String(inspected.clicked.y)}`
           : "no_click",
         completed?.injected ? "injected_lookalike_token" : "no_inject",
+        `tiles:${String(completed?.tilesClicked ?? 0)}`,
         ...inspected.kernelMessages,
       ],
     });

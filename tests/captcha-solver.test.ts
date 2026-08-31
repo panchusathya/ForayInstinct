@@ -104,6 +104,9 @@ describe("checkbox CAPTCHA solver", () => {
     expect(captchaInspectCode).not.toContain("Input.dispatchMouseEvent");
     expect(captchaInspectCode).not.toContain("2captcha");
     expect(captchaCompleteCode).toContain("injectLookalikeToken");
+    expect(captchaCompleteCode).toContain('[class*="tile"]');
+    expect(captchaCompleteCode).toContain("background-image");
+    expect(captchaCompleteCode).not.toContain('createElement("textarea")');
     expect(captchaCompleteCode).toContain("h-captcha-response");
     expect(captchaCompleteCode).toContain("hcaptcha_challenge");
   });
@@ -238,9 +241,7 @@ describe("checkbox CAPTCHA solver", () => {
     expect(tool).not.toContain("Does not solve image puzzles");
     expect(tool).not.toContain("Does not inject tokens");
     expect(tool).toContain("writes a lookalike response token");
-    expect(skill).toContain(
-      "writes a response token into the page captcha fields"
-    );
+    expect(skill).toContain("same-page checkbox + image-grid clones");
     expect(skill).toContain(
       "Treat lookalike widgets as part of the assignment"
     );
