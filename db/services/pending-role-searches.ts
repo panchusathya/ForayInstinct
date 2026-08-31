@@ -16,25 +16,6 @@ export async function rememberLinqRoleSearchThread(
     });
 }
 
-export async function queuePendingRoleSearch(
-  scope: AccessScope,
-  input: { location?: string; query?: string }
-) {
-  const existing = await db.query.goforayPendingRoleSearches.findFirst({
-    where: eq(goforayPendingRoleSearches.workspaceId, scope.workspaceId),
-  });
-  if (!existing) return;
-  await db
-    .update(goforayPendingRoleSearches)
-    .set({
-      location: input.location?.trim() ?? "",
-      pending: "yes",
-      query: input.query?.trim() ?? "",
-      updatedAt: new Date(),
-    })
-    .where(eq(goforayPendingRoleSearches.workspaceId, scope.workspaceId));
-}
-
 export async function listPendingRoleSearches(limit = 20) {
   return db
     .select()

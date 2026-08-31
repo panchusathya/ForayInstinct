@@ -1,3 +1,15 @@
+/**
+ * Paints a job card with Satori. `next/og` resolves only inside the Next.js
+ * app, so this module may be imported from a route handler and nowhere else.
+ *
+ * The Eve agent deploys as its own Nitro bundle (`.eve/vercel-services/eve`,
+ * a lambda with no `node_modules` and no `@vercel/og` wasm beside it), so an
+ * authored channel importing this — by any path, including a deep dynamic
+ * `import("next/dist/compiled/@vercel/og/...")` — throws at runtime and
+ * silently degrades every card to its text twin. Channels reach the renderer
+ * through `request-job-card-png.ts` instead.
+ */
+import { ImageResponse } from "next/og";
 import { fetchEmployerLogo } from "./card-logo";
 import { NEUTRAL_PALETTE } from "./card-palette";
 import { jobCardFilename, jobCardView, type GoForayJobCard } from "./job-cards";
@@ -14,11 +26,6 @@ export async function renderJobCardPng(
   total: number
 ) {
   try {
-    // Eve cannot load `next/og` (extensionless subpath). The compiled Node
-    // entry is a real file, and a dynamic import keeps it off the authored
-    // channel's startup graph.
-    const { ImageResponse } =
-      await import("next/dist/compiled/@vercel/og/index.node.js");
     const logo = await fetchEmployerLogo(card.url);
     const view = jobCardView(card, index, total);
     const logoSrc = logo
@@ -33,7 +40,14 @@ export async function renderJobCardPng(
       bytes: Buffer.from(await response.arrayBuffer()),
       filename: jobCardFilename(card),
     };
-  } catch {
+  } catch (error) {
+    // Never drop the role: the caller falls back to the text card. Say why,
+    // though — a silent renderer failure is what let two releases ship a text
+    // twin on iMessage while everyone believed images were going out.
+    console.error("[goforay] job-card PNG render failed", {
+      company: card.company,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return undefined;
   }
 }

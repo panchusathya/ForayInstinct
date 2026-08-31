@@ -33,7 +33,7 @@ vi.mock("@/db/services/application-submission-screenshots", () => ({
   consumePendingApplicationSubmissionScreenshots:
     screenshotMocks.consumePendingApplicationSubmissionScreenshots,
 }));
-vi.mock("@/lib/goforay/card-png", () => ({
+vi.mock("@/lib/goforay/request-job-card-png", () => ({
   renderJobCardPng: cardPngMocks.renderJobCardPng,
 }));
 await import("../agent/channels/linq-v2");

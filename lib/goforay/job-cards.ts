@@ -29,7 +29,7 @@ const roleSearchToolOutputSchema = z.object({
   cards: z.array(goForayJobCardSchema),
 });
 
-const TITLE_COMPANY_SEPARATORS = [
+export const TITLE_COMPANY_SEPARATORS = [
   " at ",
   " @ ",
   " - ",

@@ -438,6 +438,52 @@ describe("database migrations", () => {
       `)
     ).rejects.toThrow(/foreign key constraint/);
   }, 15_000);
+
+  it("carries already-shown roles into the source-agnostic presented table", async () => {
+    const database = createDatabase();
+
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(database, "0012_phone_workspaces.sql");
+    await database.exec(`
+      INSERT INTO workspaces VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO goforay_workspace_presented_postings
+        VALUES ('row-1', 'workspace-1', 'posting-9', '2026-01-01');
+    `);
+
+    await applyMigration(database, "0016_goforay_presented_roles.sql");
+    // Re-applying must be safe: a deploy that runs migrations may be retried.
+    await applyMigration(database, "0016_goforay_presented_roles.sql");
+
+    const backfilled = await database.query<{
+      posting_id: string;
+      role_key: string;
+    }>(
+      `SELECT role_key, posting_id FROM goforay_workspace_presented_roles
+       WHERE workspace_id = 'workspace-1'`
+    );
+    expect(backfilled.rows).toEqual([
+      { posting_id: "posting-9", role_key: "posting:posting-9" },
+    ]);
+
+    // A public-market role has no posting id, which is the whole reason the
+    // key is a string rather than a posting reference.
+    await database.exec(`
+      INSERT INTO goforay_workspace_presented_roles
+        (workspace_id, role_key, url)
+        VALUES ('workspace-1', 'url:jobs.example.co/analyst', 'jobs.example.co/analyst')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO goforay_workspace_presented_roles
+        (workspace_id, role_key, url)
+        VALUES ('workspace-1', 'url:jobs.example.co/analyst', 'jobs.example.co/analyst')
+      ON CONFLICT DO NOTHING;
+    `);
+
+    const rows = await database.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM goforay_workspace_presented_roles
+       WHERE workspace_id = 'workspace-1'`
+    );
+    expect(rows.rows[0]?.count).toBe(2);
+  });
 });
 
 function createDatabase() {

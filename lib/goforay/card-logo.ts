@@ -11,8 +11,12 @@ const BAD_TLDS = new Set([
   "test",
 ]);
 
-/** Hosts whose favicon is the vendor, not the employer. */
-const ATS_SUFFIXES = [
+/**
+ * Applicant tracking systems: the employer's own posting, served by a vendor.
+ * Their favicon is the vendor's, but the posting itself is the real thing, so
+ * relevance treats these as first-class while logo lookup still skips them.
+ */
+const ATS_HOSTS = [
   "greenhouse.io",
   "lever.co",
   "ashbyhq.com",
@@ -25,6 +29,17 @@ const ATS_SUFFIXES = [
   "jobvite.com",
   "bamboohr.com",
   "workable.com",
+  "breezy.hr",
+  "paylocity.com",
+  "rippling.com",
+  "pinpointhq.com",
+] as const;
+
+/**
+ * Aggregators and scrapers. They restate a posting that lives on an ATS, often
+ * behind a sign-in wall, so a card should link the ATS instead.
+ */
+const AGGREGATOR_HOSTS = [
   "linkedin.com",
   "indeed.com",
   "glassdoor.com",
@@ -71,11 +86,24 @@ export function sanitizeHostname(raw: string) {
   return host;
 }
 
-export function isAtsOrAggregator(host: string) {
+function matchesSuffix(host: string, suffixes: readonly string[]) {
   const value = host.toLowerCase().replace(/^www\./u, "");
-  return ATS_SUFFIXES.some(
+  return suffixes.some(
     (suffix) => value === suffix || value.endsWith(`.${suffix}`)
   );
+}
+
+export function isAtsHost(host: string) {
+  return matchesSuffix(host, ATS_HOSTS);
+}
+
+export function isAggregatorHost(host: string) {
+  return matchesSuffix(host, AGGREGATOR_HOSTS);
+}
+
+/** Hosts whose favicon is the vendor, not the employer. */
+export function isAtsOrAggregator(host: string) {
+  return isAtsHost(host) || isAggregatorHost(host);
 }
 
 export function employerDomainFromUrl(url: string) {

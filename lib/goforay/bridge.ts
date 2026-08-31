@@ -7,7 +7,6 @@ import {
   goforayLinks,
   goforayWorkspaceLinks,
   goforayWorkspaceConversations,
-  goforayWorkspacePresentedPostings,
   goforayWorkspaceSyncOutbox,
   goforayPendingRoleSearches,
 } from "@/db";
@@ -16,10 +15,15 @@ import type { AccessScope } from "@/lib/access-scope";
 import { ensureScope } from "@/db/services/scope";
 import { searchExaRoles } from "./exa";
 import { goForayJobCardSchema, type GoForayJobCard } from "./job-cards";
+import { relevanceTokens } from "./relevance";
+import { roleKey } from "./role-identity";
+import {
+  listPresentedRoles,
+  rememberPresentedRoles,
+} from "@/db/services/goforay-presented-roles";
 import {
   completePendingRoleSearch,
   listPendingRoleSearches,
-  queuePendingRoleSearch,
 } from "@/db/services/pending-role-searches";
 
 const issuer = "goforay-openinstinct";
@@ -300,51 +304,136 @@ async function goforayJobFeed(
 }
 
 /**
+ * Why the curated feed could not answer. A workspace with no candidate link is
+ * not degraded — that is the designed top-of-funnel path — but a workspace that
+ * holds a link the CRM then rejects is, and used to be indistinguishable.
+ */
+export interface CuratedFailure {
+  from: "juicebox";
+  reason: "link_broken" | "not_configured" | "unavailable";
+  detail: string;
+}
+
+function classifyCuratedFailure(
+  error: unknown,
+  { linked }: { linked: boolean }
+): CuratedFailure | undefined {
+  const message = error instanceof Error ? error.message : "";
+  const detail = message.slice(0, 200);
+  if (/is not configured/iu.test(message))
+    return { from: "juicebox", reason: "not_configured", detail };
+  if (/not linked|link your goforay account/iu.test(message)) {
+    // A candidate who never linked is expected, not broken.
+    return linked
+      ? { from: "juicebox", reason: "link_broken", detail }
+      : undefined;
+  }
+  return { from: "juicebox", reason: "unavailable", detail };
+}
+
+/**
  * Prefer curated JuiceBox roles when a CRM candidate is available. Public
  * discovery remains available for every workspace, including top-of-funnel
  * users who do not have a JuiceBox candidate yet.
+ *
+ * Both sources exclude roles this workspace has already been shown, so a
+ * follow-on batch is genuinely new. `exhausted` is the honest answer when
+ * nothing new is left, and it is never padded with an earlier role.
  */
 export async function findGoforayRoles(
   scope: AccessScope,
-  input: { query?: string; location?: string; limit?: number } = {}
+  input: {
+    query?: string;
+    location?: string;
+    limit?: number;
+    role?: string;
+    seniority?: string;
+  } = {}
 ): Promise<{
   cards: GoForayJobCard[];
   searching: boolean;
   source: "exa" | "juicebox";
+  degraded?: CuratedFailure;
+  exhausted?: boolean;
   discovery?: z.infer<typeof jobFeedSchema>["discovery"];
   unavailable?: string;
 }> {
   const limit = input.limit ?? 5;
-  try {
-    const feed = await goforayJobFeed(scope, { ...input, limit });
-    if (feed.cards.length) {
-      await rememberPresentedRoles(scope, feed.cards);
-      return {
-        ...feed,
-        searching: false,
-        source: "juicebox",
-      };
+  const presented = await listPresentedRoles(scope);
+  // Whether a link exists decides only how a curated failure is classified, so
+  // a failed lookup degrades to the public path rather than failing the search.
+  const link = await linkedCandidate(scope).catch(() => undefined);
+  let degraded: CuratedFailure | undefined;
+
+  if (link) {
+    try {
+      const feed = await goforayJobFeed(scope, {
+        query: input.query,
+        location: input.location,
+        limit,
+        excludePostingIds: presented.postingIds,
+      });
+      // A background search that is about to answer must not be replaced by web
+      // results; the pending-search poller delivers its cards when it lands.
+      if (
+        feed.discovery?.state === "queued" ||
+        feed.discovery?.state === "running"
+      ) {
+        return { ...feed, searching: true, source: "juicebox" };
+      }
+      // The feed's own exclusion is capped, so re-check locally.
+      const fresh = feed.cards.filter(
+        (card) => !presented.keys.has(roleKey(card))
+      );
+      if (fresh.length) {
+        await rememberPresentedRoles(scope, fresh);
+        return {
+          cards: fresh,
+          searching: false,
+          source: "juicebox",
+          discovery: feed.discovery,
+        };
+      }
+    } catch (error) {
+      degraded = classifyCuratedFailure(error, { linked: true });
+      // Nothing logged this before: the feed degraded silently for as long as
+      // it liked, and the only visible symptom was public results arriving as
+      // though they were curated matches.
+      console.error("[goforay] curated role feed unavailable", {
+        reason: degraded?.reason ?? "not_linked",
+        workspaceId: scope.workspaceId,
+      });
     }
-  } catch {
-    // A missing candidate association or unavailable CRM must not block the
-    // top-of-funnel role-search experience.
   }
 
+  const role = (input.role?.trim() ?? "") || (input.query?.trim() ?? "");
   try {
+    // Over-fetch: both the relevance gate and the already-shown filter remove
+    // hits, and public search offers neither an offset nor an exclusion, so a
+    // repeat search returns the same top results.
+    const candidates = await searchExaRoles({
+      query: role || "current professional roles",
+      location: (input.location?.trim() ?? "") || "remote",
+      limit: Math.min(limit * 4, 25),
+      wanted: relevanceTokens(role, input.seniority),
+    });
+    const cards = candidates
+      .filter((card) => !presented.keys.has(roleKey(card)))
+      .slice(0, limit);
+    if (cards.length) await rememberPresentedRoles(scope, cards);
     return {
-      cards: await searchExaRoles({
-        query: input.query?.trim() || "current professional roles",
-        location: input.location?.trim() || "remote",
-        limit,
-      }),
+      cards,
       searching: false,
       source: "exa",
+      ...(cards.length ? {} : { exhausted: true }),
+      ...(degraded ? { degraded } : {}),
     };
   } catch (error) {
     return {
       cards: [],
       searching: false,
       source: "exa",
+      ...(degraded ? { degraded } : {}),
       unavailable:
         error instanceof Error ? error.message : "Role search is unavailable.",
     };
@@ -624,43 +713,29 @@ async function syncConversationEvent(id: string) {
   }
 }
 
-/** Fresh, curated roles after a candidate starts an application. */
-export async function nextGoforayRoles(scope: AccessScope, limit = 5) {
-  const shown = await db
-    .select({ postingId: goforayWorkspacePresentedPostings.postingId })
-    .from(goforayWorkspacePresentedPostings)
-    .where(eq(goforayWorkspacePresentedPostings.workspaceId, scope.workspaceId))
-    .orderBy(desc(goforayWorkspacePresentedPostings.createdAt))
-    .limit(100);
-  const feed = await goforayJobFeed(scope, {
-    limit: Math.min(limit, 5),
-    excludePostingIds: shown.map((row) => row.postingId),
-  });
-  await rememberPresentedRoles(scope, feed.cards);
-  return feed;
-}
-
-async function rememberPresentedRoles(
+/**
+ * The next batch for the criteria already in play.
+ *
+ * Delegates rather than reading the feed itself. It used to be the only
+ * deduping path *and* the only one that threw: when the CRM rejected the link
+ * it surfaced to the model as a failed tool, and the model answered a request
+ * for more roles with a generic web search instead. It also searched with an
+ * empty query, so even its happy path was an unfiltered feed read.
+ */
+export async function nextGoforayRoles(
   scope: AccessScope,
-  cards: z.infer<typeof jobFeedSchema>["cards"]
+  input: {
+    query?: string;
+    location?: string;
+    limit?: number;
+    role?: string;
+    seniority?: string;
+  } = {}
 ) {
-  await Promise.all(
-    cards.map((card) =>
-      db
-        .insert(goforayWorkspacePresentedPostings)
-        .values({
-          id: `${scope.workspaceId}:${card.posting_id}`,
-          workspaceId: scope.workspaceId,
-          postingId: card.posting_id,
-        })
-        .onConflictDoNothing({
-          target: [
-            goforayWorkspacePresentedPostings.workspaceId,
-            goforayWorkspacePresentedPostings.postingId,
-          ],
-        })
-    )
-  );
+  return findGoforayRoles(scope, {
+    ...input,
+    limit: Math.min(input.limit ?? 5, 5),
+  });
 }
 
 /** Retry durable conversation events without delaying an active candidate turn. */

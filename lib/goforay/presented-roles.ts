@@ -6,6 +6,31 @@ const presentedRoles = defineState(
   (): GoForayJobCard[] => []
 );
 
+/**
+ * The criteria behind the batch on screen, so "find me more" continues the
+ * same search. Without this, the follow-on tool searched with an empty query
+ * and returned an unfiltered feed read.
+ */
+const lastRoleSearch = defineState(
+  "foray.last-role-search",
+  (): RoleSearchCriteria | undefined => undefined
+);
+
+export interface RoleSearchCriteria {
+  query: string;
+  location: string;
+  role: string;
+  seniority: string;
+}
+
+export function storeRoleSearchCriteria(criteria: RoleSearchCriteria) {
+  lastRoleSearch.update(() => criteria);
+}
+
+export function loadRoleSearchCriteria() {
+  return lastRoleSearch.get();
+}
+
 export interface ApplicationTargetInput {
   apply_url?: string;
   job_posting_id?: string;

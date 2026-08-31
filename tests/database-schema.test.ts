@@ -19,6 +19,7 @@ import {
   goforayConversations,
   goforayLinks,
   goforayPresentedPostings,
+  goforayWorkspacePresentedRoles,
   goforaySyncOutbox,
   session,
   settings,
@@ -95,6 +96,23 @@ describe("database schema", () => {
       "chat_state_values",
       "chat_state_queue",
     ]);
+  });
+
+  it("keys presented roles on a source-agnostic role key", () => {
+    // Public-market roles have no posting id, so the older posting-id-only
+    // table could never record or exclude them.
+    const config = getTableConfig(goforayWorkspacePresentedRoles);
+    expect(config.name).toBe("goforay_workspace_presented_roles");
+    expect(
+      config.primaryKeys.flatMap((key) =>
+        key.columns.map((column) => column.name)
+      )
+    ).toEqual(["workspace_id", "role_key"]);
+    const workspaceReference = config.foreignKeys[0]?.reference();
+    expect(
+      workspaceReference?.foreignColumns.map((column) => column.name)
+    ).toEqual(["id"]);
+    expect(workspaceReference?.foreignTable).toBe(workspaces);
   });
 
   it("anchors session creators to a membership in the same workspace", () => {

@@ -3,7 +3,11 @@ import { z } from "zod";
 import { readCandidateProfile } from "@/db/services/candidate-profile";
 import { scopeFromPrincipal } from "@/lib/access-scope";
 import { findGoforayRoles, nextGoforayRoles } from "@/lib/goforay/bridge";
-import { storePresentedRoles } from "@/lib/goforay/presented-roles";
+import {
+  loadRoleSearchCriteria,
+  storePresentedRoles,
+  storeRoleSearchCriteria,
+} from "@/lib/goforay/presented-roles";
 
 const roleSearchInputSchema = z.object({
   query: z.string().max(120).optional(),
@@ -21,6 +25,9 @@ const roleSearchInputSchema = z.object({
  * 2. Candidate picks a role (`apply 2` or a pasted URL)
  * 3. `worker` against that apply URL with the default resume
  * 4. `find_next_goforay_roles` in the same turn
+ *
+ * Both tools exclude roles the workspace has already been shown, and both drop
+ * public hits that are not a single posting for the role asked for.
  */
 
 export default defineDynamic({
@@ -34,7 +41,7 @@ export default defineDynamic({
       return {
         find_goforay_roles: defineTool({
           description:
-            "Immediately find roles whenever the user asks to find roles, show openings, or suggest jobs. Reuse their workspace profile plus any title, seniority, or location they stated. If the result has `needs`, ask one concise follow-up containing only those missing details; do not mention JuiceBox, candidate links, or CRM setup. Otherwise return the concrete cards. Search prefers curated JuiceBox matches when available and otherwise discovers live public postings through Exa; a candidate association is never required. Never call web_search for the candidate's own role search. The client renders the cards; write at most one intro line and never paste this object or list the roles as bullets.",
+            "Immediately find roles whenever the user asks to find roles, show openings, or suggest jobs. Reuse their workspace profile plus any title, seniority, or location they stated. If the result has `needs`, ask one concise follow-up containing only those missing details; do not mention JuiceBox, candidate links, or CRM setup. Otherwise return the concrete cards. Search prefers curated JuiceBox matches when available and otherwise discovers live public postings through Exa; a candidate association is never required. This tool already excludes every role this workspace has been shown before, so it is also the right tool when the user asks for more, additional, other, or new roles. If the result has `exhausted`, say plainly there is nothing new for those criteria and offer to widen the title, seniority, or location; never pad the batch with a role from an earlier one. Never call web_search for the candidate's own role search, including when this tool fails or returns nothing. The client renders the cards; write at most one intro line and never paste this object or list the roles as bullets.",
           inputSchema: roleSearchInputSchema,
           execute: async ({ query, location, seniority, limit }) => {
             const profile = await readCandidateProfile(scope);
@@ -50,10 +57,13 @@ export default defineDynamic({
                 source: "profile",
               };
             }
+            storeRoleSearchCriteria(criteria);
             const feed = await findGoforayRoles(scope, {
               query: criteria.query,
               location: criteria.location,
               limit,
+              role: criteria.role,
+              seniority: criteria.seniority,
             });
             storePresentedRoles(feed.cards);
             return feed;
@@ -61,10 +71,19 @@ export default defineDynamic({
         }),
         find_next_goforay_roles: defineTool({
           description:
-            "Fetch up to five additional curated JuiceBox roles only when the user asks for more roles. Do not call this automatically after an application; the main role-search tool works without a CRM candidate association.",
-          inputSchema: z.object({}),
-          execute: async () => {
-            const feed = await nextGoforayRoles(scope);
+            "Continue the role search already in play: up to five more roles for the same criteria, excluding everything this candidate has already been shown. Use it when the user asks for more of the same search. If they name a new title, seniority, or location, call find_goforay_roles with those instead. Same output shape, and the same `exhausted` handling: if there is nothing new, say so rather than resending an earlier role.",
+          inputSchema: roleSearchInputSchema.partial(),
+          execute: async (input) => {
+            // Restated details win; otherwise continue the search on screen.
+            const previous = loadRoleSearchCriteria();
+            const restatedQuery = input.query?.trim() ?? "";
+            const feed = await nextGoforayRoles(scope, {
+              query: restatedQuery || previous?.query,
+              location: (input.location?.trim() ?? "") || previous?.location,
+              limit: input.limit,
+              role: restatedQuery || previous?.role,
+              seniority: (input.seniority?.trim() ?? "") || previous?.seniority,
+            });
             storePresentedRoles(feed.cards);
             return feed;
           },
@@ -99,8 +118,13 @@ function roleSearchCriteria(
   ];
   return {
     needs,
+    // `query` is the search string; `role` is the bare phrase the relevance
+    // gate matches against a title, so seniority never becomes a requirement
+    // a posting has to spell out.
     query: [seniority, role].filter(Boolean).join(" "),
     location,
+    role,
+    seniority: seniority ?? "",
   };
 }
 

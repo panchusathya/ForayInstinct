@@ -3,6 +3,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -31,6 +32,37 @@ export const goforayWorkspaceLinks = pgTable(
   ]
 );
 
+/**
+ * Every role already shown from this workspace, so a follow-on batch is
+ * genuinely new. Keyed source-agnostically (`posting:<id>` or `url:<...>`)
+ * because public-market roles have no posting id, which is why the older
+ * posting-id-only table could never exclude them.
+ *
+ * `postingId` is denormalised rather than parsed back out of `roleKey`: the
+ * JuiceBox feed takes a plain list of ids to exclude.
+ */
+export const goforayWorkspacePresentedRoles = pgTable(
+  "goforay_workspace_presented_roles",
+  {
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    roleKey: text("role_key").notNull(),
+    postingId: text("posting_id").notNull().default(""),
+    url: text("url").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspaceId, table.roleKey] }),
+    index("goforay_workspace_presented_roles_recent_idx").on(
+      table.workspaceId,
+      table.createdAt
+    ),
+  ]
+);
+
 /** Postings shown from a phone-backed workspace, independent of web login. */
 export const goforayWorkspacePresentedPostings = pgTable(
   "goforay_workspace_presented_postings",
@@ -53,19 +85,22 @@ export const goforayWorkspacePresentedPostings = pgTable(
 );
 
 /** Last known Linq thread plus the queued search that should reply there. */
-export const goforayPendingRoleSearches = pgTable("goforay_pending_role_searches", {
-  workspaceId: text("workspace_id")
-    .primaryKey()
-    .references(() => workspaces.id, { onDelete: "cascade" }),
-  threadId: text("thread_id").notNull(),
-  query: text("query").notNull().default(""),
-  location: text("location").notNull().default(""),
-  pending: text("pending").notNull().default(""),
-  phone: text("phone").notNull().default(""),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-});
+export const goforayPendingRoleSearches = pgTable(
+  "goforay_pending_role_searches",
+  {
+    workspaceId: text("workspace_id")
+      .primaryKey()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    threadId: text("thread_id").notNull(),
+    query: text("query").notNull().default(""),
+    location: text("location").notNull().default(""),
+    pending: text("pending").notNull().default(""),
+    phone: text("phone").notNull().default(""),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  }
+);
 
 export const goforayWorkspaceConversations = pgTable(
   "goforay_workspace_conversations",

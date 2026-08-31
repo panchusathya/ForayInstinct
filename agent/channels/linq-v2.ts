@@ -21,7 +21,7 @@ import {
   renderGoForayJobCard,
   type GoForayJobCard,
 } from "@/lib/goforay/job-cards";
-import { renderJobCardPng } from "@/lib/goforay/card-png";
+import { renderJobCardPng } from "@/lib/goforay/request-job-card-png";
 import {
   isRichLinqService,
   linqServiceFromUnknown,
@@ -115,7 +115,11 @@ read existing resume/CV or job-search context in the same turn but never wait
 for it before starting the role search or delivering its cards. If it is not
 connected, a resume upload or LinkedIn URL is optional context, not a search
 gate. Treat this policy as replacing any earlier conversation statement about
-holding back, batching, or delaying roles.
+holding back, batching, or delaying roles. Speed never means repeating:
+find_goforay_roles already excludes roles this candidate has seen, so a
+request for more roles goes to a role tool, never to your memory of an earlier
+batch and never to web_search. If a role tool reports nothing new, say so
+instead of resending.
 `.trim();
 
 // oxlint-disable-next-line typescript/unbound-method -- external factory, not an instance method.
@@ -733,30 +737,51 @@ async function deliverJobCards(
   turnId: string,
   state: Record<string, unknown>
 ) {
-  const rich = isRichLinqThread(thread, state);
+  const service = rememberLinqService(thread, state);
+  const rich = isRichLinqService(service);
+  // Image delivery is guarded by this protocol check and by the renderer, and
+  // both used to fail silently. Name which one ran so a single iMessage turn
+  // says whether text arrived because the thread read as SMS or because the
+  // PNG never painted.
+  console.info("[goforay] delivering Linq job cards", {
+    cards: cards.length,
+    rich,
+    service: service || "unknown",
+  });
+  // Each render fetches an employer favicon with its own timeout, so painting
+  // the batch up front keeps one webhook turn from serialising five of them.
+  // Posting stays sequential: the cards are numbered, and each post writes the
+  // reply mapping into `state`.
+  const images = rich
+    ? await Promise.all(
+        cards.map((card, offset) =>
+          renderJobCardPng(card, offset + 1, cards.length).catch(
+            () => undefined
+          )
+        )
+      )
+    : [];
   for (const [offset, card] of cards.entries()) {
     const index = offset + 1;
     const text = renderGoForayJobCard(card, index, cards.length);
     let sentImage = false;
-    if (rich) {
+    const png = images[offset];
+    if (png) {
       try {
-        const png = await renderJobCardPng(card, index, cards.length);
-        if (png) {
-          const sent = await thread.post({
-            markdown: "",
-            files: [
-              {
-                data: png.bytes,
-                filename: png.filename,
-                mimeType: "image/png",
-              },
-            ],
-          });
-          rememberSentLinqJobCard(state, sent, card);
-          sentImage = true;
-        }
+        const sent = await thread.post({
+          markdown: "",
+          files: [
+            {
+              data: png.bytes,
+              filename: png.filename,
+              mimeType: "image/png",
+            },
+          ],
+        });
+        rememberSentLinqJobCard(state, sent, card);
+        sentImage = true;
       } catch {
-        // The text card remains useful if rendering or media upload is unavailable.
+        // The text card remains useful if media upload is unavailable.
       }
     }
     if (!sentImage) {

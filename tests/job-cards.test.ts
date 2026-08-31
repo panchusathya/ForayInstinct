@@ -17,6 +17,7 @@ import {
   cleanTitle,
   isVisibleJobCardToolPart,
   jobCardView,
+  renderGoForayJobCard,
   jobCardsFromToolOutput,
 } from "@/lib/goforay/job-cards";
 
@@ -45,6 +46,22 @@ describe("job card projection", () => {
     expect(view.footerPosition).toBe("2 of 3");
     expect(view.sourceLabel).toBe("O P E N   M A R K E T");
     expect(view.applyReply).toBe("apply 2");
+  });
+
+  it("renders no location line rather than a location it does not know", () => {
+    // A public hit whose location cannot be read now carries "", where it used
+    // to carry the search term the candidate typed.
+    const card = {
+      company: "Example AI",
+      location: "",
+      reasons: ["matches strategic finance"],
+      title: "Senior Analyst, Strategic Finance",
+      url: "https://boards.greenhouse.io/example/jobs/4123456",
+    };
+    expect(jobCardView(card, 1, 1).meta).toBe("");
+    expect(renderGoForayJobCard(card, 1, 1)).toContain(
+      "https://boards.greenhouse.io/example/jobs/4123456"
+    );
   });
 
   it("reads cards from a role-search tool payload", () => {
