@@ -1,4 +1,13 @@
+import { stripKernelLiveViewLinks } from "@/lib/goforay/kernel-links";
+
 const reactionPattern = /\s*\[\[react:(heart|laugh)\]\]\s*$/iu;
+/**
+ * The one case a candidate is given the browser's live view: a CAPTCHA or an
+ * identity check only they can complete in the page. Hidden like `[[react:…]]`,
+ * so it never renders.
+ */
+const takeoverPattern = /\[\[takeover\]\]/iu;
+const takeoverStripPattern = /\s*\[\[takeover\]\]\s*/giu;
 const urlPattern = /(https?:\/\/[^\s<]+)/giu;
 const sentencePattern = /(?<=[.!?])\s+(?=[a-z0-9])/giu;
 
@@ -17,7 +26,10 @@ export function formatCandidateDelivery(value: string): {
     | CandidateReaction
     | undefined;
   let text = value.replace(reactionPattern, "").trim();
+  const takeover = takeoverPattern.test(text);
+  text = text.replace(takeoverStripPattern, "\n").trim();
   text = unwrapMachineEnvelope(text);
+  if (!takeover) text = stripKernelLiveViewLinks(text);
   text = lowercaseProse(text.replaceAll("—", "-").replaceAll("–", "-"));
   const pieces = splitBubbles(text);
   return { bubbles: pieces.slice(0, 5), ...(reaction ? { reaction } : {}) };

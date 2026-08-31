@@ -1,4 +1,18 @@
 /**
+ * Slices of one application's review page. The candidate approves what they can
+ * read, so a tall ATS form is captured across several overlapping screenshots
+ * rather than one shot of wherever the worker stopped.
+ */
+export const maxApplicationReviewCaptures = 6;
+
+/**
+ * One application's review slices plus the later `submitted` proof, which shares
+ * the session's delivery batch. Keeping the claim limit above the capture cap is
+ * what stops a slice from being stranded until the pending TTL retires it.
+ */
+export const maxClaimedSubmissionScreenshots = maxApplicationReviewCaptures + 1;
+
+/**
  * Conservative evidence that an ATS already accepted an application. The
  * worker's Playwright return value is not a source of truth: it is often
  * `{ success: true }` with no page text, and a turn can end before

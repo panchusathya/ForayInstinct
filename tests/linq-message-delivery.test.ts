@@ -145,7 +145,7 @@ describe("Linq message delivery", () => {
         },
       ],
       markdown:
-        "Before I submit staff engineer. Reply *yes* to submit, or tell me what to change.",
+        "here's your filled application for staff engineer. reply *yes* to submit, or tell me what to change.",
     });
     expect(state.pendingSubmissionScreenshot).toBeUndefined();
   });
@@ -867,7 +867,7 @@ describe("Linq message delivery", () => {
         },
       ],
       markdown:
-        "Before I submit staff engineer — page 1 of 2. Reply *yes* to submit, or tell me what to change.",
+        "here's your filled application for staff engineer, page 1 of 2.",
     });
     expect(post).toHaveBeenNthCalledWith(2, {
       files: [
@@ -878,9 +878,32 @@ describe("Linq message delivery", () => {
         },
       ],
       markdown:
-        "Before I submit staff engineer — page 2 of 2. Reply *yes* to submit, or tell me what to change.",
+        "page 2 of 2. reply *yes* to submit, or tell me what to change.",
     });
-    expect(post).toHaveBeenNthCalledWith(3, {
+    // The candidate is looking at the form itself, so the coordinator's recap
+    // of it is dropped: the captions carry the naming and the ask.
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the coordinator's message when no review image reached the thread", async () => {
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+
+    await trackWorkerCancellation(
+      submissionApprovalResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    await deliverCompletedMessage(
+      completedEvent({
+        message: "Ready to submit Staff Engineer at Acme. Reply yes.",
+      }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    // Silence is only safe once the form has been shown. With nothing captured,
+    // the words are all the candidate has.
+    expect(post).toHaveBeenCalledExactlyOnceWith({
       markdown: "ready to submit staff engineer at acme. reply yes.",
     });
   });
@@ -918,7 +941,7 @@ describe("Linq message delivery", () => {
         },
       ],
       markdown:
-        "Before I submit staff engineer. Reply *yes* to submit, or tell me what to change.",
+        "here's your filled application for staff engineer. reply *yes* to submit, or tell me what to change.",
     });
   });
 
@@ -963,7 +986,7 @@ describe("Linq message delivery", () => {
         },
       ],
       markdown:
-        "Before I submit staff engineer. Reply *yes* to submit, or tell me what to change.",
+        "here's your filled application for staff engineer. reply *yes* to submit, or tell me what to change.",
     });
   });
 
@@ -1005,7 +1028,7 @@ describe("Linq message delivery", () => {
         },
       ],
       markdown:
-        "Before I submit staff engineer. Reply *yes* to submit, or tell me what to change.",
+        "here's your filled application for staff engineer. reply *yes* to submit, or tell me what to change.",
     });
   });
 

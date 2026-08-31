@@ -1,9 +1,15 @@
+import { Script } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   browserPageLocation,
   groupBrowserRunCheckpoints,
+  maxApplicationReviewCaptures,
   observedSubmission,
 } from "../lib/browser-submission";
+import {
+  reviewScrollCode,
+  reviewScrollRootProbeCode,
+} from "../agent/subagents/worker/lib/kernel-screenshot";
 
 const mocks = vi.hoisted(() => ({
   currentKernelPageUrl: vi.fn<() => Promise<string | undefined>>(),
@@ -303,10 +309,24 @@ describe("playwright checkpoints observe a submission without final_output", () 
   });
 });
 
-const reviewMetricsCode = "maxScroll: Math.max";
-const reviewScrollCode = 'window.scrollTo({ behavior: "instant", top })';
 const maskAddCode = "style.id = styleId";
 const maskRemoveCode = "getElementById(styleId)?.remove()";
+/** Matched against the shipped code, so the test cannot drift away from it. */
+const reviewProbeCode = "const probe = (attribute)";
+const reviewScrollTargetPattern = /const targetTop = (\d+);/u;
+const isReviewScroll = (code: string) =>
+  reviewScrollTargetPattern.test(code) && !code.includes(reviewProbeCode);
+
+/**
+ * A real capture differs between slices; a mock that returns one buffer forever
+ * would be indistinguishable from a page that never scrolled.
+ */
+function distinctScreenshots() {
+  let frame = 0;
+  return async () => ({
+    arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71, frame++]).buffer,
+  });
+}
 
 describe("the review gate pauses an application before its final submit", () => {
   let executedCode: string[] = [];
@@ -330,17 +350,36 @@ describe("the review gate pauses an application before its final submit", () => 
       body: "Review your application. Submit",
       url: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review",
     });
-    mocks.captureScreenshot.mockResolvedValue({
-      arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer,
-    });
-    mocks.executePlaywright.mockImplementation(async (_sessionId, { code }) => {
+    mocks.captureScreenshot.mockImplementation(distinctScreenshots());
+    mocks.executePlaywright.mockImplementation(
+      reviewBrowser({ clientHeight: 900, maxScroll: 1800, scrollTop: 1800 })
+    );
+  });
+
+  /**
+   * A form that scrolls an inner container, which is what a Workday wizard and
+   * an embedded Greenhouse form both do: the probe reports the container and
+   * every scroll lands on it.
+   */
+  function reviewBrowser(root: {
+    clientHeight: number;
+    maxScroll: number;
+    scrollTop: number;
+  }) {
+    return async (_sessionId: string, { code }: { code: string }) => {
       executedCode.push(code);
-      if (code.includes(reviewMetricsCode)) {
-        return { result: { maxScroll: 1800 }, success: true };
+      if (code.includes(reviewProbeCode))
+        return { result: root, success: true };
+      const target = reviewScrollTargetPattern.exec(code);
+      if (target) {
+        return {
+          result: { scrollTop: Math.min(Number(target[1]), root.maxScroll) },
+          success: true,
+        };
       }
       return { success: true };
-    });
-  });
+    };
+  }
 
   it("stores each review slice and records the pause without submitting", async () => {
     const { default: requestSubmissionApproval } =
@@ -357,21 +396,32 @@ describe("the review gate pauses an application before its final submit", () => 
       {} as never
     );
 
-    expect(result).toMatchObject({ captured: 3, status: "awaiting_approval" });
-    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(3);
+    // A 1800px scroll over a 900px container is four overlapping slices: the
+    // top, two middles, and the submit control at the end.
+    expect(result).toMatchObject({ captured: 4, status: "awaiting_approval" });
+    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(4);
     for (const call of mocks.saveApplicationSubmissionScreenshot.mock.calls) {
       // The role and apply URL travel with the image: the delivering channel
       // captions by name, so a thread with two applications in flight can tell
       // them apart instead of numbering both into one ambiguous run.
-      expect(call[2]).toEqual({
+      expect(call[2]).toMatchObject({
         applyUrl:
           "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
         kind: "review",
         page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review",
-        png: Buffer.from([137, 80, 78, 71]),
         role: "Staff Engineer",
       });
     }
+    // Each slice is its own image, never the same shot stored four times.
+    const stored = mocks.saveApplicationSubmissionScreenshot.mock.calls.flatMap(
+      (call) => {
+        const screenshot: unknown = call[2];
+        if (typeof screenshot !== "object" || screenshot === null) return [];
+        const { png } = screenshot as { png?: unknown };
+        return Buffer.isBuffer(png) ? [png.toString("base64")] : [];
+      }
+    );
+    expect(new Set(stored).size).toBe(4);
     // The trail is how the coordinator matches a paused worker to a posting.
     expect(mocks.recordBrowserRunCheckpoint).toHaveBeenCalledWith(
       { userId: "user-1", workspaceId: "workspace-1" },
@@ -381,7 +431,7 @@ describe("the review gate pauses an application before its final submit", () => 
         actions: [
           "role: Staff Engineer",
           "apply_url: https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
-          "review screenshots: 3",
+          "review screenshots: 4",
         ],
         page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review",
         phase: "submission_approval",
@@ -417,7 +467,7 @@ describe("the review gate pauses an application before its final submit", () => 
     }
   });
 
-  it("holds the vault mask across every slice and leaves the page at the top", async () => {
+  it("holds the vault mask across every slice and puts the page back where it was", async () => {
     const { default: requestSubmissionApproval } =
       await import("../agent/subagents/worker/tools/request_submission_approval");
 
@@ -441,16 +491,119 @@ describe("the review gate pauses an application before its final submit", () => 
       code.includes(maskRemoveCode)
     );
     expect(removeIndex).toBe(executedCode.length - 1);
-    expect(
-      executedCode.filter((code) => code.includes(reviewScrollCode))
-    ).toHaveLength(4);
+    const scrolls = executedCode.filter(isReviewScroll);
+    // Four slices, then the page put back where the worker left it: it resumes
+    // on this page to press submit.
+    expect(scrolls).toHaveLength(5);
+    expect(reviewScrollTargetPattern.exec(scrolls.at(-1) ?? "")?.[1]).toBe(
+      "1800"
+    );
+    // Every scroll drives the container the probe tagged, never the window.
+    for (const scroll of scrolls) {
+      expect(scroll).toContain("data-foray-review-root");
+      expect(scroll).not.toContain("window.scrollTo");
+    }
   });
 
-  it("captures the top, middle, and end of a long review form", async () => {
+  it("slices a form that scrolls an inner container rather than the document", async () => {
+    // The production failure: measuring the document reports nothing to scroll,
+    // so the review collapsed to one shot of wherever the worker stopped.
+    mocks.executePlaywright.mockImplementation(
+      reviewBrowser({ clientHeight: 700, maxScroll: 2100, scrollTop: 2100 })
+    );
+    const { default: requestSubmissionApproval } =
+      await import("../agent/subagents/worker/tools/request_submission_approval");
+
+    const result = await requestSubmissionApproval.execute(
+      {
+        apply_url: "https://boards.greenhouse.io/acme/jobs/1/apply",
+        role: "Staff Engineer",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({ captured: 5 });
+    const offsets = executedCode
+      .filter(isReviewScroll)
+      .map((code) => reviewScrollTargetPattern.exec(code)?.[1]);
+    // The top and the end of the form are always in the set.
+    expect(offsets.slice(0, 5)).toEqual(["0", "525", "1050", "1575", "2100"]);
+  });
+
+  it("spreads the slices evenly over a form taller than the capture cap", async () => {
+    mocks.executePlaywright.mockImplementation(
+      reviewBrowser({ clientHeight: 900, maxScroll: 4200, scrollTop: 0 })
+    );
+    const { default: requestSubmissionApproval } =
+      await import("../agent/subagents/worker/tools/request_submission_approval");
+
+    const result = await requestSubmissionApproval.execute(
+      {
+        apply_url:
+          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+        role: "Staff Engineer",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({ captured: maxApplicationReviewCaptures });
+    const offsets = executedCode
+      .filter(isReviewScroll)
+      .map((code) => reviewScrollTargetPattern.exec(code)?.[1]);
+    expect(offsets.slice(0, maxApplicationReviewCaptures)).toEqual([
+      "0",
+      "840",
+      "1680",
+      "2520",
+      "3360",
+      "4200",
+    ]);
+  });
+
+  it("photographs the page where it stands when nothing is measurable", async () => {
     mocks.executePlaywright.mockImplementation(async (_sessionId, { code }) => {
       executedCode.push(code);
-      if (code.includes(reviewMetricsCode)) {
-        return { result: { maxScroll: 4200 }, success: true };
+      if (code.includes(reviewProbeCode))
+        return { result: null, success: true };
+      return { success: true };
+    });
+    const { default: requestSubmissionApproval } =
+      await import("../agent/subagents/worker/tools/request_submission_approval");
+
+    const result = await requestSubmissionApproval.execute(
+      {
+        apply_url:
+          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+        role: "Staff Engineer",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    // Moving a page that could not be measured risks losing the worker's place
+    // for nothing, so it is photographed as it is.
+    expect(result).toMatchObject({ captured: 1, capture_status: "captured" });
+    expect(executedCode.filter(isReviewScroll)).toHaveLength(0);
+  });
+
+  it("stops slicing a page that will not scroll any further", async () => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, { code }) => {
+      executedCode.push(code);
+      if (code.includes(reviewProbeCode)) {
+        return {
+          result: { clientHeight: 900, maxScroll: 4200, scrollTop: 0 },
+          success: true,
+        };
+      }
+      if (reviewScrollTargetPattern.test(code)) {
+        // A container that reports the same position however far it is asked to
+        // move has nothing new to show.
+        return { result: { scrollTop: 0 }, success: true };
       }
       return { success: true };
     });
@@ -468,10 +621,18 @@ describe("the review gate pauses an application before its final submit", () => 
       {} as never
     );
 
-    expect(result).toMatchObject({ captured: 3 });
+    expect(result).toMatchObject({ captured: 1 });
+  });
+
+  it("ships review code the browser can actually run", () => {
+    // The probe hands a function to `frame.evaluate`, so a syntax error here
+    // would otherwise surface only against a live application.
     expect(
-      executedCode.filter((code) => code.includes(reviewScrollCode))
-    ).toHaveLength(4);
+      () => new Script(`(async () => {${reviewScrollRootProbeCode}})()`)
+    ).not.toThrow();
+    expect(
+      () => new Script(`(async () => {${reviewScrollCode(1200, true)}})()`)
+    ).not.toThrow();
   });
 
   it("still gates when no screenshot could be captured", async () => {
@@ -497,8 +658,12 @@ describe("the review gate pauses an application before its final submit", () => 
       capture_status: "unavailable",
       status: "awaiting_approval",
     });
-    // With no screenshot, the candidate needs the live view to check the form.
-    expect(JSON.stringify(result)).toContain("live-view URL");
+    // The gate still holds, and the fallback is reading the answers back rather
+    // than handing the candidate a browser link they have no use for.
+    expect(JSON.stringify(result)).toContain("could not be captured");
+    expect(JSON.stringify(result)).toContain(
+      "Do not include the browser live-view URL"
+    );
     expect(mocks.saveApplicationSubmissionScreenshot).not.toHaveBeenCalled();
   });
 
@@ -526,7 +691,7 @@ describe("the review gate pauses an application before its final submit", () => 
       capture_status: "unavailable",
       status: "awaiting_approval",
     });
-    expect(JSON.stringify(result)).toContain("could not be sent");
+    expect(JSON.stringify(result)).toContain("could not be captured");
     expect(mocks.recordBrowserRunCheckpoint).toHaveBeenCalledWith(
       { userId: "user-1", workspaceId: "workspace-1" },
       "browser-1",
@@ -552,9 +717,15 @@ describe("the review gate pauses an application before its final submit", () => 
       if (code.includes(maskAddCode)) {
         return { error: "mask execution rejected", success: false };
       }
-      if (code.includes(reviewMetricsCode)) {
-        return { result: { maxScroll: 1800 }, success: true };
+      if (code.includes(reviewProbeCode)) {
+        return {
+          result: { clientHeight: 900, maxScroll: 1800, scrollTop: 0 },
+          success: true,
+        };
       }
+      const target = reviewScrollTargetPattern.exec(code);
+      if (target)
+        return { result: { scrollTop: Number(target[1]) }, success: true };
       return { success: true };
     });
     const { default: requestSubmissionApproval } =
@@ -571,8 +742,8 @@ describe("the review gate pauses an application before its final submit", () => 
       {} as never
     );
 
-    expect(result).toMatchObject({ captured: 3, capture_status: "captured" });
-    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({ captured: 4, capture_status: "captured" });
+    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(4);
     expect(console.warn).toHaveBeenCalledWith(
       "[vault-screenshot-mask] could not apply",
       expect.objectContaining({ error: "mask execution rejected" })
@@ -586,9 +757,15 @@ describe("the review gate pauses an application before its final submit", () => 
       if (code.includes(maskAddCode)) {
         throw new Error("mask transport unavailable");
       }
-      if (code.includes(reviewMetricsCode)) {
-        return { result: { maxScroll: 1800 }, success: true };
+      if (code.includes(reviewProbeCode)) {
+        return {
+          result: { clientHeight: 900, maxScroll: 1800, scrollTop: 0 },
+          success: true,
+        };
       }
+      const target = reviewScrollTargetPattern.exec(code);
+      if (target)
+        return { result: { scrollTop: Number(target[1]) }, success: true };
       return { success: true };
     });
     const { default: requestSubmissionApproval } =
@@ -605,8 +782,8 @@ describe("the review gate pauses an application before its final submit", () => 
       {} as never
     );
 
-    expect(result).toMatchObject({ captured: 3, capture_status: "captured" });
-    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({ captured: 4, capture_status: "captured" });
+    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(4);
     expect(console.warn).toHaveBeenCalledWith(
       "[vault-screenshot-mask] could not apply",
       expect.objectContaining({ error: "mask transport unavailable" })

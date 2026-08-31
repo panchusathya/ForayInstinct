@@ -1,16 +1,9 @@
 import { and, asc, desc, eq, inArray, isNull, lt } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
+import { maxClaimedSubmissionScreenshots } from "@/lib/browser-submission";
 import { applicationSubmissionScreenshots, db } from "@/db";
 
 const pngMimeType = "image/png";
-
-/**
- * A scroll-stitched review is at most `maxReviewCaptures` rows, so a batch this
- * size covers one application's whole review. Bounding it matters because every
- * row carries a full-page PNG as base64 text: selecting every pending row in the
- * workspace pulled all of them into memory at once.
- */
-const maxClaimedScreenshots = 6;
 
 /**
  * How long an undelivered capture is still worth showing. A thread that reads
@@ -60,6 +53,10 @@ export async function saveApplicationSubmissionScreenshot(
  * that names neither. Selecting the newest session ensures a just-captured
  * review is never displaced by a stale delivery retry from an earlier form.
  *
+ * Bounded by `maxClaimedSubmissionScreenshots` because every row carries its PNG
+ * as base64 text: selecting every pending row in the workspace pulled all of
+ * them into memory at once.
+ *
  * Claiming inside the transaction keeps two concurrent turns from posting the
  * same image twice. The claim is the `deliveredAt` stamp, so a caller that
  * fails to post **must** hand the ids back to
@@ -68,7 +65,7 @@ export async function saveApplicationSubmissionScreenshot(
  */
 export async function claimPendingApplicationSubmissionScreenshots(
   scope: AccessScope,
-  limit = maxClaimedScreenshots
+  limit = maxClaimedSubmissionScreenshots
 ) {
   return db.transaction(async (transaction) => {
     // A thread that never reads as rich leaves its rows pending on purpose, so

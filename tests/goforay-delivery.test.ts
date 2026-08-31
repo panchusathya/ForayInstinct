@@ -30,6 +30,35 @@ describe("candidate delivery formatter", () => {
     });
   });
 
+  it("strips a kernel live-view link the candidate has no use for", () => {
+    expect(
+      formatCandidateDelivery(
+        [
+          "I filled the application for Staff Engineer.",
+          "You can watch it here: https://abc123.live.onkernel.com/view",
+          "https://boards.example.com/apply",
+        ].join("\n")
+      )
+    ).toEqual({
+      bubbles: [
+        "i filled the application for staff engineer.\nhttps://boards.example.com/apply",
+      ],
+    });
+  });
+
+  it("keeps the live view for a challenge only the candidate can complete", () => {
+    // A CAPTCHA Foray could not solve is the one case the link is the answer.
+    expect(
+      formatCandidateDelivery(
+        "There's a captcha I can't solve. Tap in and clear it:[[takeover]]https://abc123.live.onkernel.com/view"
+      )
+    ).toEqual({
+      bubbles: [
+        "there's a captcha i can't solve. tap in and clear it:\nhttps://abc123.live.onkernel.com/view",
+      ],
+    });
+  });
+
   it("uses a compact text card that keeps the apply URL", () => {
     expect(
       renderGoForayJobCard(
@@ -45,7 +74,8 @@ describe("candidate delivery formatter", () => {
         5
       )
     ).toBe(
-      '2/5  machine learning engineer · example ai\nremote\n· strong ml background\nhttps://jobs.example.co/ml-engineer\nreply "apply 2" to apply'
+      // The matching rationale is internal ranking signal, not card copy.
+      '2/5  machine learning engineer · example ai\nremote\nhttps://jobs.example.co/ml-engineer\nreply "apply 2" to apply'
     );
   });
 });

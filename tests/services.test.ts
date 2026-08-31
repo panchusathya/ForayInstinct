@@ -516,6 +516,61 @@ describe("database services", () => {
     ).resolves.toEqual([]);
   }, 20_000);
 
+  it("drains a full-length review and its submitted proof in one claim", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0010_application_submission_screenshots.sql");
+    await applyMigration(client, "0015_submission_review_screenshots.sql");
+    await applyMigration(client, "0017_submission_screenshot_attribution.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, screenshots, submission] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/application-submission-screenshots"),
+      import("@/lib/browser-submission"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    for (
+      let slice = 0;
+      slice < submission.maxApplicationReviewCaptures;
+      slice++
+    ) {
+      await screenshots.saveApplicationSubmissionScreenshot(
+        alice,
+        "browser-1",
+        {
+          applyUrl: "https://example.com/apply",
+          kind: "review",
+          png: Buffer.from(`review-${String(slice)}`),
+          role: "Staff Engineer",
+        }
+      );
+    }
+    await screenshots.saveApplicationSubmissionScreenshot(alice, "browser-1", {
+      kind: "submitted",
+      png: Buffer.from("submitted"),
+      role: "Staff Engineer",
+    });
+
+    // The capture cap and the claim limit have to stay in step: a slice left
+    // behind here would surface a turn later, under a caption for a form the
+    // candidate already approved.
+    const claimed =
+      await screenshots.claimPendingApplicationSubmissionScreenshots(alice);
+    expect(claimed).toHaveLength(submission.maxApplicationReviewCaptures + 1);
+    expect(claimed.at(-1)?.kind).toBe("submitted");
+    await expect(
+      screenshots.claimPendingApplicationSubmissionScreenshots(alice)
+    ).resolves.toEqual([]);
+  }, 20_000);
+
   it("excludes an already-shown role under either of its identities", async () => {
     const client = new PGlite();
     databases.push(client);

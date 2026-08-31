@@ -101,7 +101,20 @@ const pendingJobCardsSchema = z.object({
 const pendingSubmissionScreenshotSchema = z.object({
   turnId: z.string(),
 });
-type SubmissionScreenshotDelivery = "blocked" | "delivered" | "nothing-pending";
+/** The turn whose approval prose the delivered form images already replaced. */
+const suppressedApprovalTurnSchema = z.object({
+  turnId: z.string(),
+});
+/**
+ * `reviewPages` is how many review images actually reached the thread. The
+ * coordinator's approval prose is suppressed against it: the candidate sees the
+ * form itself, so a written recap of it is noise, but silence is only safe once
+ * the images are known to have arrived.
+ */
+interface SubmissionScreenshotDelivery {
+  reviewPages: number;
+  status: "blocked" | "delivered" | "nothing-pending";
+}
 type LinqReplyTarget = {
   message: string;
   role?: GoForayJobCard;
@@ -164,7 +177,7 @@ const { bot, channel, send } = chatSdkChannel({
         event.turnId,
         context.state
       );
-      if (delivery === "delivered") {
+      if (delivery.status === "delivered") {
         context.state.pendingSubmissionScreenshot = undefined;
       }
     },
@@ -214,7 +227,7 @@ const { bot, channel, send } = chatSdkChannel({
         // message that omits the approval prefix. Claim on every completed
         // browser worker instead of letting free-form model prose decide
         // whether the candidate sees the queued review.
-        const delivery =
+        const delivery: SubmissionScreenshotDelivery =
           caller && context.thread
             ? await deliverSubmissionScreenshot(
                 context.thread,
@@ -222,13 +235,23 @@ const { bot, channel, send } = chatSdkChannel({
                 event.turnId,
                 context.state
               )
-            : "blocked";
+            : { reviewPages: 0, status: "blocked" };
         // Only retain a retry marker for outcomes known to have an expected
         // image. Ordinary worker tasks can legitimately have nothing queued.
-        if (delivery !== "delivered" && (submitted || awaitingApproval)) {
+        if (
+          delivery.status !== "delivered" &&
+          (submitted || awaitingApproval)
+        ) {
           context.state.pendingSubmissionScreenshot = {
             turnId: event.turnId,
           };
+        }
+        // The candidate is looking at the form itself, so a written recap of it
+        // is the spam this gate is meant to avoid. Suppress the coordinator's
+        // prose for this turn only when the images actually arrived; a capture
+        // that never reached them still needs the words.
+        if (awaitingApproval && delivery.reviewPages > 0) {
+          context.state.suppressedApprovalTurn = { turnId: event.turnId };
         }
         if (submitted || awaitingApproval) {
           // A review pause must not read as a finished application, so the two
@@ -324,12 +347,28 @@ const { bot, channel, send } = chatSdkChannel({
             event.turnId,
             context.state
           ));
-        if (delivery === "delivered") {
+        if (delivery?.status === "delivered") {
           context.state.pendingSubmissionScreenshot = undefined;
+        }
+        // A stranded review flushed here is the "show me the screenshots" turn,
+        // whose prose is the narration about screenshots the candidate never
+        // asked for. The images answered them.
+        if (delivery && delivery.reviewPages > 0) {
+          context.state.suppressedApprovalTurn = { turnId: event.turnId };
         }
       }
 
       if (!event.message) return;
+
+      const suppressedApproval = suppressedApprovalTurnSchema.safeParse(
+        context.state.suppressedApprovalTurn
+      );
+      if (suppressedApproval.success) {
+        // Clear it either way: a marker left by an earlier turn must never
+        // silence a later, unrelated message.
+        context.state.suppressedApprovalTurn = undefined;
+        if (suppressedApproval.data.turnId === event.turnId) return;
+      }
 
       const pendingCards = pendingJobCardsSchema.safeParse(
         context.state.pendingGoForayJobCards
@@ -936,7 +975,7 @@ async function deliverSubmissionScreenshot(
       service,
       workspaceId: scope.workspaceId,
     });
-    return "blocked";
+    return { reviewPages: 0, status: "blocked" };
   }
   // Delivery used to fail silently, exactly as job cards did. A candidate asked
   // to approve a form they cannot see is the worst failure this channel has, so
@@ -951,13 +990,13 @@ async function deliverSubmissionScreenshot(
     });
     return undefined;
   });
-  if (screenshots === undefined) return "blocked";
+  if (screenshots === undefined) return { reviewPages: 0, status: "blocked" };
   if (screenshots.length === 0) {
     console.warn("[submission-screenshot] nothing pending", {
       service: service || "unknown",
       workspaceId: scope.workspaceId,
     });
-    return "nothing-pending";
+    return { reviewPages: 0, status: "nothing-pending" };
   }
   console.warn("[submission-screenshot] delivering", {
     count: screenshots.length,
@@ -979,7 +1018,7 @@ async function deliverSubmissionScreenshot(
     try {
       await thread.post({
         markdown: review
-          ? `${reviewCaption(screenshot.role, reviewPage, reviewPages)} Reply *yes* to submit, or tell me what to change.`
+          ? reviewCaption(screenshot.role, reviewPage, reviewPages)
           : "",
         files: [
           {
@@ -1016,7 +1055,7 @@ async function deliverSubmissionScreenshot(
     }).catch(() => undefined);
   }
 
-  if (undelivered.length === 0) return "delivered";
+  if (undelivered.length === 0) return { reviewPages, status: "delivered" };
   await releaseApplicationSubmissionScreenshots(scope, undelivered).catch(
     (error: unknown) => {
       console.error("[submission-screenshot] could not release a batch", {
@@ -1044,7 +1083,9 @@ async function deliverSubmissionScreenshot(
       })
       .catch(() => undefined);
   }
-  return "blocked";
+  // A partial review is not a delivered one: the coordinator's message has to
+  // stand rather than being suppressed behind half a form.
+  return { reviewPages: reviewPages - lostReviewPages, status: "blocked" };
 }
 
 /** Rows written before migration 0017 carry an empty role, not a missing one. */
@@ -1052,14 +1093,21 @@ function roleLabel(role: string | undefined) {
   return role?.trim() ? role : "unknown";
 }
 
-/** Names the application when the row carries it; rows predating 0017 do not. */
+/**
+ * The images are the whole message: the coordinator's prose is suppressed when
+ * they go out, so the captions carry the naming, the ordering, and the ask by
+ * themselves. Lowercase and em-dash-free to match the rest of the thread.
+ */
 function reviewCaption(role: string, page: number, pages: number) {
   const name = role.trim();
-  const counter =
-    pages > 1 ? ` — page ${String(page)} of ${String(pages)}` : "";
-  return name
-    ? `Before I submit ${name.toLowerCase()}${counter}.`
-    : `Before I submit${counter}.`;
+  const subject = name
+    ? `your filled application for ${name.toLowerCase()}`
+    : "your filled application";
+  const ask = "reply *yes* to submit, or tell me what to change.";
+  if (pages <= 1) return `here's ${subject}. ${ask}`;
+  const counter = `page ${String(page)} of ${String(pages)}`;
+  if (page === 1) return `here's ${subject}, ${counter}.`;
+  return page === pages ? `${counter}. ${ask}` : `${counter}.`;
 }
 
 /**
