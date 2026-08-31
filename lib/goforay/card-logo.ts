@@ -1,3 +1,5 @@
+import { decode as decodePng, type DecodedPng } from "fast-png";
+
 const GOOGLE_S2 = "https://www.google.com/s2/favicons?domain={domain}&sz=256";
 const FETCH_TIMEOUT_MS = 4000;
 const HOST_RE =
@@ -145,4 +147,66 @@ export async function fetchEmployerLogo(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * RGBA pixels from a favicon, for `brandFromPixels`.
+ *
+ * PNG only. Google's favicon service answers `sz=256` with PNG, and the other
+ * formats a host might serve are either undecodable here (SVG) or not worth a
+ * second decoder (ICO, GIF) — callers fall back to a seeded colour instead.
+ * `fast-png` is pure JS, so this stays safe in a serverless bundle.
+ */
+export function logoPixels(logo: { bytes: Buffer; contentType: string }) {
+  if (!/^image\/(?:png|apng|x-png)\b/iu.test(logo.contentType))
+    return undefined;
+  // Trust the magic bytes over the header: hosts mislabel favicons routinely.
+  if (!logo.bytes.subarray(0, 8).equals(PNG_MAGIC)) return undefined;
+  try {
+    const image = decodePng(logo.bytes);
+    return toRgba(image);
+  } catch {
+    return undefined;
+  }
+}
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/**
+ * `brandFromPixels` walks a 4-channel 8-bit buffer, but a PNG may be greyscale,
+ * palette-indexed, or 16-bit. Expand whatever came back rather than handing it a
+ * stride it would misread as colour.
+ */
+function toRgba(image: DecodedPng) {
+  const { channels, data, depth, height, palette, width } = image;
+  const pixels = width * height;
+  const rgba = new Uint8Array(pixels * 4);
+  // 16-bit samples scale down; 1/2/4-bit depths are expanded by the decoder.
+  const scale = depth === 16 ? 1 / 257 : 1;
+  const sample = (offset: number) => Math.round((data[offset] ?? 0) * scale);
+
+  for (let index = 0; index < pixels; index += 1) {
+    const target = index * 4;
+    if (palette) {
+      const entry = palette[data[index] ?? 0] ?? [0, 0, 0];
+      rgba[target] = entry[0] ?? 0;
+      rgba[target + 1] = entry[1] ?? 0;
+      rgba[target + 2] = entry[2] ?? 0;
+      rgba[target + 3] = 255;
+      continue;
+    }
+    if (channels === 1 || channels === 2) {
+      const grey = sample(index * channels);
+      rgba[target] = grey;
+      rgba[target + 1] = grey;
+      rgba[target + 2] = grey;
+      rgba[target + 3] = channels === 2 ? sample(index * 2 + 1) : 255;
+      continue;
+    }
+    rgba[target] = sample(index * channels);
+    rgba[target + 1] = sample(index * channels + 1);
+    rgba[target + 2] = sample(index * channels + 2);
+    rgba[target + 3] = channels === 4 ? sample(index * 4 + 3) : 255;
+  }
+  return rgba;
 }

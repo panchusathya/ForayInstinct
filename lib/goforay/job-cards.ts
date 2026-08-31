@@ -92,8 +92,10 @@ function clipCardText(text: string, limit: number) {
 function spacedCaps(text: string) {
   let spaced = "";
   for (const character of text) {
-    if (spaced.length > 0) spaced += " ";
-    spaced += character;
+    // The renderer collapses runs of ordinary spaces, so a wider word gap has
+    // to be non-breaking or "OPEN MARKET" comes out as one word.
+    if (spaced.length > 0) spaced += character === " " ? "\u00a0\u00a0" : " ";
+    if (character !== " ") spaced += character;
   }
   return spaced;
 }
@@ -125,6 +127,10 @@ export function jobCardView(
   return {
     applyLabel: `Apply ${String(index)}`,
     applyReply: applyReplyLine(index),
+    // iMessage-only affordance. Web chat and SMS keep `applyReply`, which is
+    // right for them: neither has a tapback. Words rather than a 👍 glyph,
+    // because the renderer passes no `emoji` option and would paint tofu.
+    applyHint: "thumbs-up to apply",
     company,
     footerPosition:
       total > 1 ? `${String(index)} of ${String(total)}` : "open role",

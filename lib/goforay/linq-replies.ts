@@ -26,15 +26,9 @@ export function rememberLinqJobCardReply(
 ) {
   // Keep a small recent window so persisted channel state cannot grow without
   // bound while still allowing a candidate to reply to any card in a batch.
-  return Object.fromEntries(
-    [...Object.entries(previous), [messageId, card]].slice(-20)
-  );
-}
-
-export function resolveLinqJobCardReply(
-  raw: unknown,
-  cardsByMessageId: Record<string, GoForayJobCard>
-) {
-  const messageId = linqReplyToMessageId(raw);
-  return messageId ? cardsByMessageId[messageId] : undefined;
+  const entries: [string, GoForayJobCard][] = [
+    ...Object.entries(previous),
+    [messageId, card],
+  ];
+  return Object.fromEntries(entries.slice(-50));
 }

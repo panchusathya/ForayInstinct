@@ -21,8 +21,13 @@ vi.mock("eve/channels/chat-sdk", () => ({
     channelCapture.config = config;
     return {
       bot: {
+        getState: () => ({
+          delete: vi.fn<() => Promise<void>>(),
+          setIfNotExists: vi.fn<() => Promise<boolean>>(),
+        }),
         onDirectMessage: vi.fn<() => void>(),
         onNewMessage: vi.fn<() => void>(),
+        onReaction: vi.fn<() => void>(),
       },
       channel: {},
       send: vi.fn<() => void>(),
@@ -36,6 +41,8 @@ vi.mock("@/db/services/application-submission-screenshots", () => ({
 vi.mock("@/lib/goforay/request-job-card-png", () => ({
   renderJobCardPng: cardPngMocks.renderJobCardPng,
 }));
+import { readLinqJobCards } from "@/lib/goforay/linq-job-card-state";
+
 await import("../agent/channels/linq-v2");
 
 const channelEvents = (
@@ -376,7 +383,7 @@ describe("Linq message delivery", () => {
   });
 
   it("remembers the provider message id for a role-card threaded reply", async () => {
-    const { context, post, state } = handlerContext();
+    const { context, post, state, threadStore } = handlerContext();
     post.mockResolvedValueOnce({ id: "linq-role-card-2" });
 
     await trackWorkerCancellation(
@@ -411,13 +418,30 @@ describe("Linq message delivery", () => {
       sessionContext()
     );
 
-    expect(state.linqJobCardsByMessageId).toMatchObject({
+    // Read it back the way a later turn or a tapback webhook would: a new
+    // thread object over the same store, never the object that wrote it.
+    const later = handlerContext(
+      "message-later",
+      {},
+      undefined,
+      undefined,
+      threadStore
+    );
+    expect(
+      await readLinqJobCards(
+        later.context.thread as unknown as Parameters<
+          typeof readLinqJobCards
+        >[0]
+      )
+    ).toMatchObject({
       "linq-role-card-2": {
         company: "OpenAI",
         title: "Product Engineer",
         url: "https://openai.com/careers/example",
       },
     });
+    // eve channel state must stay clean: writing there is what broke this.
+    expect(state.linqJobCardsByMessageId).toBeUndefined();
   });
 
   it("suppresses intermediate tool-call messages without a generic reaction", async () => {
@@ -852,10 +876,12 @@ function handlerContext(
   currentMessageId = "message-1",
   state: Record<string, unknown> = {},
   lastService?: string,
-  raw?: unknown
+  raw?: unknown,
+  threadStore = new Map<string, Record<string, unknown>>()
 ) {
   const post = vi.fn<(message: unknown) => Promise<unknown>>();
   post.mockResolvedValue(undefined);
+  const threadId = "linq:dm:chat-1";
   const addReaction = vi
     .fn<(threadId: string, messageId: string, emoji: string) => Promise<void>>()
     .mockResolvedValue(undefined);
@@ -868,8 +894,18 @@ function handlerContext(
     },
     state,
     thread: {
-      id: "linq:dm:chat-1",
+      id: threadId,
       post,
+      // Chat SDK thread state. A card mapping written here has to be readable
+      // by a later turn and by a reaction webhook, which each get a *different*
+      // thread object and share only the backing store.
+      get state() {
+        return Promise.resolve(threadStore.get(threadId));
+      },
+      setState(patch: Record<string, unknown>) {
+        threadStore.set(threadId, { ...threadStore.get(threadId), ...patch });
+        return Promise.resolve(undefined);
+      },
       toJSON: () => ({
         _type: "chat:Thread",
         adapterName: "linq",
@@ -890,6 +926,7 @@ function handlerContext(
     context,
     post,
     state,
+    threadStore,
   };
 }
 

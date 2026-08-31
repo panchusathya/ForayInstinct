@@ -27,6 +27,7 @@ interface QueueRow {
  */
 export class PostgresStateAdapter implements StateAdapter {
   #connected = false;
+  #connecting: Promise<void> | undefined;
 
   constructor(private readonly sql: Pool = pool) {}
 
@@ -43,7 +44,7 @@ export class PostgresStateAdapter implements StateAdapter {
   }
 
   async subscribe(threadId: string) {
-    this.#ensureConnected();
+    await this.#ready();
     await this.sql.query(
       `INSERT INTO chat_state_subscriptions (thread_id)
        VALUES ($1)
@@ -53,7 +54,7 @@ export class PostgresStateAdapter implements StateAdapter {
   }
 
   async unsubscribe(threadId: string) {
-    this.#ensureConnected();
+    await this.#ready();
     await this.sql.query(
       "DELETE FROM chat_state_subscriptions WHERE thread_id = $1",
       [threadId]
@@ -61,7 +62,7 @@ export class PostgresStateAdapter implements StateAdapter {
   }
 
   async isSubscribed(threadId: string) {
-    this.#ensureConnected();
+    await this.#ready();
     const result = await this.sql.query(
       "SELECT 1 FROM chat_state_subscriptions WHERE thread_id = $1",
       [threadId]
@@ -70,7 +71,7 @@ export class PostgresStateAdapter implements StateAdapter {
   }
 
   async acquireLock(threadId: string, ttlMs: number): Promise<Lock | null> {
-    this.#ensureConnected();
+    await this.#ready();
     const token = randomUUID();
     const result = await this.sql.query<LockRow>(
       `INSERT INTO chat_state_locks (thread_id, token, expires_at)
@@ -88,14 +89,14 @@ export class PostgresStateAdapter implements StateAdapter {
   }
 
   async forceReleaseLock(threadId: string) {
-    this.#ensureConnected();
+    await this.#ready();
     await this.sql.query("DELETE FROM chat_state_locks WHERE thread_id = $1", [
       threadId,
     ]);
   }
 
   async releaseLock(lock: Lock) {
-    this.#ensureConnected();
+    await this.#ready();
     await this.sql.query(
       "DELETE FROM chat_state_locks WHERE thread_id = $1 AND token = $2",
       [lock.threadId, lock.token]
@@ -103,7 +104,7 @@ export class PostgresStateAdapter implements StateAdapter {
   }
 
   async extendLock(lock: Lock, ttlMs: number) {
-    this.#ensureConnected();
+    await this.#ready();
     const result = await this.sql.query(
       `UPDATE chat_state_locks
        SET expires_at = now() + ($3::bigint * interval '1 millisecond')
@@ -118,7 +119,7 @@ export class PostgresStateAdapter implements StateAdapter {
   // trust boundary for the SDK's own values.
   /* oxlint-disable typescript/no-unnecessary-type-parameters, typescript/no-unsafe-type-assertion */
   async get<T = unknown>(key: string): Promise<T | null> {
-    this.#ensureConnected();
+    await this.#ready();
     const result = await this.sql.query<StateRow>(
       `SELECT value FROM chat_state_values
        WHERE key = $1 AND (expires_at IS NULL OR expires_at > now())`,
@@ -129,7 +130,7 @@ export class PostgresStateAdapter implements StateAdapter {
   }
 
   async set<T = unknown>(key: string, value: T, ttlMs?: number) {
-    this.#ensureConnected();
+    await this.#ready();
     await this.sql.query(
       `INSERT INTO chat_state_values (key, value, expires_at)
        VALUES (
@@ -145,7 +146,7 @@ export class PostgresStateAdapter implements StateAdapter {
   }
 
   async setIfNotExists(key: string, value: unknown, ttlMs?: number) {
-    this.#ensureConnected();
+    await this.#ready();
     const result = await this.sql.query(
       `INSERT INTO chat_state_values (key, value, expires_at)
        VALUES (
@@ -165,7 +166,7 @@ export class PostgresStateAdapter implements StateAdapter {
   }
 
   async delete(key: string) {
-    this.#ensureConnected();
+    await this.#ready();
     await this.sql.query("DELETE FROM chat_state_values WHERE key = $1", [key]);
   }
 
@@ -174,7 +175,7 @@ export class PostgresStateAdapter implements StateAdapter {
     value: unknown,
     options?: { maxLength?: number; ttlMs?: number }
   ) {
-    this.#ensureConnected();
+    await this.#ready();
     await this.#transaction(async (client) => {
       const current = await client.query<StateRow>(
         "SELECT value FROM chat_state_values WHERE key = $1 FOR UPDATE",
@@ -215,7 +216,7 @@ export class PostgresStateAdapter implements StateAdapter {
   /* oxlint-enable typescript/no-unnecessary-type-parameters, typescript/no-unsafe-type-assertion */
 
   async enqueue(threadId: string, entry: QueueEntry, maxSize: number) {
-    this.#ensureConnected();
+    await this.#ready();
     return this.#transaction(async (client) => {
       // Serialize queue writes for this provider thread without holding a
       // global lock. The queue API is only used for overlap handling.
@@ -244,7 +245,7 @@ export class PostgresStateAdapter implements StateAdapter {
   }
 
   async dequeue(threadId: string): Promise<QueueEntry | null> {
-    this.#ensureConnected();
+    await this.#ready();
     const result = await this.sql.query<QueueRow>(
       `DELETE FROM chat_state_queue
        WHERE sequence = (
@@ -261,7 +262,7 @@ export class PostgresStateAdapter implements StateAdapter {
   }
 
   async queueDepth(threadId: string) {
-    this.#ensureConnected();
+    await this.#ready();
     const result = await this.sql.query<{ count: string }>(
       "SELECT count(*) FROM chat_state_queue WHERE thread_id = $1",
       [threadId]
@@ -284,12 +285,21 @@ export class PostgresStateAdapter implements StateAdapter {
     }
   }
 
-  #ensureConnected() {
-    if (!this.#connected) {
-      throw new Error(
-        "PostgresStateAdapter is not connected. Call connect() first."
-      );
-    }
+  /**
+   * Connect on first use rather than demanding an explicit `connect()`.
+   *
+   * The Chat SDK only calls `connect()` inside its webhook handler, but the
+   * agent writes thread state on a later turn in a different invocation. The old
+   * throwing guard meant any write from outside a webhook failed — which is why
+   * the job-card reply mapping was being written somewhere it could never be
+   * read from. Concurrent callers share one in-flight connect.
+   */
+  async #ready() {
+    if (this.#connected) return;
+    this.#connecting ??= this.connect().finally(() => {
+      this.#connecting = undefined;
+    });
+    await this.#connecting;
   }
 }
 

@@ -74,6 +74,10 @@ soon as possible`, and `immediately` mean the candidate can start now. Do
   connected and the workspace has no useful career context, say once that the
   candidate can optionally attach a resume, share a LinkedIn URL, or connect
   Gmail for a better-tailored search. None of those is a gate to searching.
+- A thumbs-up tapback on a role card is the same explicit choice as a threaded
+  reply. The channel resolves the card, tells the candidate you are applying,
+  and hands you the apply URL. Treat it as authorization to apply to that URL:
+  never ask which role they meant, and never repeat the acknowledgement.
 - When the user explicitly chooses one returned role, a pasted apply link, or
   any other apply URL, send the `worker` straight at that URL. There is no
   GoForay application task to start or report. The card's `url` (or the link
