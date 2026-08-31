@@ -16,6 +16,16 @@ export async function rememberLinqRoleSearchThread(
     });
 }
 
+/** The latest candidate thread is also where browser review media belongs. */
+export async function findLinqThread(scope: AccessScope) {
+  const [row] = await db
+    .select({ threadId: goforayPendingRoleSearches.threadId })
+    .from(goforayPendingRoleSearches)
+    .where(eq(goforayPendingRoleSearches.workspaceId, scope.workspaceId))
+    .limit(1);
+  return row?.threadId;
+}
+
 export async function listPendingRoleSearches(limit = 20) {
   return db
     .select()

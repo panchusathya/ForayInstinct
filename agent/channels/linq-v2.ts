@@ -13,7 +13,10 @@ import {
   scopeFromPrincipal,
 } from "@/lib/access-scope";
 import { adoptLegacyWorkspace } from "@/db/services/adopt-legacy-workspace";
-import { rememberLinqRoleSearchThread } from "@/db/services/pending-role-searches";
+import {
+  findLinqThread,
+  rememberLinqRoleSearchThread,
+} from "@/db/services/pending-role-searches";
 import { env } from "@/lib/env";
 import { formatCandidateDelivery } from "@/lib/goforay/delivery";
 import {
@@ -42,6 +45,7 @@ import {
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
 import {
   claimPendingApplicationSubmissionScreenshots,
+  listPendingApplicationSubmissionScreenshotScopes,
   releaseApplicationSubmissionScreenshots,
 } from "@/db/services/application-submission-screenshots";
 import { normalizeTaskStatus } from "@/lib/task-completion";
@@ -163,7 +167,6 @@ const { bot, channel, send } = chatSdkChannel({
       // Recover a capture left behind by an interrupted coordinator turn before
       // asking the model to do anything. This means an upstream model failure
       // cannot prevent the candidate from seeing the already-captured form.
-      if (!context.thread) return;
       const pendingScreenshot = pendingSubmissionScreenshotSchema.safeParse(
         context.state.pendingSubmissionScreenshot
       );
@@ -171,9 +174,12 @@ const { bot, channel, send } = chatSdkChannel({
       const caller =
         session.session.auth?.current ?? session.session.auth?.initiator;
       if (!caller) return;
+      const scope = scopeFromPrincipal(caller);
+      const thread = await submissionDeliveryThread(context.thread, scope);
+      if (!thread) return;
       const delivery = await deliverSubmissionScreenshot(
-        context.thread,
-        scopeFromPrincipal(caller),
+        thread,
+        scope,
         event.turnId,
         context.state
       );
@@ -227,11 +233,15 @@ const { bot, channel, send } = chatSdkChannel({
         // message that omits the approval prefix. Claim on every completed
         // browser worker instead of letting free-form model prose decide
         // whether the candidate sees the queued review.
+        const scope = caller ? scopeFromPrincipal(caller) : undefined;
+        const thread = scope
+          ? await submissionDeliveryThread(context.thread, scope)
+          : undefined;
         const delivery: SubmissionScreenshotDelivery =
-          caller && context.thread
+          scope && thread
             ? await deliverSubmissionScreenshot(
-                context.thread,
-                scopeFromPrincipal(caller),
+                thread,
+                scope,
                 event.turnId,
                 context.state
               )
@@ -1086,6 +1096,45 @@ async function deliverSubmissionScreenshot(
   // A partial review is not a delivered one: the coordinator's message has to
   // stand rather than being suppressed behind half a form.
   return { reviewPages: reviewPages - lostReviewPages, status: "blocked" };
+}
+
+/**
+ * A background subagent result can outlive the webhook's reconstructed thread
+ * context. Rebuild the latest known Linq thread instead of leaving a completed
+ * review queued until the candidate happens to message again.
+ */
+async function submissionDeliveryThread(
+  activeThread:
+    | {
+        post: (message: {
+          markdown: string;
+          files?: { data: Buffer; filename: string; mimeType: string }[];
+        }) => Promise<{ id?: unknown }>;
+        toJSON: () => unknown;
+      }
+    | undefined,
+  scope: ReturnType<typeof scopeFromPrincipal>
+) {
+  if (activeThread) return activeThread;
+  const threadId = await findLinqThread(scope);
+  return threadId ? bot.thread(threadId) : undefined;
+}
+
+/** Flushes the durable screenshot outbox without starting an agent turn. */
+export async function flushPendingLinqSubmissionScreenshots() {
+  const scopes = await listPendingApplicationSubmissionScreenshotScopes();
+  await Promise.all(
+    scopes.map(async (scope) => {
+      const threadId = await findLinqThread(scope);
+      if (!threadId) return;
+      await deliverSubmissionScreenshot(
+        bot.thread(threadId),
+        scope,
+        `linq:screenshot-sweep:${scope.workspaceId}:${Date.now()}`,
+        {}
+      );
+    })
+  );
 }
 
 /** Rows written before migration 0017 carry an empty role, not a missing one. */

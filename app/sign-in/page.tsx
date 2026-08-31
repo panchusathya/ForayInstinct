@@ -25,7 +25,9 @@ export default async function SignInPage({
         <h1 className="type-page-title mt-6">Sign in</h1>
         <PhoneAuthForm
           callbackUrl={callbackUrl}
-          linqConfigured={env.LINQ_CONNECTOR !== undefined}
+          linqConfigured={
+            env.LINQ_CONNECTOR !== undefined || env.LINQ_API_KEY !== undefined
+          }
           skipOtp={localPhoneAuthBypassEnabled}
         />
       </section>

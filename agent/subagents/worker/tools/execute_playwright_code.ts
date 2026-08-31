@@ -10,6 +10,10 @@ import {
   diagnoseBrowserExecutionFailure,
   handleBrowserToolFailure,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
+import {
+  inspectPostActionBrowserState,
+  postActionBrowserStateInstruction,
+} from "@/agent/subagents/worker/lib/post-action-browser-state";
 
 const inputSchema = z.object({
   code: z.string().min(1),
@@ -64,6 +68,11 @@ export default defineTool({
           tool: "execute_playwright_code",
           trigger: "playwright_execution_failed",
         });
+    const browserState = await inspectPostActionBrowserState(
+      input.session_id,
+      context.abortSignal
+    );
+    const blockerInstruction = postActionBrowserStateInstruction(browserState);
     await recordBrowserActionCheckpoint(
       scope,
       input.session_id,
@@ -75,6 +84,7 @@ export default defineTool({
             ? "session_gone"
             : executionFailure?.errorCode,
         phase: "playwright",
+        actions: blockerInstruction ? [blockerInstruction] : undefined,
         state: response.success ? "completed" : "failed",
       },
       context.abortSignal
@@ -84,6 +94,12 @@ export default defineTool({
       // retrying. Say the session is unrecoverable instead.
       throw browserSessionEndedError(input.session_id);
     }
-    return response;
+    return {
+      ...response,
+      ...(browserState === undefined ? {} : { browser_state: browserState }),
+      ...(blockerInstruction === undefined
+        ? {}
+        : { next_action: blockerInstruction }),
+    };
   },
 });

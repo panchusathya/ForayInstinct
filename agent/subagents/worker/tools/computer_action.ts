@@ -9,6 +9,10 @@ import {
   diagnosticErrorCode,
   handleBrowserToolFailure,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
+import {
+  inspectPostActionBrowserState,
+  postActionBrowserStateInstruction,
+} from "@/agent/subagents/worker/lib/post-action-browser-state";
 
 const actionSchema = z.object({
   type: z.enum([
@@ -99,6 +103,7 @@ const inputSchema = z.object({
 });
 
 const outputSchema = z.object({
+  browserState: z.unknown().optional(),
   data: z.unknown().optional(),
   message: z.string(),
   mimeType: z.literal("image/png").optional(),
@@ -116,6 +121,8 @@ export default defineTool({
 
     const computer = kernel.browsers.computer;
     const data: unknown[] = [];
+    let browserState: Awaited<ReturnType<typeof inspectPostActionBrowserState>>;
+    let blockerInstruction: string | undefined;
     let screenshotBase64: string | undefined;
 
     try {
@@ -227,14 +234,33 @@ export default defineTool({
             break;
           }
         }
+        // A batch can put exploratory recovery actions after a submit. Stop
+        // before they can refill or submit again if that click opened an OTP
+        // or a bot challenge.
+        if (action.type !== "screenshot") {
+          browserState = await inspectPostActionBrowserState(
+            input.session_id,
+            context.abortSignal
+          );
+          blockerInstruction = postActionBrowserStateInstruction(browserState);
+          if (blockerInstruction) break;
+        }
       }
 
+      browserState ??= await inspectPostActionBrowserState(
+        input.session_id,
+        context.abortSignal
+      );
+      blockerInstruction ??= postActionBrowserStateInstruction(browserState);
       await recordBrowserActionCheckpoint(
         scope,
         input.session_id,
         {
           action: "batch",
-          actions: input.actions.map((action) => action.type),
+          actions: [
+            ...input.actions.map((action) => action.type),
+            ...(blockerInstruction ? [blockerInstruction] : []),
+          ],
           phase: "computer",
           state: "completed",
         },
@@ -242,7 +268,10 @@ export default defineTool({
       );
       return outputSchema.parse({
         data: data.length > 0 ? data : undefined,
-        message: `Executed ${String(input.actions.length)} computer action${input.actions.length === 1 ? "" : "s"}.`,
+        message:
+          blockerInstruction ??
+          `Executed ${String(input.actions.length)} computer action${input.actions.length === 1 ? "" : "s"}.`,
+        browserState,
         mimeType: screenshotBase64 ? "image/png" : undefined,
         screenshotBase64,
       });

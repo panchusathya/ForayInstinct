@@ -1,6 +1,6 @@
 import { getToken } from "@vercel/connect";
 import { APIError } from "better-auth/api";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { phoneOtpErrorMessage } from "../app/sign-in/phone-auth-form";
 
@@ -18,6 +18,25 @@ const linqApiErrorSchema = z.object({
 });
 
 describe("Linq phone authentication", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubEnv("AI_GATEWAY_API_KEY", "test-ai-gateway-key");
+    vi.stubEnv(
+      "BETTER_AUTH_SECRET",
+      "0123456789abcdefghijklmnopqrstuvwxyzABCD"
+    );
+    vi.stubEnv("BETTER_AUTH_URL", "https://example.com");
+    vi.stubEnv(
+      "DATABASE_URL",
+      "postgresql://user:password@example.com/database"
+    );
+    vi.stubEnv("KERNEL_API_KEY", "test-kernel-key");
+    vi.stubEnv(
+      "SECRET_ENCRYPTION_KEY",
+      "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+    );
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -25,10 +44,6 @@ describe("Linq phone authentication", () => {
   });
 
   it("preserves provider diagnostics and returns actionable client copy", async () => {
-    vi.stubEnv(
-      "BETTER_AUTH_SECRET",
-      "0123456789abcdefghijklmnopqrstuvwxyzABCD"
-    );
     vi.stubEnv("LINQ_CONNECTOR", "linq/open-instinct");
     vi.stubEnv("LINQ_PHONE_NUMBER", "+12025550123");
     vi.mocked(getToken).mockResolvedValue("test-token");
@@ -66,5 +81,30 @@ describe("Linq phone authentication", () => {
       },
     });
     expect(phoneOtpErrorMessage(body)).toContain("Messaging Contacts");
+  });
+
+  it("uses the direct Linq API key for sign-in codes when it is configured", async () => {
+    vi.stubEnv("LINQ_API_KEY", "direct-linq-api-key");
+    vi.stubEnv("LINQ_WEBHOOK_SECRET", "direct-linq-webhook-secret");
+    vi.stubEnv("LINQ_PHONE_NUMBER", "+12025550123");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { sendPhoneCode } = await import("../auth");
+    await expect(
+      sendPhoneCode({ code: "123456", to: "+12025550123" })
+    ).resolves.toBeUndefined();
+
+    expect(getToken).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.linqapp.com/api/partner/v3/messages",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer direct-linq-api-key",
+        }),
+      })
+    );
   });
 });

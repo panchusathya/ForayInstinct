@@ -171,3 +171,32 @@ export async function releaseApplicationSubmissionScreenshots(
       )
     );
 }
+
+/**
+ * The screenshot table is also the delivery outbox. A background dispatcher
+ * needs the owning scope to claim one application's newest batch without
+ * waiting for the candidate to send another message.
+ */
+export async function listPendingApplicationSubmissionScreenshotScopes(
+  limit = 25
+): Promise<AccessScope[]> {
+  const rows = await db
+    .select({
+      userId: applicationSubmissionScreenshots.createdByUserId,
+      workspaceId: applicationSubmissionScreenshots.workspaceId,
+    })
+    .from(applicationSubmissionScreenshots)
+    .where(isNull(applicationSubmissionScreenshots.deliveredAt))
+    .orderBy(desc(applicationSubmissionScreenshots.createdAt))
+    .limit(limit * 4);
+  const scopes: AccessScope[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const key = `${row.workspaceId}:${row.userId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    scopes.push({ userId: row.userId, workspaceId: row.workspaceId });
+    if (scopes.length === limit) break;
+  }
+  return scopes;
+}

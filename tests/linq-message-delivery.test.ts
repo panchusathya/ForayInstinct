@@ -5,7 +5,10 @@ import { z } from "zod";
 import workerCancellationHook from "../agent/hooks/worker-cancellation-delivery";
 import { env } from "../lib/env";
 
-const channelCapture = vi.hoisted(() => ({ config: undefined as unknown }));
+const channelCapture = vi.hoisted(() => ({
+  config: undefined as unknown,
+  thread: vi.fn<(threadId: string) => unknown>(),
+}));
 const screenshotMocks = vi.hoisted(() => ({
   claimPendingApplicationSubmissionScreenshots: vi.fn<
     (_scope: unknown) => Promise<
@@ -22,6 +25,12 @@ const screenshotMocks = vi.hoisted(() => ({
   >(),
   releaseApplicationSubmissionScreenshots:
     vi.fn<(_scope: unknown, _ids: readonly number[]) => Promise<void>>(),
+  listPendingApplicationSubmissionScreenshotScopes:
+    vi.fn<() => Promise<{ userId: string; workspaceId: string }[]>>(),
+}));
+const linqThreadMocks = vi.hoisted(() => ({
+  findLinqThread: vi.fn<() => Promise<string | undefined>>(),
+  rememberLinqRoleSearchThread: vi.fn<() => Promise<void>>(),
 }));
 const cardPngMocks = vi.hoisted(() => ({
   renderJobCardPng:
@@ -39,6 +48,7 @@ vi.mock("eve/channels/chat-sdk", () => ({
         onDirectMessage: vi.fn<() => void>(),
         onNewMessage: vi.fn<() => void>(),
         onReaction: vi.fn<() => void>(),
+        thread: channelCapture.thread,
       },
       channel: {},
       send: vi.fn<() => void>(),
@@ -50,13 +60,20 @@ vi.mock("@/db/services/application-submission-screenshots", () => ({
     screenshotMocks.claimPendingApplicationSubmissionScreenshots,
   releaseApplicationSubmissionScreenshots:
     screenshotMocks.releaseApplicationSubmissionScreenshots,
+  listPendingApplicationSubmissionScreenshotScopes:
+    screenshotMocks.listPendingApplicationSubmissionScreenshotScopes,
+}));
+vi.mock("@/db/services/pending-role-searches", () => ({
+  findLinqThread: linqThreadMocks.findLinqThread,
+  rememberLinqRoleSearchThread: linqThreadMocks.rememberLinqRoleSearchThread,
 }));
 vi.mock("@/lib/goforay/request-job-card-png", () => ({
   renderJobCardPng: cardPngMocks.renderJobCardPng,
 }));
 import { readLinqJobCards } from "@/lib/goforay/linq-job-card-state";
 
-await import("../agent/channels/linq-v2");
+const { flushPendingLinqSubmissionScreenshots } =
+  await import("../agent/channels/linq-v2");
 
 const channelEvents = (
   channelCapture.config as Parameters<typeof chatSdkChannel>[0]
@@ -88,6 +105,15 @@ describe("Linq message delivery", () => {
     screenshotMocks.releaseApplicationSubmissionScreenshots.mockResolvedValue(
       undefined
     );
+    screenshotMocks.listPendingApplicationSubmissionScreenshotScopes.mockReset();
+    screenshotMocks.listPendingApplicationSubmissionScreenshotScopes.mockResolvedValue(
+      []
+    );
+    linqThreadMocks.findLinqThread.mockReset();
+    linqThreadMocks.findLinqThread.mockResolvedValue(undefined);
+    linqThreadMocks.rememberLinqRoleSearchThread.mockReset();
+    linqThreadMocks.rememberLinqRoleSearchThread.mockResolvedValue(undefined);
+    channelCapture.thread.mockReset();
     cardPngMocks.renderJobCardPng.mockReset();
     cardPngMocks.renderJobCardPng.mockResolvedValue(undefined);
   });
@@ -165,6 +191,69 @@ describe("Linq message delivery", () => {
     expect(state.pendingSubmissionScreenshot).toEqual({
       turnId: "interrupted-turn",
     });
+  });
+
+  it("delivers a review through the saved Linq thread when worker completion has no thread", async () => {
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [reviewScreenshot()]
+    );
+    linqThreadMocks.findLinqThread.mockResolvedValue("linq:dm:chat-1");
+    const post = vi
+      .fn<() => Promise<unknown>>()
+      .mockResolvedValue({ id: "sent" });
+    channelCapture.thread.mockReturnValue({
+      post,
+      toJSON: () => ({
+        currentMessage: { raw: { service: "iMessage" } },
+      }),
+    });
+    const { context } = handlerContext("message-1", {}, "iMessage");
+    context.thread = undefined;
+
+    await trackWorkerCancellation(
+      submissionApprovalResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(channelCapture.thread).toHaveBeenCalledWith("linq:dm:chat-1");
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      files: [
+        {
+          data: Buffer.from("review-png"),
+          filename: "application-review-1.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown:
+        "here's your filled application for staff engineer. reply *yes* to submit, or tell me what to change.",
+    });
+  });
+
+  it("flushes the screenshot outbox without a new inbound message", async () => {
+    screenshotMocks.listPendingApplicationSubmissionScreenshotScopes.mockResolvedValue(
+      [{ userId: "user-1", workspaceId: "workspace-1" }]
+    );
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [reviewScreenshot()]
+    );
+    linqThreadMocks.findLinqThread.mockResolvedValue("linq:dm:chat-1");
+    const post = vi
+      .fn<() => Promise<unknown>>()
+      .mockResolvedValue({ id: "sent" });
+    channelCapture.thread.mockReturnValue({
+      post,
+      toJSON: () => ({
+        currentMessage: { raw: { service: "iMessage" } },
+      }),
+    });
+
+    await flushPendingLinqSubmissionScreenshots();
+
+    expect(post).toHaveBeenCalledOnce();
+    expect(
+      screenshotMocks.claimPendingApplicationSubmissionScreenshots
+    ).toHaveBeenCalledWith({ userId: "user-1", workspaceId: "workspace-1" });
   });
 
   it("delivers Exa role cards with their apply URL instead of the model reply", async () => {
@@ -1232,6 +1321,18 @@ function workerCancellationResult(
     status: "completed",
     stepIndex: 0,
     turnId: "turn-1",
+  };
+}
+
+function reviewScreenshot() {
+  return {
+    applyUrl: "https://example.com/apply",
+    id: 1,
+    kind: "review",
+    mimeType: "image/png",
+    png: Buffer.from("review-png"),
+    role: "Staff Engineer",
+    sessionId: "browser-1",
   };
 }
 

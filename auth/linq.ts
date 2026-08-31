@@ -73,19 +73,26 @@ export function linqOtpFailure(error: LinqDeliveryError) {
 }
 
 export async function sendLinqText({
+  apiKey,
   connector,
   idempotencyKey,
   message,
   to,
 }: {
-  readonly connector: string;
+  readonly apiKey?: string;
+  readonly connector?: string;
   readonly idempotencyKey: string;
   readonly message: string;
   readonly to: string;
 }) {
-  const token = await getToken(connector, {
-    subject: { type: "app" },
-  });
+  // A direct key is both more reliable for transactional authentication and
+  // already configured for the production channel. Fall back to Vercel
+  // Connect only for deployments that intentionally use managed credentials.
+  const token =
+    apiKey ??
+    (await getToken(connector ?? missingLinqCredentials(), {
+      subject: { type: "app" },
+    }));
   const response = await fetch(LINQ_MESSAGES_URL, {
     body: JSON.stringify({
       message: { parts: [{ type: "text", value: message }] },
@@ -108,4 +115,8 @@ export async function sendLinqText({
     status: response.status,
     traceId: linqError?.trace_id,
   });
+}
+
+function missingLinqCredentials(): never {
+  throw new Error("Linq requires a direct API key or connector.");
 }

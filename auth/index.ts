@@ -57,16 +57,17 @@ export async function sendPhoneCode({
   readonly code: string;
   readonly to: string;
 }) {
-  if (!env.LINQ_CONNECTOR) {
+  if (!env.LINQ_CONNECTOR && !env.LINQ_API_KEY) {
     throw new APIError("SERVICE_UNAVAILABLE", {
       code: "LINQ_NOT_CONFIGURED",
       message:
-        "iMessage sign-in is not configured. Attach a Linq connector and set LINQ_CONNECTOR and LINQ_PHONE_NUMBER.",
+        "iMessage sign-in is not configured. Set LINQ_API_KEY or attach a Linq connector, then configure LINQ_PHONE_NUMBER.",
     });
   }
 
   try {
     await sendLinqText({
+      apiKey: env.LINQ_API_KEY,
       connector: env.LINQ_CONNECTOR,
       idempotencyKey: `auth-otp-${createHash("sha256")
         .update(`${to}\u0000${code}`)
