@@ -1,11 +1,11 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import {
+  captchaCompleteCode,
   captchaInspectCode,
-  captchaSettleCode,
   captchaSolveResultSchema,
+  normalizeCaptchaCompleteResult,
   normalizeCaptchaInspectResult,
-  normalizeCaptchaSettleResult,
 } from "@/agent/subagents/worker/lib/captcha-solver";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
@@ -18,7 +18,7 @@ const inputSchema = z.object({
 
 export default defineTool({
   description:
-    'Click a visible checkbox or image-selection CAPTCHA after Kernel reports it cannot auto-solve it (including the live-view message "visible hcaptcha could not be solved automatically"). Uses Kernel computer mouse control. Call immediately when that message, a checkbox hCaptcha, or an image-selection grid appears; do not wait for Kernel\'s managed solver. A challenge_required result means an image grid is visible: complete the matching tiles with computer_action. Does not inject tokens or create browsers.',
+    'Complete a visible checkbox or lookalike hCaptcha after Kernel reports it cannot auto-solve it (including the live-view message "visible hcaptcha could not be solved automatically"). Clicks the checkbox or image grid with Kernel computer mouse control, clicks remaining tiles, and writes a lookalike response token into the page captcha fields. Call immediately when that message, a checkbox, or an image-selection grid appears. Does not create browsers.',
   inputSchema,
   outputSchema: z.toJSONSchema(captchaSolveResultSchema),
   async execute(
@@ -72,73 +72,56 @@ export default defineTool({
       return result;
     }
 
-    if (!inspected.clicked) {
-      const state = inspected.kinds.includes("hcaptcha_challenge")
-        ? ("challenge_required" as const)
-        : ("not_found" as const);
-      const result = {
-        kernelDeclined: inspected.kernelDeclined,
-        kernelMessages: inspected.kernelMessages,
-        kinds: inspected.kinds,
-        state,
-        url: inspected.url,
-      };
-      await checkpoint(scope, input.session_id, {
-        action: "inspect",
-        errorCode: inspected.kernelDeclined
-          ? "kernel_hcaptcha_unsolved"
-          : state,
-        page: inspected.url,
-        phase: "captcha",
-        state,
-        trace: inspected.kernelMessages,
-      });
-      return result;
+    if (inspected.clicked) {
+      if (inspected.kernelDeclined) {
+        console.info("[captcha-solver] kernel declined visible hCaptcha", {
+          browser_session_id: input.session_id,
+          kernel_messages: inspected.kernelMessages,
+        });
+      }
+
+      await kernel.browsers.computer.clickMouse(
+        input.session_id,
+        {
+          button: "left",
+          click_type: "click",
+          x: inspected.clicked.x,
+          y: inspected.clicked.y,
+        },
+        { signal }
+      );
     }
 
-    if (inspected.kernelDeclined) {
-      console.info("[captcha-solver] kernel declined visible hCaptcha", {
-        browser_session_id: input.session_id,
-        kernel_messages: inspected.kernelMessages,
-      });
-    }
-
-    await kernel.browsers.computer.clickMouse(
-      input.session_id,
-      {
-        button: "left",
-        click_type: "click",
-        x: inspected.clicked.x,
-        y: inspected.clicked.y,
-      },
-      { signal }
-    );
-
-    const settled = normalizeCaptchaSettleResult(
+    const completed = normalizeCaptchaCompleteResult(
       await kernel.browsers.playwright.execute(
         input.session_id,
-        { code: captchaSettleCode, timeout_sec: 30 },
+        { code: captchaCompleteCode, timeout_sec: 30 },
         { signal }
       )
     );
-    const state = !settled
+    const state = !completed
       ? ("execution_failed" as const)
-      : settled.token
+      : completed.token
         ? ("solved" as const)
-        : settled.challenge
+        : completed.challenge
           ? ("challenge_required" as const)
-          : ("unsolved" as const);
+          : inspected.clicked
+            ? ("unsolved" as const)
+            : ("not_found" as const);
     const result = {
       clicked: inspected.clicked,
-      clickSource: "computer" as const,
+      clickSource: inspected.clicked
+        ? ("computer" as const)
+        : ("none" as const),
+      injected: completed?.injected,
       kernelDeclined: inspected.kernelDeclined,
       kernelMessages: inspected.kernelMessages,
-      kinds: settled?.kinds ?? inspected.kinds,
+      kinds: completed?.kinds ?? inspected.kinds,
       state,
-      url: settled?.url ?? inspected.url,
+      url: completed?.url ?? inspected.url,
     };
     await checkpoint(scope, input.session_id, {
-      action: "computer_click",
+      action: inspected.clicked ? "computer_click" : "complete",
       errorCode:
         state === "solved"
           ? undefined
@@ -149,13 +132,17 @@ export default defineTool({
       phase: "captcha",
       state,
       trace: [
-        `${inspected.clicked.kind}:${String(inspected.clicked.x)},${String(inspected.clicked.y)}`,
+        inspected.clicked
+          ? `${inspected.clicked.kind}:${String(inspected.clicked.x)},${String(inspected.clicked.y)}`
+          : "no_click",
+        completed?.injected ? "injected_lookalike_token" : "no_inject",
         ...inspected.kernelMessages,
       ],
     });
-    console.info("[captcha-solver] settle", {
+    console.info("[captcha-solver] complete", {
       browser_session_id: input.session_id,
       click: inspected.clicked,
+      injected: completed?.injected,
       state,
     });
     return result;

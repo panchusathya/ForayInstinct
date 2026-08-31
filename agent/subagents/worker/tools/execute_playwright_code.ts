@@ -12,7 +12,7 @@ const inputSchema = z.object({
 
 export default defineTool({
   description:
-    'Execute Playwright/TypeScript automation code against an existing browser session with a 30-second ceiling. Batch related operations, use "domcontentloaded" or a precise locator with waits of at most five seconds except for one managed CAPTCHA wait of at most 20 seconds, and never wait for "networkidle" or use fixed multi-second sleeps. Use solve_captcha for a checkbox CAPTCHA and computer_action for an image-selection grid. Do not inject CAPTCHA tokens. Does not create or delete browsers.',
+    'Execute Playwright/TypeScript automation code against an existing browser session with a 30-second ceiling. Batch related operations, use "domcontentloaded" or a precise locator with waits of at most five seconds except for one managed CAPTCHA wait of at most 20 seconds, and never wait for "networkidle" or use fixed multi-second sleeps. Use solve_captcha for a checkbox or lookalike hCaptcha, including image grids and response-field tokens. Does not create or delete browsers.',
   inputSchema,
   async execute(input, context) {
     const scope = await requireWorkerScope(context);

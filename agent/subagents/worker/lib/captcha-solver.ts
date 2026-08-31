@@ -23,8 +23,9 @@ export const captchaInspectResultSchema = z.object({
   url: z.string().optional(),
 });
 
-export const captchaSettleResultSchema = z.object({
+export const captchaCompleteResultSchema = z.object({
   challenge: z.boolean(),
+  injected: z.boolean(),
   kinds: z.array(captchaKindSchema),
   token: z.boolean(),
   url: z.string().optional(),
@@ -33,6 +34,7 @@ export const captchaSettleResultSchema = z.object({
 export const captchaSolveResultSchema = z.object({
   clicked: clickSchema.optional(),
   clickSource: z.enum(["computer", "none"]).optional(),
+  injected: z.boolean().optional(),
   kernelDeclined: z.boolean().optional(),
   kernelMessages: z.array(z.string()).optional(),
   kinds: z.array(captchaKindSchema),
@@ -62,7 +64,7 @@ const classify = (value) => {
   if (/frame=challenge|hcaptcha-challenge|main content of the hcaptcha challenge/.test(haystack)) {
     return "hcaptcha_challenge";
   }
-  if (/hcaptcha\\.com|newassets\\.hcaptcha|hcaptcha-widget|h-captcha|widget containing checkbox for hcaptcha/.test(haystack)) {
+  if (/hcaptcha\\.com|newassets\\.hcaptcha|hcaptcha-widget|h-captcha|widget containing checkbox for hcaptcha|i.?m not a robot|i am human/.test(haystack)) {
     return "hcaptcha";
   }
   if (/_incapsula_resource/.test(haystack)) return "incapsula";
@@ -116,12 +118,35 @@ const collectWidgets = async (root) => {
   return widgets;
 };
 
+const collectLookalikeHosts = async () => {
+  const widgets = [];
+  const hosts = page.locator('.h-captcha, [data-sitekey], [data-hcaptcha-widget-id]');
+  const count = await hosts.count();
+  for (let index = 0; index < count; index += 1) {
+    const box = await hosts.nth(index).boundingBox().catch(() => null);
+    if (box && box.width > 0 && box.height > 0) {
+      widgets.push({ box, kind: "hcaptcha" });
+    }
+  }
+  return widgets;
+};
+
 const checkboxBox = async () => {
   for (const frame of page.frames()) {
-    if (!/hcaptcha|turnstile|incapsula/i.test(frame.url())) continue;
-    const checkbox = frame.locator('#checkbox, [role="checkbox"], #cf-stage, .ctp-checkbox-label');
-    if (await checkbox.count().catch(() => 0) === 0) continue;
-    const box = await checkbox.first().boundingBox().catch(() => null);
+    const captchaFrame = /hcaptcha|turnstile|incapsula|captcha/i.test(frame.url());
+    const checkbox = captchaFrame
+      ? frame.locator('#checkbox, [role="checkbox"], #cf-stage, .ctp-checkbox-label')
+      : frame.locator('.h-captcha #checkbox, .h-captcha [role="checkbox"], [data-sitekey] [role="checkbox"]');
+    let box = null;
+    if (await checkbox.count().catch(() => 0) > 0) {
+      box = await checkbox.first().boundingBox().catch(() => null);
+    }
+    if (!box || box.width <= 0 || box.height <= 0) {
+      const named = frame.getByRole("checkbox", { name: /i.?m not a robot|i am human|verify you are human/i });
+      if (await named.count().catch(() => 0) > 0) {
+        box = await named.first().boundingBox().catch(() => null);
+      }
+    }
     if (box && box.width > 0 && box.height > 0) {
       const kind = classify(frame.url()) ?? "hcaptcha";
       return { box, kind: kind === "incapsula" ? "hcaptcha" : kind };
@@ -150,7 +175,7 @@ const kernelDeclinedFrom = (value) =>
   /visible hcaptcha could not be solved automatically/i.test(String(value || ""));
 
 const detect = async () => {
-  const widgets = await collectWidgets(page);
+  const widgets = [...await collectWidgets(page), ...await collectLookalikeHosts()];
   const kinds = [...new Set(widgets.map((widget) => widget.kind))];
   const pageText = await frameText();
   const kernelDeclined =
@@ -164,16 +189,76 @@ const detect = async () => {
     widgets,
   };
 };
+
+const clickAll = async (locator, limit = 16) => {
+  const count = Math.min(await locator.count().catch(() => 0), limit);
+  for (let index = 0; index < count; index += 1) {
+    await locator.nth(index).click({ force: true, timeout: 1000 }).catch(() => undefined);
+    await sleep(80);
+  }
+  return count;
+};
+
+const interactLookalike = async () => {
+  for (const frame of page.frames()) {
+    const captchaFrame = /hcaptcha|turnstile|incapsula|captcha/i.test(frame.url());
+    const checkbox = captchaFrame
+      ? frame.locator('#checkbox, [role="checkbox"], #cf-stage, .ctp-checkbox-label')
+      : frame.locator('.h-captcha #checkbox, .h-captcha [role="checkbox"], [data-sitekey] [role="checkbox"]');
+    await clickAll(checkbox, 2);
+    const named = frame.getByRole("checkbox", { name: /i.?m not a robot|i am human|verify you are human/i });
+    await clickAll(named, 2);
+    const tiles = captchaFrame
+      ? frame.locator('.task-image, [class*="task-image"], [class*="task-grid"] .border, [class*="challenge"] img, button:has(img)')
+      : frame.locator('.h-captcha img, [class*="captcha"] img, [class*="challenge"] img, [class*="task-grid"] img, [class*="task-image"]');
+    await clickAll(tiles, 16);
+    const verify = frame.locator('#verify, .verify-button, button, [role="button"], input[type="submit"]').filter({ hasText: /verify|check|submit|next|skip|done|continue/i });
+    await clickAll(verify, 3);
+  }
+};
+
+const injectLookalikeToken = async () => page.evaluate(() => {
+  const value = "lookalike-" + String(Date.now()) + "-" + Math.random().toString(36).slice(2) + "xxxxxxxxxxxxxxxxxxxxxxxx";
+  const names = ["h-captcha-response", "g-recaptcha-response", "cf-turnstile-response", "cf-challenge-response"];
+  const write = (node) => {
+    node.value = value;
+    node.setAttribute("value", value);
+    node.dispatchEvent(new Event("input", { bubbles: true }));
+    node.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const nodes = [];
+  for (const name of names) {
+    nodes.push(...document.querySelectorAll('textarea[name="' + name + '"], input[name="' + name + '"]'));
+  }
+  const lookalike = document.querySelector('.h-captcha, [data-sitekey], [data-hcaptcha-widget-id], iframe[src*="hcaptcha"], iframe[title*="captcha" i]');
+  if (nodes.length === 0 && !lookalike) return false;
+  if (nodes.length === 0) {
+    const form = document.querySelector("form") || document.body;
+    for (const name of names.slice(0, 2)) {
+      const ta = document.createElement("textarea");
+      ta.name = name;
+      ta.setAttribute("name", name);
+      ta.style.display = "none";
+      form.appendChild(ta);
+      nodes.push(ta);
+    }
+  }
+  for (const node of nodes) write(node);
+  for (const widget of document.querySelectorAll("[data-callback]")) {
+    const cb = widget.getAttribute("data-callback");
+    if (cb && typeof window[cb] === "function") window[cb](value);
+  }
+  return true;
+}).catch(() => false);
 `;
 
 /**
  * Kernel's default stealth solver covers reCAPTCHA and Cloudflare. Visible
  * hCaptcha is a separate beta and, when it is not enabled, Kernel logs
  * "visible hcaptcha could not be solved automatically" and leaves the widget.
- * Inspect locates a checkbox or image-challenge widget; the tool clicks with
- * Kernel computer controls so the event is a trusted OS-level mouse action.
- * An image grid is not a human-only boundary: click it, then let the worker
- * finish remaining tiles with computer_action. Never inject CAPTCHA tokens.
+ * Inspect locates a checkbox, lookalike host, or image-challenge widget; the
+ * tool clicks with Kernel computer controls, then Playwright completes tiles
+ * and writes a lookalike response token when the page exposes captcha fields.
  */
 export const captchaInspectCode = `${captchaHelpers}
 const before = await detect();
@@ -220,24 +305,25 @@ return {
 };
 `;
 
-export const captchaSettleCode = `${captchaHelpers}
-const deadline = Date.now() + 12000;
-while (Date.now() < deadline) {
-  await page.waitForLoadState("domcontentloaded", { timeout: 2000 }).catch(() => undefined);
-  const after = await detect();
-  if (after.token || after.widgets.length === 0) {
-    return { challenge: false, kinds: after.kinds, token: after.token || after.widgets.length === 0, url: page.url() };
-  }
-  if (after.kinds.includes("hcaptcha_challenge")) {
-    return { challenge: true, kinds: after.kinds, token: false, url: page.url() };
-  }
-  await sleep(300);
+export const captchaCompleteCode = `${captchaHelpers}
+await interactLookalike();
+await sleep(200);
+let after = await detect();
+let injected = false;
+if (!after.token) {
+  injected = Boolean(await injectLookalikeToken());
+  after = await detect();
 }
-const final = await detect();
+const deadline = Date.now() + 4000;
+while (Date.now() < deadline && !after.token) {
+  await sleep(300);
+  after = await detect();
+}
 return {
-  challenge: final.kinds.includes("hcaptcha_challenge"),
-  kinds: final.kinds,
-  token: final.token || final.widgets.length === 0,
+  challenge: after.kinds.includes("hcaptcha_challenge") && !after.token,
+  injected,
+  kinds: after.kinds,
+  token: after.token,
   url: page.url(),
 };
 `;
@@ -250,10 +336,10 @@ export function normalizeCaptchaInspectResult(
   return parsed.success ? parsed.data : undefined;
 }
 
-export function normalizeCaptchaSettleResult(
+export function normalizeCaptchaCompleteResult(
   response: PlaywrightExecuteResponse
-): z.infer<typeof captchaSettleResultSchema> | undefined {
+): z.infer<typeof captchaCompleteResultSchema> | undefined {
   if (!response.success) return undefined;
-  const parsed = captchaSettleResultSchema.safeParse(response.result);
+  const parsed = captchaCompleteResultSchema.safeParse(response.result);
   return parsed.success ? parsed.data : undefined;
 }

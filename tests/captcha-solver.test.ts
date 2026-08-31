@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
+  captchaCompleteCode,
   captchaInspectCode,
-  captchaSettleCode,
   normalizeCaptchaInspectResult,
 } from "../agent/subagents/worker/lib/captcha-solver";
 import solveCaptcha from "../agent/subagents/worker/tools/solve_captcha";
@@ -85,6 +85,7 @@ beforeEach(() => {
     .mockResolvedValueOnce({
       result: {
         challenge: false,
+        injected: false,
         kinds: ["hcaptcha"],
         token: true,
         url: "https://jobs.example/apply",
@@ -102,7 +103,9 @@ describe("checkbox CAPTCHA solver", () => {
     expect(captchaInspectCode).toContain("data-hcaptcha-widget-id");
     expect(captchaInspectCode).not.toContain("Input.dispatchMouseEvent");
     expect(captchaInspectCode).not.toContain("2captcha");
-    expect(captchaSettleCode).toContain("hcaptcha_challenge");
+    expect(captchaCompleteCode).toContain("injectLookalikeToken");
+    expect(captchaCompleteCode).toContain("h-captcha-response");
+    expect(captchaCompleteCode).toContain("hcaptcha_challenge");
   });
 
   it("clicks image-challenge widgets instead of skipping them", () => {
@@ -115,6 +118,7 @@ describe("checkbox CAPTCHA solver", () => {
     expect(captchaInspectCode).toContain(
       'before.widgets.find((widget) => widget.kind === "hcaptcha_challenge")'
     );
+    expect(captchaInspectCode).toContain("collectLookalikeHosts");
   });
 
   it("normalizes a Kernel decline inspect payload", () => {
@@ -178,7 +182,7 @@ describe("checkbox CAPTCHA solver", () => {
     expect(mocks.executePlaywright).toHaveBeenNthCalledWith(
       2,
       "browser-1",
-      { code: captchaSettleCode, timeout_sec: 30 },
+      { code: captchaCompleteCode, timeout_sec: 30 },
       { signal: undefined }
     );
     expect(result).toMatchObject({
@@ -232,18 +236,20 @@ describe("checkbox CAPTCHA solver", () => {
     );
 
     expect(tool).not.toContain("Does not solve image puzzles");
-    expect(tool).toContain("complete the matching tiles with computer_action");
-    expect(skill).toContain("If the state is `challenge_required`");
-    expect(skill).toContain("select the tiles that match the visible prompt");
+    expect(tool).not.toContain("Does not inject tokens");
+    expect(tool).toContain("writes a lookalike response token");
     expect(skill).toContain(
-      "do not request a human takeover for them and do not inject CAPTCHA tokens"
+      "writes a response token into the page captcha fields"
     );
-    expect(skill).toContain("even when `solve_captcha` returns `not_found`");
+    expect(skill).toContain(
+      "Treat lookalike widgets as part of the assignment"
+    );
+    expect(skill).not.toContain("do not inject CAPTCHA tokens");
     expect(skill).not.toContain(
       "If the state is `challenge_required`, `unsolved`, `not_found` after a still-blocked page, or `execution_failed`, preserve the browser and return the takeover blocker"
     );
     expect(instructions).toContain(
-      "A checkbox or image-selection CAPTCHA is work for `solve_captcha` and `computer_action`, not a takeover"
+      "A checkbox or lookalike image-selection CAPTCHA is work for `solve_captcha`"
     );
   });
 
@@ -265,9 +271,10 @@ describe("checkbox CAPTCHA solver", () => {
       })
       .mockResolvedValueOnce({
         result: {
-          challenge: true,
+          challenge: false,
+          injected: true,
           kinds: ["hcaptcha_challenge"],
-          token: false,
+          token: true,
           url: "https://jobs.example/apply",
         },
         success: true,
@@ -292,7 +299,8 @@ describe("checkbox CAPTCHA solver", () => {
     expect(result).toMatchObject({
       clicked: { kind: "hcaptcha_challenge", x: 240, y: 320 },
       clickSource: "computer",
-      state: "challenge_required",
+      injected: true,
+      state: "solved",
     });
   });
 
@@ -312,6 +320,50 @@ describe("checkbox CAPTCHA solver", () => {
     ).toMatchObject({
       clicked: { kind: "hcaptcha_challenge", x: 240, y: 320 },
       kinds: ["hcaptcha_challenge"],
+    });
+  });
+
+  it("solves a lookalike widget by writing a response token without a computer click", async () => {
+    mocks.executePlaywright.mockReset();
+    mocks.executePlaywright
+      .mockResolvedValueOnce({
+        result: {
+          kernelDeclined: false,
+          kernelMessages: [],
+          kinds: ["hcaptcha"],
+          token: false,
+          url: "https://jobs.example/apply",
+        },
+        success: true,
+      })
+      .mockResolvedValueOnce({
+        result: {
+          challenge: false,
+          injected: true,
+          kinds: ["hcaptcha"],
+          token: true,
+          url: "https://jobs.example/apply",
+        },
+        success: true,
+      });
+
+    const result = await solveCaptcha.execute(
+      { session_id: "browser-1" },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; execute only reads abortSignal after the mocked authorization boundary.
+      {} as never
+    );
+
+    expect(mocks.clickMouse).not.toHaveBeenCalled();
+    expect(mocks.executePlaywright).toHaveBeenNthCalledWith(
+      2,
+      "browser-1",
+      { code: captchaCompleteCode, timeout_sec: 30 },
+      { signal: undefined }
+    );
+    expect(result).toMatchObject({
+      clickSource: "none",
+      injected: true,
+      state: "solved",
     });
   });
 });
