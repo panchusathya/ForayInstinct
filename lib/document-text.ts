@@ -40,9 +40,11 @@ function clipExtractedText(value: string) {
 /**
  * A Postgres `text` value cannot hold U+0000, and the remaining C0 controls are
  * binary noise rather than resume text. Neither is removed by the whitespace
- * collapse above, because JavaScript's `\s` does not match them. Every
- * extractor returns through here, so this is the one place that has to hold for
- * `extracted_text` to always be storable.
+ * collapse above, because JavaScript's `\s` does not match them.
+ *
+ * Every extractor returns through here, which is what makes this the guarantee
+ * rather than any single decoder: PDF text has several encodings, and the ones
+ * this module does not decode still reach the column as bytes.
  */
 function stripUnstorableCharacters(value: string) {
   // oxlint-disable-next-line no-control-regex
@@ -99,8 +101,11 @@ function inflatePdfStreams(bytes: Buffer) {
 function decodePdfString(value: string) {
   const bytes = Buffer.from(unescapePdfBytes(value), "latin1");
   if (bytes.length >= 4 && bytes[0] === 0xfe && bytes[1] === 0xff) {
-    // UTF-16BE, which is what Word, Pages and Google Docs emit for any string
-    // holding a bullet, smart quote, em dash or ligature.
+    // One of several encodings a PDF may use for a literal string, and the one
+    // a word processor tends to reach for once the text leaves plain ASCII.
+    // Others exist, so this decodes what it recognizes and leaves the rest to
+    // clipExtractedText: an Identity-H CID string, for instance, carries
+    // two-byte glyph codes with no BOM and its own NUL bytes.
     const usable = bytes.length - ((bytes.length - 2) % 2);
     return Buffer.from(bytes.subarray(2, usable)).swap16().toString("utf16le");
   }

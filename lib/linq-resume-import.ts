@@ -34,15 +34,46 @@ export async function readLinqAttachment(attachment: Attachment) {
 }
 
 /**
- * Rejections the same bytes will always produce. Retrying them burns the one
- * retry a genuine connection blip needs, so surface them immediately.
+ * SQLSTATE classes where the same bytes could still succeed: a lost or refused
+ * connection, exhausted resources, an administrative interruption, or a rolled
+ * back transaction. Every other class is the server rejecting this statement on
+ * its merits, which a second identical attempt cannot change.
  */
-const permanentSaveFailures = new Set([
-  "Only a resume can be the default application file.",
-  "The file is empty.",
-  "This workspace already has 20 saved documents.",
-  "Upload a file smaller than 8 MB.",
+const transientSqlStateClasses = new Set(["08", "40", "53", "57"]);
+
+/** Socket faults surface from the driver without a SQLSTATE of their own. */
+const transientDriverCodes = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EPIPE",
+  "ETIMEDOUT",
 ]);
+
+/**
+ * Classify by the error the database actually raised rather than by its
+ * message, so that rewording a validation error cannot silently change how the
+ * save behaves. Drizzle wraps the driver error, so walk the cause chain.
+ */
+function isRetryableSaveFailure(error: unknown) {
+  for (
+    let cause: unknown = error, depth = 0;
+    cause !== null && cause !== undefined && depth < 5;
+    cause = (cause as { cause?: unknown }).cause, depth += 1
+  ) {
+    const code = (cause as { code?: unknown }).code;
+    if (typeof code !== "string") continue;
+    if (transientDriverCodes.has(code)) return true;
+    // A SQLSTATE is five alphanumeric characters, not five digits: 57P01 and
+    // 40P01 are both codes this has to recognize.
+    if (/^[0-9A-Z]{5}$/u.test(code)) {
+      return transientSqlStateClasses.has(code.slice(0, 2));
+    }
+  }
+  // A rejection carrying no code never reached the database: it is one of the
+  // document service's own validation errors, settled by the bytes it was
+  // handed, so a second identical attempt gets the same answer.
+  return false;
+}
 
 /** Retries the same already-downloaded attachment once before surfacing a save failure. */
 export async function retryLinqResumeSave<T>(save: () => Promise<T>) {
@@ -52,9 +83,7 @@ export async function retryLinqResumeSave<T>(save: () => Promise<T>) {
       return await save();
     } catch (error) {
       failure = error;
-      if (error instanceof Error && permanentSaveFailures.has(error.message)) {
-        break;
-      }
+      if (!isRetryableSaveFailure(error)) break;
       // Give a saturated connection pool a moment before spending the retry.
       if (attempt === 0)
         await new Promise((resolve) => setTimeout(resolve, 250));

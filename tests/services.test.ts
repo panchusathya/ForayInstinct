@@ -383,8 +383,8 @@ describe("database services", () => {
     const alice = { userId: "alice", workspaceId: "workspace:alice" };
     await scope.ensureScope(alice);
 
-    // Word, Pages and Google Docs encode a PDF string as UTF-16BE as soon as it
-    // holds a bullet or an em dash, which puts a NUL byte before every ASCII
+    // A UTF-16BE literal is one of the encodings a word processor emits once
+    // the text leaves plain ASCII, and it puts a NUL byte before every ASCII
     // character. A Postgres text column rejects NUL, so an unsanitized
     // extraction fails the insert and loses the candidate's resume.
     const saved = await documents.saveCandidateDocument(alice, {

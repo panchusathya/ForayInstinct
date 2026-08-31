@@ -33,16 +33,44 @@ describe("Linq resume import", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("retries the same document save once", async () => {
+  it("retries the same document save once after a transient database fault", async () => {
     const save = vi
       .fn<() => Promise<{ filename: string }>>()
-      .mockRejectedValueOnce(new Error("temporary database failure"))
+      // 57P01: the server terminated the connection. Class 57 is transient.
+      .mockRejectedValueOnce(sqlError("57P01"))
       .mockResolvedValueOnce({ filename: "resume.pdf" });
 
     await expect(retryLinqResumeSave(save)).resolves.toEqual({
       filename: "resume.pdf",
     });
     expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a socket fault raised without a SQLSTATE", async () => {
+    const save = vi
+      .fn<() => Promise<{ filename: string }>>()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })
+      )
+      .mockResolvedValueOnce({ filename: "resume.pdf" });
+
+    await expect(retryLinqResumeSave(save)).resolves.toEqual({
+      filename: "resume.pdf",
+    });
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a statement the database rejected on its merits", async () => {
+    // 22021 is the rejection that lost iMessage resumes: a NUL in a text
+    // column. The same bytes produce it every time.
+    const save = vi
+      .fn<() => Promise<{ filename: string }>>()
+      .mockRejectedValue(
+        Object.assign(new Error("Failed query"), { cause: sqlError("22021") })
+      );
+
+    await expect(retryLinqResumeSave(save)).rejects.toThrow("Failed query");
+    expect(save).toHaveBeenCalledOnce();
   });
 
   it("does not spend the retry on a rejection the same bytes will repeat", async () => {
@@ -55,6 +83,12 @@ describe("Linq resume import", () => {
     );
     expect(save).toHaveBeenCalledOnce();
   });
+
+  function sqlError(code: string) {
+    return Object.assign(new Error(`database rejected the statement`), {
+      code,
+    });
+  }
 
   it("recognizes a PDF when Linq provides only generic file metadata", () => {
     expect(
