@@ -34,7 +34,7 @@ export default defineDynamic({
       return {
         find_goforay_roles: defineTool({
           description:
-            "Immediately find roles whenever the user asks to find roles, show openings, or suggest jobs. Reuse their workspace profile plus any title, seniority, or location they stated. If the result has `needs`, ask one concise follow-up containing only those missing details; do not mention JuiceBox, candidate links, or CRM setup. Otherwise return the concrete cards. Search prefers curated JuiceBox matches when available and otherwise discovers live public postings through Exa; a candidate association is never required. Never call web_search for the candidate's own role search. Present cards as short bullets only when the channel did not already deliver them; never paste this object.",
+            "Immediately find roles whenever the user asks to find roles, show openings, or suggest jobs. Reuse their workspace profile plus any title, seniority, or location they stated. If the result has `needs`, ask one concise follow-up containing only those missing details; do not mention JuiceBox, candidate links, or CRM setup. Otherwise return the concrete cards. Search prefers curated JuiceBox matches when available and otherwise discovers live public postings through Exa; a candidate association is never required. Never call web_search for the candidate's own role search. The client renders the cards; write at most one intro line and never paste this object or list the roles as bullets.",
           inputSchema: roleSearchInputSchema,
           execute: async ({ query, location, seniority, limit }) => {
             const profile = await readCandidateProfile(scope);

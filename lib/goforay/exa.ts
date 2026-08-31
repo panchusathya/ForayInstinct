@@ -1,12 +1,5 @@
 import { compactText, exaSearch } from "@/lib/exa";
-
-export type ExaRoleCard = {
-  company: string;
-  location: string;
-  reasons: string[];
-  title: string;
-  url: string;
-};
+import type { GoForayJobCard } from "./job-cards";
 
 function roleTitle(value: string) {
   const first = value.split(/[|—–-]/u, 1)[0]?.trim() ?? "";
@@ -29,7 +22,7 @@ export async function searchExaRoles({
   query: string;
   location: string;
   limit: number;
-}): Promise<ExaRoleCard[]> {
+}): Promise<GoForayJobCard[]> {
   const results = await exaSearch({
     query: `${query} jobs careers apply in ${location}`,
     limit,
@@ -41,6 +34,7 @@ export async function searchExaRoles({
     reasons: result.text
       ? [compactText(result.text, 280)]
       : ["Found through public job search."],
+    source_label: "open market",
     title: roleTitle(result.title),
     url: result.url,
   }));

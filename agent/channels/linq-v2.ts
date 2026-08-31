@@ -18,10 +18,10 @@ import { env } from "@/lib/env";
 import { formatCandidateDelivery } from "@/lib/goforay/delivery";
 import {
   goForayJobCardSchema,
-  jobCardFilename,
   renderGoForayJobCard,
   type GoForayJobCard,
 } from "@/lib/goforay/job-cards";
+import { renderJobCardPng } from "@/lib/goforay/card-png";
 import {
   linqJobCardRepliesSchema,
   linqReplyToMessageId,
@@ -37,11 +37,7 @@ import {
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
 import { consumeLatestApplicationSubmissionScreenshot } from "@/db/services/application-submission-screenshots";
 import { normalizeTaskStatus } from "@/lib/task-completion";
-import {
-  linkCandidate,
-  goforayJobCardPng,
-  recordConversationMessage,
-} from "@/lib/goforay/bridge";
+import { linkCandidate, recordConversationMessage } from "@/lib/goforay/bridge";
 import { saveCandidateDocument } from "@/db/services/candidate-documents";
 import { inferCandidateDocumentKind } from "@/lib/candidate-documents";
 
@@ -704,26 +700,23 @@ async function deliverJobCards(
     const index = offset + 1;
     const text = renderGoForayJobCard(card, index, cards.length);
     let sentImage = false;
-    if (rich && scope && card.posting_id) {
+    if (rich) {
       try {
-        const png = await goforayJobCardPng(
-          scope,
-          card.posting_id,
-          index,
-          cards.length
-        );
-        const sent = await thread.post({
-          markdown: text,
-          files: [
-            {
-              data: png,
-              filename: jobCardFilename(card),
-              mimeType: "image/png",
-            },
-          ],
-        });
-        rememberSentLinqJobCard(state, sent, card);
-        sentImage = true;
+        const png = await renderJobCardPng(card, index, cards.length);
+        if (png) {
+          const sent = await thread.post({
+            markdown: "",
+            files: [
+              {
+                data: png.bytes,
+                filename: png.filename,
+                mimeType: "image/png",
+              },
+            ],
+          });
+          rememberSentLinqJobCard(state, sent, card);
+          sentImage = true;
+        }
       } catch {
         // The text card remains useful if rendering or media upload is unavailable.
       }

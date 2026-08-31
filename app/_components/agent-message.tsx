@@ -45,6 +45,9 @@ import {
   ToolOutput,
 } from "@/components/ai-elements/tool";
 import { Button } from "@/components/ui/button";
+import { JobCardList } from "@/app/_components/job-card";
+import { userVisibleParts } from "@/app/_lib/user-visible-parts";
+import { jobCardsFromToolOutput } from "@/lib/goforay/job-cards";
 import { cn } from "@/lib/utils";
 
 export type AgentInputResponse = {
@@ -60,6 +63,7 @@ export function AgentMessage({
   deliveredAssistantMessages,
   isStreaming,
   message,
+  onApplyRole,
   onInputResponses,
   timestamp,
   userVisibleOnly = false,
@@ -68,6 +72,7 @@ export function AgentMessage({
   readonly deliveredAssistantMessages?: ReadonlyMap<number, readonly string[]>;
   readonly isStreaming: boolean;
   readonly message: EveMessage;
+  readonly onApplyRole?: (index: number) => void;
   readonly onInputResponses: (
     responses: readonly AgentInputResponse[]
   ) => void | Promise<void>;
@@ -101,6 +106,7 @@ export function AgentMessage({
             <AgentMessagePart
               canRespond={canRespond}
               key={partKey(part, index)}
+              onApplyRole={onApplyRole}
               onInputResponses={onInputResponses}
               part={part}
               showCaret={
@@ -131,40 +137,6 @@ export function AgentMessage({
   );
 }
 
-function userVisibleParts(
-  message: EveMessage,
-  deliveredAssistantMessages?: ReadonlyMap<number, readonly string[]>
-) {
-  if (message.role === "user")
-    return message.parts.filter(
-      (part) => part.type === "text" || part.type === "file"
-    );
-
-  const remainingDeliveries = new Map(
-    [...(deliveredAssistantMessages ?? [])].map(([stepIndex, messages]) => [
-      stepIndex,
-      [...messages],
-    ])
-  );
-
-  return message.parts.filter((part) => {
-    if (part.type === "text" && part.stepIndex !== undefined) {
-      const deliveries = remainingDeliveries.get(part.stepIndex);
-      const deliveryIndex = deliveries?.indexOf(part.text) ?? -1;
-      if (deliveryIndex < 0 || !deliveries) return false;
-      deliveries.splice(deliveryIndex, 1);
-      return true;
-    }
-
-    if (part.type === "authorization") return true;
-
-    return (
-      part.type === "dynamic-tool" &&
-      part.toolMetadata?.eve?.inputRequest !== undefined
-    );
-  });
-}
-
 const timestampFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
@@ -185,12 +157,14 @@ function formatFullTimestamp(timestamp: string) {
 
 function AgentMessagePart({
   canRespond,
+  onApplyRole,
   onInputResponses,
   part,
   showCaret,
   userVisibleOnly,
 }: {
   readonly canRespond: boolean;
+  readonly onApplyRole?: (index: number) => void;
   readonly onInputResponses: (
     responses: readonly AgentInputResponse[]
   ) => void | Promise<void>;
@@ -219,6 +193,15 @@ function AgentMessagePart({
     case "authorization":
       return <AuthorizationPrompt part={part} />;
     case "dynamic-tool": {
+      const cards = jobCardsFromToolOutput(part.output);
+      const jobCards =
+        cards.length > 0 ? (
+          <JobCardList
+            cards={cards}
+            disabled={!canRespond}
+            onApply={onApplyRole}
+          />
+        ) : null;
       const inputRequest = part.toolMetadata?.eve?.inputRequest;
       if (inputRequest?.kind === "question") {
         return (
@@ -231,14 +214,18 @@ function AgentMessagePart({
         );
       }
 
-      if (userVisibleOnly && inputRequest) {
-        return (
-          <InputRequestActions
-            canRespond={canRespond}
-            part={part}
-            onInputResponses={onInputResponses}
-          />
-        );
+      if (userVisibleOnly) {
+        if (jobCards) return jobCards;
+        if (inputRequest) {
+          return (
+            <InputRequestActions
+              canRespond={canRespond}
+              part={part}
+              onInputResponses={onInputResponses}
+            />
+          );
+        }
+        return null;
       }
 
       const tool = (
@@ -260,6 +247,14 @@ function AgentMessagePart({
           </ToolContent>
         </Tool>
       );
+      if (jobCards) {
+        return (
+          <>
+            {jobCards}
+            {tool}
+          </>
+        );
+      }
       return tool;
     }
   }

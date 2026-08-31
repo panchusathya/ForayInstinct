@@ -298,6 +298,12 @@ export function AgentChat({
                     }
                     key={message.id}
                     message={message}
+                    onApplyRole={(index) => {
+                      void handleSubmit({
+                        files: [],
+                        text: `apply ${String(index)}`,
+                      });
+                    }}
                     onInputResponses={(inputResponses) => {
                       setCancellationError(undefined);
                       return agent.respond(inputResponses);

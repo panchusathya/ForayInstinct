@@ -158,12 +158,11 @@ tool or worker result into short prose and/or `•` bullets, one idea per line
 — especially on iMessage. For a worker completion, use only the human
 `message` inside the Result JSON (and what `status` means); strip the
 envelope. Roles from `find_goforay_roles` and `find_next_goforay_roles` are
-delivered by the channel as numbered cards with their apply URL; do not
-repeat those as bullets. On any other surface, list the same cards
-yourself as short bullets (title, company, location, link). Never present a
-role without its apply URL. Present `web_search` results as short bullets
-(title, source, link). Mention a posting id only if the candidate asks for
-it. Application tools: say the outcome in
+delivered as numbered cards on every surface; do not repeat those as bullets.
+A one-line intro is enough. Never re-list title, company, or apply URL — the
+client already has them. Present `web_search` results as short bullets
+(title, source, link). Mention a posting id only if the candidate asks
+for it. Application tools: say the outcome in
 plain language (`submitted`, or what the candidate must do next). Do not
 dump `cards` or `result`.
 

@@ -12,6 +12,10 @@ const screenshotMocks = vi.hoisted(() => ({
       ) => Promise<{ mimeType: string; png: Buffer } | undefined>
     >(),
 }));
+const cardPngMocks = vi.hoisted(() => ({
+  renderJobCardPng:
+    vi.fn<() => Promise<{ bytes: Buffer; filename: string } | undefined>>(),
+}));
 vi.mock("eve/channels/chat-sdk", () => ({
   chatSdkChannel(config: unknown) {
     channelCapture.config = config;
@@ -29,6 +33,9 @@ vi.mock("@/db/services/application-submission-screenshots", () => ({
   consumeLatestApplicationSubmissionScreenshot:
     screenshotMocks.consumeLatestApplicationSubmissionScreenshot,
 }));
+vi.mock("@/lib/goforay/card-png", () => ({
+  renderJobCardPng: cardPngMocks.renderJobCardPng,
+}));
 await import("../agent/channels/linq-v2");
 
 const channelEvents = (
@@ -45,6 +52,8 @@ type HandlerParameters = Parameters<typeof deliverCompletedMessage>;
 describe("Linq message delivery", () => {
   beforeEach(() => {
     screenshotMocks.consumeLatestApplicationSubmissionScreenshot.mockReset();
+    cardPngMocks.renderJobCardPng.mockReset();
+    cardPngMocks.renderJobCardPng.mockResolvedValue(undefined);
   });
 
   it("posts final responses as native iMessage Markdown", async () => {
@@ -102,6 +111,196 @@ describe("Linq message delivery", () => {
       completedEvent({
         message: "here is a toro role without a link",
       }),
+      context,
+      sessionContext()
+    );
+
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      markdown:
+        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\n· m&a modeling\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
+    });
+  });
+
+  it("attaches a local PNG as the card on rich Linq threads", async () => {
+    cardPngMocks.renderJobCardPng.mockResolvedValueOnce({
+      bytes: Buffer.from("png-bytes"),
+      filename: "the-toro-company-role.png",
+    });
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+
+    await trackWorkerCancellation(
+      {
+        result: {
+          callId: "call-roles",
+          kind: "tool-result",
+          output: {
+            cards: [
+              {
+                company: "The Toro Company",
+                location: "Remote, USA",
+                reasons: ["M&A modeling"],
+                title: "Sr. Analyst, Corporate Development",
+                url: "https://jobs.thetorocompany.com/job/bloomington/corp-dev/1",
+              },
+            ],
+            source: "exa",
+          },
+          toolName: "find_goforay_roles",
+        },
+        sequence: 0,
+        status: "completed",
+        stepIndex: 0,
+        turnId: "turn-png",
+      },
+      context,
+      sessionContext()
+    );
+
+    await deliverCompletedMessage(
+      completedEvent({
+        message: "here is a toro role",
+        turnId: "turn-png",
+      }),
+      context,
+      sessionContext()
+    );
+
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      files: [
+        {
+          data: Buffer.from("png-bytes"),
+          filename: "the-toro-company-role.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown: "",
+    });
+  });
+
+  it("keeps the text twin on SMS even when a PNG could be rendered", async () => {
+    cardPngMocks.renderJobCardPng.mockResolvedValueOnce({
+      bytes: Buffer.from("png-bytes"),
+      filename: "the-toro-company-role.png",
+    });
+    const { context, post } = handlerContext("message-1", {}, "SMS");
+
+    await trackWorkerCancellation(
+      {
+        result: {
+          callId: "call-roles",
+          kind: "tool-result",
+          output: {
+            cards: [
+              {
+                company: "The Toro Company",
+                location: "Remote, USA",
+                reasons: ["M&A modeling"],
+                title: "Sr. Analyst, Corporate Development",
+                url: "https://jobs.thetorocompany.com/job/bloomington/corp-dev/1",
+              },
+            ],
+          },
+          toolName: "find_goforay_roles",
+        },
+        sequence: 0,
+        status: "completed",
+        stepIndex: 0,
+        turnId: "turn-sms",
+      },
+      context,
+      sessionContext()
+    );
+
+    await deliverCompletedMessage(
+      completedEvent({ message: "role cards", turnId: "turn-sms" }),
+      context,
+      sessionContext()
+    );
+
+    expect(cardPngMocks.renderJobCardPng).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      markdown:
+        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\n· m&a modeling\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
+    });
+  });
+
+  it("falls back to the text twin when PNG rendering throws", async () => {
+    cardPngMocks.renderJobCardPng.mockRejectedValueOnce(
+      new Error("satori failed")
+    );
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+
+    await trackWorkerCancellation(
+      {
+        result: {
+          callId: "call-roles",
+          kind: "tool-result",
+          output: {
+            cards: [
+              {
+                company: "The Toro Company",
+                location: "Remote, USA",
+                reasons: ["M&A modeling"],
+                title: "Sr. Analyst, Corporate Development",
+                url: "https://jobs.thetorocompany.com/job/bloomington/corp-dev/1",
+              },
+            ],
+          },
+          toolName: "find_goforay_roles",
+        },
+        sequence: 0,
+        status: "completed",
+        stepIndex: 0,
+        turnId: "turn-png-throw",
+      },
+      context,
+      sessionContext()
+    );
+
+    await deliverCompletedMessage(
+      completedEvent({ message: "role cards", turnId: "turn-png-throw" }),
+      context,
+      sessionContext()
+    );
+
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      markdown:
+        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\n· m&a modeling\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
+    });
+  });
+
+  it("falls back to the text twin when PNG rendering fails", async () => {
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+
+    await trackWorkerCancellation(
+      {
+        result: {
+          callId: "call-roles",
+          kind: "tool-result",
+          output: {
+            cards: [
+              {
+                company: "The Toro Company",
+                location: "Remote, USA",
+                reasons: ["M&A modeling"],
+                title: "Sr. Analyst, Corporate Development",
+                url: "https://jobs.thetorocompany.com/job/bloomington/corp-dev/1",
+              },
+            ],
+          },
+          toolName: "find_goforay_roles",
+        },
+        sequence: 0,
+        status: "completed",
+        stepIndex: 0,
+        turnId: "turn-png-miss",
+      },
+      context,
+      sessionContext()
+    );
+
+    await deliverCompletedMessage(
+      completedEvent({ message: "role cards", turnId: "turn-png-miss" }),
       context,
       sessionContext()
     );

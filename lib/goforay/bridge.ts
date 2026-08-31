@@ -15,7 +15,7 @@ import { env } from "@/lib/env";
 import type { AccessScope } from "@/lib/access-scope";
 import { ensureScope } from "@/db/services/scope";
 import { searchExaRoles } from "./exa";
-import type { GoForayJobCard } from "./job-cards";
+import { goForayJobCardSchema, type GoForayJobCard } from "./job-cards";
 import {
   completePendingRoleSearch,
   listPendingRoleSearches,
@@ -51,13 +51,8 @@ const bridgeErrorResponseSchema = z.object({ detail: z.string().optional() });
 
 const jobFeedSchema = z.object({
   cards: z.array(
-    z.object({
-      company: z.string(),
-      location: z.string(),
+    goForayJobCardSchema.extend({
       posting_id: z.string(),
-      reasons: z.array(z.string()),
-      title: z.string(),
-      url: z.string(),
     })
   ),
   searching: z.boolean().optional().default(false),
@@ -302,34 +297,6 @@ async function goforayJobFeed(
   return jobFeedSchema.parse(
     await juiceboxRequest(scope, `/v1/internal/openinstinct/job-feed?${params}`)
   );
-}
-
-/** Candidate-authorized PNG from JuiceBox's canonical job-card renderer. */
-export async function goforayJobCardPng(
-  scope: AccessScope,
-  postingId: string,
-  index: number,
-  total: number
-) {
-  const link = await linkedCandidate(scope);
-  if (!link)
-    throw new Error("Link your GoForay account before loading a job card.");
-  const { apiUrl } = configured();
-  const response = await fetch(
-    `${apiUrl}/v1/internal/openinstinct/job-cards/${encodeURIComponent(postingId)}?index=${index}&total=${total}`,
-    {
-      headers: {
-        Authorization: `Bearer ${createBridgeToken({
-          audience: juiceboxAudience,
-          subject: externalUserId(scope.userId),
-          orgId: link.orgId,
-          candidateId: link.candidateId,
-        })}`,
-      },
-    }
-  );
-  if (!response.ok) throw new Error("JuiceBox job card is unavailable.");
-  return Buffer.from(await response.arrayBuffer());
 }
 
 /**
