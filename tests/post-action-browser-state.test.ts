@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   postActionBrowserStateInstruction,
   postActionBrowserStateProbeCode,
+  type PostActionBrowserState,
 } from "@/agent/subagents/worker/lib/post-action-browser-state";
 
 describe("post-action browser inspection", () => {
@@ -63,7 +64,7 @@ async function runProbe(frames: ReturnType<typeof frame>[]) {
   };
   return new Script(
     `(async () => {${postActionBrowserStateProbeCode}})()`
-  ).runInNewContext({ browser }) as Promise<Record<string, unknown>>;
+  ).runInNewContext({ browser }) as Promise<PostActionBrowserState>;
 }
 
 function frame({

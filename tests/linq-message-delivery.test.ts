@@ -207,8 +207,15 @@ describe("Linq message delivery", () => {
         currentMessage: { raw: { service: "iMessage" } },
       }),
     });
-    const { context } = handlerContext("message-1", {}, "iMessage");
-    context.thread = undefined;
+    const { context: activeContext } = handlerContext(
+      "message-1",
+      {},
+      "iMessage"
+    );
+    const context = {
+      ...activeContext,
+      thread: undefined,
+    } as HandlerParameters[1];
 
     await trackWorkerCancellation(
       submissionApprovalResult(),
