@@ -105,15 +105,29 @@ Linq, not in this repository, so it is not created by a deploy and its absence
 is silent: the tapback simply does nothing. Check it, then enable it:
 
 ```bash
-LINQ_API_KEY=<key-from-the-linq-dashboard> pnpm linq:reactions          # report, exits non-zero if missing
-LINQ_API_KEY=<key-from-the-linq-dashboard> pnpm linq:reactions --apply  # subscribe
+vercel link && vercel env pull   # supplies LINQ_CONNECTOR and a Vercel OIDC token
+pnpm linq:reactions              # report, exits non-zero if missing
+pnpm linq:reactions --apply      # subscribe
 ```
+
+The script mints the same Connect app token the channel uses, so it reads the
+account the deployment actually talks to. **Do not substitute a personal Linq
+dashboard key for a Connect-managed line.** Connect provisions its own Linq
+line, so a dashboard key authenticates successfully and then lists a different
+account's subscriptions — which looks exactly like the webhook never having been
+registered, even while inbound iMessages arrive normally. `LINQ_API_KEY` is
+honored only alongside `LINQ_WEBHOOK_SECRET`, which is direct mode (a Linq
+sandbox account), matching how the channel itself chooses credentials.
+
+If the report says these credentials list no subscriptions, check whether
+inbound messages still work before treating it as an outage. If Foray replies to
+a text, the subscription exists and the credentials are pointed at the wrong
+account. Only if Foray does not reply is the endpoint genuinely unregistered,
+which the connector attachment above fixes.
 
 This is deliberately a one-off rather than part of `pnpm build:vercel`: it
 changes live provider configuration, so running it on every deploy would make a
-Linq outage fail the build. Production reaches Linq through Vercel Connect and
-has no `LINQ_API_KEY` of its own, so take a key from the Linq dashboard for this
-step. Re-run the report after changing the webhook subscription in Linq.
+Linq outage fail the build.
 
 ## Google Workspace connection
 
