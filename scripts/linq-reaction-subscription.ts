@@ -18,20 +18,17 @@
  * the same app token the channel does whenever LINQ_CONNECTOR is set, and take
  * LINQ_API_KEY only for a direct-mode line (a Linq sandbox account).
  *
- * Simplest route is a token straight from the CLI:
- *
- *   vercel connect list
- *   vercel connect token <uid> --subject app
- *
- * `--subject app` matters -- the CLI defaults to `user` and Linq answers a
- * user-subject token with 401 invalid_token, because the channel authenticates
- * as the app. Otherwise set LINQ_CONNECTOR and this mints the token itself,
- * which needs a Vercel OIDC token (`vercel link` writes one into .env.local).
+ * With none of that configured it asks the Vercel CLI to find the Linq
+ * connector and mint an app-subject token, which is usually the whole setup:
+ * just run it. `--subject app` is the part worth knowing -- the CLI defaults to
+ * `user`, and Linq answers a user-subject token with a bare 401 invalid_token,
+ * because the channel authenticates as the app.
  *
  * Deliberately a one-off rather than something the app does at boot: it changes
  * live provider configuration.
  */
 /* oxlint-disable eslint/no-restricted-properties -- a standalone one-off script, deliberately outside the app's validated env module. */
+import { execFileSync } from "node:child_process";
 import { getToken } from "@vercel/connect";
 import { z } from "zod";
 
@@ -51,6 +48,92 @@ for (const file of [".env.local", ".env"]) {
 const BASE_URL =
   process.env.LINQ_API_V3_BASE_URL ?? "https://api.linqapp.com/api/partner";
 const WANTED = ["reaction.added", "reaction.removed"] as const;
+
+/** Shapes the Vercel CLI might wrap `connect list --json` in. */
+const connectorListSchema = z.union([
+  z.array(z.unknown()),
+  z.object({ connectors: z.array(z.unknown()) }),
+  z.object({ data: z.array(z.unknown()) }),
+]);
+const connectorSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  service: z.string().optional(),
+  uid: z.string().optional(),
+});
+
+function runVercel(args: readonly string[]) {
+  // `shell: true` so the node_modules/.bin shim resolves on Windows too; pnpm
+  // puts that directory on PATH when it runs this script.
+  return execFileSync("vercel", [...args], {
+    encoding: "utf8",
+    shell: true,
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+}
+
+/**
+ * Finds the Linq connector and mints its app-subject token, so nobody has to
+ * copy a uid by hand or remember `--subject app` (whose absence Linq reports
+ * only as a generic 401).
+ *
+ * Best effort: the CLI's JSON shape is not a contract, so anything unexpected
+ * falls through to the manual instructions rather than guessing.
+ */
+function mintTokenWithCli() {
+  let listed: unknown;
+  try {
+    listed = JSON.parse(
+      runVercel(["connect", "list", "--service", "linq", "--json"])
+    );
+  } catch {
+    return undefined;
+  }
+  const parsed = connectorListSchema.safeParse(listed);
+  if (!parsed.success) return undefined;
+  const rows = Array.isArray(parsed.data)
+    ? parsed.data
+    : "connectors" in parsed.data
+      ? parsed.data.connectors
+      : parsed.data.data;
+
+  const connectors = rows
+    .map((row) => connectorSchema.safeParse(row))
+    .flatMap((row) => (row.success ? [row.data] : []))
+    .filter((row) =>
+      /linq/iu.test(
+        `${row.uid ?? ""} ${row.id ?? ""} ${row.service ?? ""} ${row.name ?? ""}`
+      )
+    );
+  if (connectors.length !== 1) {
+    // Zero means nothing to mint from; more than one means picking for someone
+    // is the wrong call when the result mutates live configuration.
+    if (connectors.length > 1) {
+      console.warn(
+        `Found ${String(connectors.length)} Linq connectors; set LINQ_ACCESS_TOKEN for the one you want.`
+      );
+    }
+    return undefined;
+  }
+  const uid = connectors[0]?.uid ?? connectors[0]?.id;
+  if (!uid) return undefined;
+
+  try {
+    const token = runVercel([
+      "connect",
+      "token",
+      uid,
+      "--subject",
+      "app",
+      "--yes",
+    ]);
+    if (!token) return undefined;
+    console.log(`minted an app-subject token for ${uid} with the Vercel CLI`);
+    return token;
+  } catch {
+    return undefined;
+  }
+}
 
 const subscriptionSchema = z.object({
   id: z.string(),
@@ -87,25 +170,26 @@ async function resolveApiKey() {
       // Matches connectLinqCredentials(connector).apiKey().
       return await getToken(connector, { subject: { type: "app" } });
     } catch (error) {
-      // The raw failure is an OIDC header complaint, which says nothing about
-      // what to do about it.
-      throw new Error(
-        [
-          `Could not mint a Linq token for ${connector}: ${error instanceof Error ? error.message : String(error)}`,
-          "",
-          "Connect needs a Vercel OIDC token. Run `vercel link` then `vercel env pull` in this checkout and try again; a deployment already has one.",
-        ].join("\n"),
-        { cause: error }
+      // Warn and fall through to the CLI rather than throwing: this usually
+      // fails only for want of a Vercel OIDC token, which the CLI does not need.
+      console.warn(
+        `could not mint through Connect (${error instanceof Error ? error.message : String(error)}); trying the Vercel CLI`
       );
     }
   }
+  // Before the error branches, and deliberately ahead of complaining about a
+  // half-configured LINQ_API_KEY: a stale dashboard key sitting in .env.local
+  // should not stop the CLI from finding the right credentials.
+  const minted = mintTokenWithCli();
+  if (minted) return minted;
+
   if (directKey) {
     throw new Error(
       [
         "LINQ_API_KEY is set but LINQ_WEBHOOK_SECRET is not, so the app is not in direct mode and a personal dashboard key would read the wrong Linq account.",
         "",
-        "Use the deployment's own credentials instead:",
-        "  vercel connect list                     # find the linq connector uid",
+        "The Vercel CLI could not mint the right token either -- it may be missing, logged out (`vercel login`), or the team may have several Linq connectors. To do it by hand:",
+        "  vercel connect list                        # find the linq connector uid",
         "  vercel connect token <uid> --subject app   # print the app-subject token",
         "then set LINQ_ACCESS_TOKEN to it, or set LINQ_CONNECTOR and let this mint one.",
         "`--subject app` is required: the CLI defaults to `user`, and Linq answers a user-subject token with 401 invalid_token because the channel authenticates as the app.",
@@ -116,8 +200,8 @@ async function resolveApiKey() {
     [
       "No Linq credentials for the deployment's account.",
       "",
-      "LINQ_CONNECTOR is commonly set only in the production environment, so a development `vercel env pull` will not include it. Either way:",
-      "  vercel connect list                     # find the linq connector uid",
+      "Tried the Vercel CLI and could not mint one -- it may be missing, logged out (`vercel login`), or the team may have several Linq connectors. To do it by hand:",
+      "  vercel connect list                        # find the linq connector uid",
       "  vercel connect token <uid> --subject app   # print the app-subject token",
       "then set LINQ_ACCESS_TOKEN to it.",
       "`--subject app` is required: the CLI defaults to `user`, and Linq answers a user-subject token with 401 invalid_token because the channel authenticates as the app.",

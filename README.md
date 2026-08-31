@@ -105,9 +105,17 @@ Linq, not in this repository, so it is not created by a deploy and its absence
 is silent: the tapback simply does nothing. Check it, then enable it:
 
 ```bash
+pnpm linq:reactions          # report, exits non-zero if missing
+pnpm linq:reactions --apply  # subscribe
+```
+
+With no Linq credentials in the environment it asks the Vercel CLI to find the
+connector and mint an app-subject token, so a logged-in `vercel` is normally the
+only prerequisite. To supply a token yourself instead:
+
+```bash
 vercel connect list                             # find the linq connector uid
 LINQ_ACCESS_TOKEN=$(vercel connect token <uid> --subject app) pnpm linq:reactions
-LINQ_ACCESS_TOKEN=$(vercel connect token <uid> --subject app) pnpm linq:reactions --apply
 ```
 
 `--subject app` is not optional. The CLI defaults to `--subject user`, and Linq
