@@ -33,6 +33,17 @@ export async function readLinqAttachment(attachment: Attachment) {
   };
 }
 
+/**
+ * Rejections the same bytes will always produce. Retrying them burns the one
+ * retry a genuine connection blip needs, so surface them immediately.
+ */
+const permanentSaveFailures = new Set([
+  "Only a resume can be the default application file.",
+  "The file is empty.",
+  "This workspace already has 20 saved documents.",
+  "Upload a file smaller than 8 MB.",
+]);
+
 /** Retries the same already-downloaded attachment once before surfacing a save failure. */
 export async function retryLinqResumeSave<T>(save: () => Promise<T>) {
   let failure: unknown;
@@ -41,6 +52,12 @@ export async function retryLinqResumeSave<T>(save: () => Promise<T>) {
       return await save();
     } catch (error) {
       failure = error;
+      if (error instanceof Error && permanentSaveFailures.has(error.message)) {
+        break;
+      }
+      // Give a saturated connection pool a moment before spending the retry.
+      if (attempt === 0)
+        await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
   throw failure;

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { deflateSync } from "node:zlib";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -364,6 +365,45 @@ describe("database services", () => {
     );
   }, 15_000);
 
+  it("stores a resume whose PDF text is UTF-16BE encoded", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0011_candidate_documents.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, documents] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/candidate-documents"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    // Word, Pages and Google Docs encode a PDF string as UTF-16BE as soon as it
+    // holds a bullet or an em dash, which puts a NUL byte before every ASCII
+    // character. A Postgres text column rejects NUL, so an unsanitized
+    // extraction fails the insert and loses the candidate's resume.
+    const saved = await documents.saveCandidateDocument(alice, {
+      bytes: utf16PdfFixture("Ada Lovelace — Staff Engineer • Austin"),
+      filename: "Ada_Resume.pdf",
+      kind: "resume",
+      mimeType: "application/pdf",
+      source: "linq",
+    });
+
+    expect(saved.created).toBe(true);
+    expect(saved.document.extractedText).toContain("Ada Lovelace");
+    expect(saved.document.extractedText).toContain("Staff Engineer");
+    expect(saved.document.extractedText).not.toContain("\u0000");
+
+    const stored = await documents.readDefaultResume(alice);
+    expect(stored?.extractedText).toContain("Ada Lovelace");
+  });
+
   it("hands the latest undelivered confirmation screenshot to the next consumer", async () => {
     const client = new PGlite();
     databases.push(client);
@@ -435,4 +475,40 @@ async function applyMigration(database: PGlite, name: string) {
 async function applyInitialMigration(database: PGlite) {
   await applyMigration(database, "0000_fluffy_the_spike.sql");
   await applyMigration(database, "0009_candidate_profile.sql");
+}
+
+/**
+ * A single-page PDF whose only content stream is Flate-compressed and whose
+ * text is a UTF-16BE literal, matching what a real word processor exports.
+ */
+function utf16PdfFixture(text: string) {
+  const compressed = deflateSync(
+    Buffer.from(`BT /F1 12 Tf ${pdfUtf16Literal(text)} Tj ET`, "latin1")
+  );
+  return Buffer.concat([
+    Buffer.from(
+      `%PDF-1.4\n1 0 obj\n<< /Length ${String(compressed.byteLength)} /Filter /FlateDecode >>\nstream\n`,
+      "latin1"
+    ),
+    compressed,
+    Buffer.from("\nendstream\nendobj\n%%EOF", "latin1"),
+  ]);
+}
+
+function pdfUtf16Literal(text: string) {
+  const encoded = Buffer.concat([
+    Buffer.from([0xfe, 0xff]),
+    Buffer.from(text, "utf16le").swap16(),
+  ]);
+  let literal = "";
+  for (const byte of encoded) {
+    // A byte that happens to equal "(", ")" or "\\" must be escaped even inside
+    // a two-byte encoding.
+    if (byte === 0x28 || byte === 0x29 || byte === 0x5c) {
+      literal += `\\${String.fromCharCode(byte)}`;
+      continue;
+    }
+    literal += String.fromCharCode(byte);
+  }
+  return `(${literal})`;
 }

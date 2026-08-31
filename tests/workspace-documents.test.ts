@@ -58,6 +58,59 @@ describe("candidate documents", () => {
     );
   });
 
+  it("decodes UTF-16BE PDF text without leaving unstorable characters", () => {
+    // Every ASCII character in a UTF-16BE PDF string carries a leading NUL,
+    // which a Postgres text column rejects outright.
+    const text = "Grace Hopper — Rear Admiral • COBOL";
+    const compressed = deflateSync(
+      Buffer.from(`BT /F1 12 Tf ${pdfUtf16Literal(text)} Tj ET`, "latin1")
+    );
+    const pdf = Buffer.concat([
+      Buffer.from(
+        `%PDF-1.4\n1 0 obj\n<< /Length ${String(compressed.byteLength)} /Filter /FlateDecode >>\nstream\n`,
+        "latin1"
+      ),
+      compressed,
+      Buffer.from("\nendstream\nendobj\n%%EOF", "latin1"),
+    ]);
+
+    const extracted = extractDocumentText(pdf, "application/pdf", "grace.pdf");
+    expect(extracted).toContain("Grace Hopper");
+    expect(extracted).toContain("Rear Admiral");
+    expect(extracted).not.toContain("\u0000");
+    // The BOM must be consumed, not read as latin1 and left as mojibake.
+    expect(extracted).not.toContain("þÿ");
+  });
+
+  it("resolves octal escapes in PDF strings", () => {
+    expect(
+      extractDocumentText(
+        Buffer.from("%PDF-1.1\n(Ada \\050Lovelace\\051)\n", "latin1"),
+        "application/pdf",
+        "ada.pdf"
+      )
+    ).toContain("Ada (Lovelace)");
+  });
+
+  it("drops control characters that a text column cannot store", () => {
+    const extracted = extractDocumentText(
+      Buffer.from("Staff engineer\u0000 in\u0007 Austin"),
+      "text/plain",
+      "notes.txt"
+    );
+    expect(extracted).toBe("Staff engineer in Austin");
+  });
+
+  it("returns no text for a corrupt DOCX instead of throwing", () => {
+    expect(() =>
+      extractDocumentText(
+        corruptDocxFixture(),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "resume.docx"
+      )
+    ).not.toThrow();
+  });
+
   it("captures explicit self-statements without inferring EEO answers", () => {
     expect(
       extractStatedFacts(
@@ -104,3 +157,32 @@ describe("candidate documents", () => {
     expect(resumeRoute).not.toContain("uploadCandidateResume");
   });
 });
+function pdfUtf16Literal(text: string) {
+  const encoded = Buffer.concat([
+    Buffer.from([0xfe, 0xff]),
+    Buffer.from(text, "utf16le").swap16(),
+  ]);
+  let literal = "";
+  for (const byte of encoded) {
+    // A byte that happens to equal "(", ")" or "\\" is escaped even inside a
+    // two-byte encoding, so escapes must be resolved before decoding.
+    if (byte === 0x28 || byte === 0x29 || byte === 0x5c) {
+      literal += `\\${String.fromCharCode(byte)}`;
+      continue;
+    }
+    literal += String.fromCharCode(byte);
+  }
+  return `(${literal})`;
+}
+
+/** A zip local header that promises deflate data but carries garbage. */
+function corruptDocxFixture() {
+  const name = Buffer.from("word/document.xml", "utf8");
+  const payload = Buffer.from("not a deflate stream");
+  const header = Buffer.alloc(30);
+  header.writeUInt32LE(0x04034b50, 0);
+  header.writeUInt16LE(8, 8);
+  header.writeUInt32LE(payload.byteLength, 18);
+  header.writeUInt16LE(name.byteLength, 26);
+  return Buffer.concat([header, name, payload]);
+}

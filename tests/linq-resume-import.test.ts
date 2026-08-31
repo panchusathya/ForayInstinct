@@ -45,6 +45,17 @@ describe("Linq resume import", () => {
     expect(save).toHaveBeenCalledTimes(2);
   });
 
+  it("does not spend the retry on a rejection the same bytes will repeat", async () => {
+    const save = vi
+      .fn<() => Promise<{ filename: string }>>()
+      .mockRejectedValue(new Error("Upload a file smaller than 8 MB."));
+
+    await expect(retryLinqResumeSave(save)).rejects.toThrow(
+      "Upload a file smaller than 8 MB."
+    );
+    expect(save).toHaveBeenCalledOnce();
+  });
+
   it("recognizes a PDF when Linq provides only generic file metadata", () => {
     expect(
       normalizeLinqDocument({

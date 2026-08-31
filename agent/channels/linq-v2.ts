@@ -406,9 +406,19 @@ async function prepareInboundMessage(
             `The candidate attached a document. It is stored in this workspace (${importedResumes.uploaded.join(", ")}). Use it for applications and do not ask them to upload it again or expose the file contents.`,
           ]
         : []),
-      ...(importedResumes.failures.length
+      ...(importedResumes.downloadFailures.length
         ? [
-            `A resume attachment could not be stored after an automatic server-side retry: ${importedResumes.failures.join("; ")}. Do not ask the candidate to resend the PDF. Briefly explain that their original attachment was received but storage is temporarily unavailable, then continue helping with everything that does not need the file.`,
+            `An attachment could not be retrieved from the messaging provider: ${importedResumes.downloadFailures.join("; ")}. The file never reached this server, so ask the candidate to send it again, then continue helping with everything that does not need it.`,
+          ]
+        : []),
+      ...(importedResumes.storageFailures.length
+        ? [
+            `An attachment reached this server but could not be saved, and an automatic retry failed the same way: ${importedResumes.storageFailures.join("; ")}. Resending the same file will not help, so do not ask for it again. Tell the candidate their file arrived but could not be saved and that this is being looked into, then continue helping with everything that does not need the file.`,
+          ]
+        : []),
+      ...(importedResumes.skipped.length
+        ? [
+            `The candidate attached something this workspace does not store as a document: ${importedResumes.skipped.join(", ")}. Only PDF and DOCX files are kept. Say what arrived and ask for a PDF or DOCX if a resume was intended.`,
           ]
         : []),
       ...(replyTarget?.role
@@ -488,20 +498,39 @@ async function importLinqResumes(
   scope: ReturnType<typeof accessScopeForUser>
 ) {
   const uploaded: string[] = [];
-  const failures: string[] = [];
+  const downloadFailures: string[] = [];
+  const storageFailures: string[] = [];
+  const skipped: string[] = [];
   for (const attachment of message.attachments) {
-    if (attachment.type !== "file") continue;
     const filename = attachment.name ?? filenameFromUrl(attachment.url ?? "");
+    // Nothing below can drop an attachment silently: the model no longer sees
+    // the raw attachment, so this loop is the only account of what arrived.
+    if (attachment.type !== "file") {
+      skipped.push(filename);
+      console.warn("[linq-resume] attachment is not a file", {
+        attachmentType: attachment.type,
+        mimeType: attachment.mimeType ?? "",
+        workspaceId: scope.workspaceId,
+      });
+      continue;
+    }
 
     let phase = "download";
     try {
       const { bytes, resolvedMimeType } = await readLinqAttachment(attachment);
-      const document = normalizeLinqDocument({
-        bytes,
-        filename,
-        mimeType: attachment.mimeType || resolvedMimeType,
-      });
-      if (!document) continue;
+      // Linq reports an empty mime type as often as it omits it.
+      const mimeType = attachment.mimeType || resolvedMimeType;
+      const document = normalizeLinqDocument({ bytes, filename, mimeType });
+      if (!document) {
+        skipped.push(filename);
+        console.warn("[linq-resume] attachment is not a supported document", {
+          attachmentType: attachment.type,
+          mimeType,
+          suffix: filename.split(".").at(-1)?.toLowerCase() ?? "",
+          workspaceId: scope.workspaceId,
+        });
+        continue;
+      }
 
       phase = "storage";
       const result = await saveLinqResumeWithRetry(scope, {
@@ -512,9 +541,12 @@ async function importLinqResumes(
       uploaded.push(result.document.filename);
     } catch (error) {
       const message = linqImportErrorMessage(error);
-      failures.push(`${filename}: ${phase} failed (${message})`);
+      const failure = `${filename} (${message})`;
+      if (phase === "download") downloadFailures.push(failure);
+      else storageFailures.push(failure);
       console.error("[linq-resume] attachment import failed", {
         attachment: {
+          attachmentType: attachment.type,
           hasFetchData: attachment.fetchData !== undefined,
           mimeType: attachment.mimeType ?? "",
           size: attachment.size,
@@ -526,7 +558,7 @@ async function importLinqResumes(
       });
     }
   }
-  return { uploaded, failures };
+  return { downloadFailures, skipped, storageFailures, uploaded };
 }
 
 async function saveLinqResumeWithRetry(

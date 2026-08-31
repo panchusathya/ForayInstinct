@@ -127,7 +127,7 @@ export async function saveCandidateDocument(
   const now = new Date().toISOString();
   const id = randomUUID();
   const filename = safeFilename(input.filename);
-  const extractedText = extractDocumentText(
+  const extractedText = readExtractedText(
     input.bytes,
     input.mimeType,
     filename
@@ -166,6 +166,24 @@ export async function saveCandidateDocument(
   const stored = await readCandidateDocument(scope, id);
   if (stored === undefined) throw new Error("Unable to save the file.");
   return { created: true, document: stored };
+}
+
+/**
+ * Text extraction is a convenience for recall and form-fill, never a condition
+ * of storage. A file the parser cannot read is still the candidate's file, so a
+ * failure here degrades to no text instead of losing their upload.
+ */
+function readExtractedText(bytes: Buffer, mimeType: string, filename: string) {
+  try {
+    return extractDocumentText(bytes, mimeType, filename);
+  } catch (error: unknown) {
+    console.error("[candidate-documents] text extraction failed", {
+      error: error instanceof Error ? error.message : "extraction failed",
+      filename,
+      mimeType,
+    });
+    return "";
+  }
 }
 
 export async function setDefaultCandidateDocument(

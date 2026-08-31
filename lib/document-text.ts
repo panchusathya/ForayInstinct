@@ -30,9 +30,23 @@ export function extractDocumentText(
 }
 
 function clipExtractedText(value: string) {
-  const normalized = value.replace(/\s+/gu, " ").trim();
+  const normalized = stripUnstorableCharacters(value)
+    .replace(/\s+/gu, " ")
+    .trim();
   if (normalized.length <= maxExtractedCharacters) return normalized;
   return `${normalized.slice(0, maxExtractedCharacters - 1).trimEnd()}…`;
+}
+
+/**
+ * A Postgres `text` value cannot hold U+0000, and the remaining C0 controls are
+ * binary noise rather than resume text. Neither is removed by the whitespace
+ * collapse above, because JavaScript's `\s` does not match them. Every
+ * extractor returns through here, so this is the one place that has to hold for
+ * `extracted_text` to always be storable.
+ */
+function stripUnstorableCharacters(value: string) {
+  // oxlint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, "");
 }
 
 function extractPdfText(bytes: Buffer) {
@@ -41,7 +55,7 @@ function extractPdfText(bytes: Buffer) {
   for (const stream of streams) {
     const latin1 = stream.toString("latin1");
     for (const match of latin1.matchAll(/\((?:\\.|[^\\)]){2,}\)/gu)) {
-      const decoded = unescapePdfString(match[0].slice(1, -1));
+      const decoded = decodePdfString(match[0].slice(1, -1));
       if (/[\p{L}\p{N}]/u.test(decoded)) chunks.push(decoded);
     }
   }
@@ -52,7 +66,8 @@ function extractPdfText(bytes: Buffer) {
 function inflatePdfStreams(bytes: Buffer) {
   const source = bytes.toString("latin1");
   const results: Buffer[] = [];
-  const streamPattern = /<<[\s\S]{0,8000}?\/Filter\s*\/FlateDecode[\s\S]{0,8000}?>>\s*stream\r?\n/gu;
+  const streamPattern =
+    /<<[\s\S]{0,8000}?\/Filter\s*\/FlateDecode[\s\S]{0,8000}?>>\s*stream\r?\n/gu;
   for (const match of source.matchAll(streamPattern)) {
     const start = match.index + match[0].length;
     const end = source.indexOf("endstream", start);
@@ -76,12 +91,68 @@ function inflatePdfStreams(bytes: Buffer) {
   return results;
 }
 
-function unescapePdfString(value: string) {
-  return value
-    .replace(/\\n/gu, "\n")
-    .replace(/\\r/gu, "\r")
-    .replace(/\\t/gu, "\t")
-    .replace(/\\([()\\])/gu, "$1");
+/**
+ * Decode one PDF literal string. Escapes are resolved against the raw bytes
+ * first: a UTF-16BE string escapes any byte that happens to equal `(`, `)` or
+ * `\`, so decoding before unescaping would misread those characters.
+ */
+function decodePdfString(value: string) {
+  const bytes = Buffer.from(unescapePdfBytes(value), "latin1");
+  if (bytes.length >= 4 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    // UTF-16BE, which is what Word, Pages and Google Docs emit for any string
+    // holding a bullet, smart quote, em dash or ligature.
+    const usable = bytes.length - ((bytes.length - 2) % 2);
+    return Buffer.from(bytes.subarray(2, usable)).swap16().toString("utf16le");
+  }
+  return bytes.toString("latin1");
+}
+
+function unescapePdfBytes(value: string) {
+  let out = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value.charAt(index);
+    if (character !== "\\") {
+      out += character;
+      continue;
+    }
+    if (index + 1 >= value.length) break;
+    const next = value.charAt(index + 1);
+    index += 1;
+    if (next === "n") {
+      out += "\n";
+      continue;
+    }
+    if (next === "r") {
+      out += "\r";
+      continue;
+    }
+    if (next === "t") {
+      out += "\t";
+      continue;
+    }
+    if (next === "b") {
+      out += "\b";
+      continue;
+    }
+    if (next === "f") {
+      out += "\f";
+      continue;
+    }
+    // A backslash before an end of line is a continuation, not a character.
+    if (next === "\r") {
+      if (value.charAt(index + 1) === "\n") index += 1;
+      continue;
+    }
+    if (next === "\n") continue;
+    const octal = /^[0-7]{1,3}/u.exec(value.slice(index, index + 3))?.[0];
+    if (octal !== undefined) {
+      out += String.fromCharCode(Number.parseInt(octal, 8) & 0xff);
+      index += octal.length - 1;
+      continue;
+    }
+    out += next;
+  }
+  return out;
 }
 
 function extractDocxText(bytes: Buffer) {
@@ -101,6 +172,15 @@ function extractDocxText(bytes: Buffer) {
     );
 }
 
+/** A truncated or corrupt entry yields no text rather than failing the read. */
+function inflateZipEntry(payload: Buffer) {
+  try {
+    return inflateRawSync(payload);
+  } catch {
+    return;
+  }
+}
+
 function zipEntry(bytes: Buffer, name: string) {
   let offset = 0;
   while (offset + 30 <= bytes.length) {
@@ -118,7 +198,7 @@ function zipEntry(bytes: Buffer, name: string) {
     if (entryName === name) {
       const payload = bytes.subarray(dataStart, dataEnd);
       if (method === 0) return Buffer.from(payload);
-      if (method === 8) return inflateRawSync(payload);
+      if (method === 8) return inflateZipEntry(payload);
       return;
     }
     offset = dataEnd;
@@ -132,7 +212,7 @@ function zipEntry(bytes: Buffer, name: string) {
  * rather than treating a perfectly ordinary resume as an empty document.
  */
 function zipEntryFromCentralDirectory(bytes: Buffer, name: string) {
-  for (let offset = 0; offset + 46 <= bytes.length; ) {
+  for (let offset = 0; offset + 46 <= bytes.length;) {
     if (bytes.readUInt32LE(offset) !== 0x02014b50) {
       offset += 1;
       continue;
@@ -149,12 +229,13 @@ function zipEntryFromCentralDirectory(bytes: Buffer, name: string) {
     if (entryName === name && localHeaderOffset + 30 <= bytes.length) {
       const localNameLength = bytes.readUInt16LE(localHeaderOffset + 26);
       const localExtraLength = bytes.readUInt16LE(localHeaderOffset + 28);
-      const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+      const dataStart =
+        localHeaderOffset + 30 + localNameLength + localExtraLength;
       const dataEnd = dataStart + compressedSize;
       if (dataEnd > bytes.length) return;
       const payload = bytes.subarray(dataStart, dataEnd);
       if (method === 0) return Buffer.from(payload);
-      if (method === 8) return inflateRawSync(payload);
+      if (method === 8) return inflateZipEntry(payload);
       return;
     }
     offset += 46 + nameLength + extraLength + commentLength;
