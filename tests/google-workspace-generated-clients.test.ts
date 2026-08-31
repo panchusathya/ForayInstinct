@@ -5,7 +5,10 @@ import {
   createCalendarEvent,
   searchGoogleContacts,
 } from "@/agent/lib/google-workspace/calendar";
-import { withGoogleAuth } from "@/agent/lib/google-workspace/client";
+import {
+  isMissingGoogleGrant,
+  withGoogleAuth,
+} from "@/agent/lib/google-workspace/client";
 import { buildEmailOtpSearchQuery } from "@/agent/lib/google-workspace/email-otp";
 import {
   readGmailThread,
@@ -287,6 +290,41 @@ describe("generated Google Workspace clients", () => {
       status: "disconnected",
     });
     expect(ctx.requireAuth).not.toHaveBeenCalled();
+  });
+
+  it("never starts Google consent from a Gmail read", async () => {
+    const ctx = toolContext();
+    const error = Object.assign(new Error("No Google grant for this user."), {
+      name: "ConnectionAuthorizationRequiredError",
+    });
+    ctx.getToken.mockRejectedValue(error);
+
+    // A Gmail read only ever supports a larger task, so it must surface the
+    // missing grant to its caller instead of making Eve emit an authorization
+    // prompt that reaches iMessage as an unusable pairing code.
+    await expect(searchGmail(ctx, "newer_than:1d", 5)).rejects.toBe(error);
+    await expect(readGmailThread(ctx, "thread-1")).rejects.toBe(error);
+    expect(ctx.requireAuth).not.toHaveBeenCalled();
+    expect(isMissingGoogleGrant(error)).toBe(true);
+  });
+
+  it("recognizes a renamed Connect authorization error as a missing grant", () => {
+    // Matching one exact list of class names would let a rename upstream turn
+    // every graceful fallback back into a pairing-code prompt.
+    for (const name of [
+      "NoValidTokenError",
+      "UserAuthorizationRequiredError",
+      "ConnectionAuthorizationRequiredError",
+      "AuthorizationRequiredError",
+      "NoGrantError",
+    ]) {
+      expect(
+        isMissingGoogleGrant(Object.assign(new Error("nope"), { name }))
+      ).toBe(true);
+    }
+    expect(isMissingGoogleGrant(new Error("Gmail is down."))).toBe(false);
+    expect(isMissingGoogleGrant(new GoogleApiError(401))).toBe(true);
+    expect(isMissingGoogleGrant(new GoogleApiError(500))).toBe(false);
   });
 
   it("recovers a duplicate Calendar insert using the stable event ID", async () => {

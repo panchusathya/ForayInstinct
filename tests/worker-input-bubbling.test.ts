@@ -108,6 +108,43 @@ describe("worker input bubbling", () => {
     expect(otpTool).not.toContain("redactGoogleText");
   });
 
+  it("asks the candidate for a code instead of surfacing a Connect prompt", () => {
+    const instructions = readFileSync("agent/instructions.md", "utf8");
+    const workerInstructions = readFileSync(
+      "agent/subagents/worker/instructions.md",
+      "utf8"
+    );
+    const browserSkill = readFileSync(
+      "agent/subagents/worker/skills/browser-execution/SKILL.md",
+      "utf8"
+    );
+
+    // An emailed code has to reach `wait_for_email_otp`, the only Google path
+    // that degrades instead of letting Eve emit its authorization prompt.
+    for (const file of [workerInstructions, browserSkill]) {
+      expect(file).toContain(
+        "emails a verification code, return `Needs email OTP:`"
+      );
+      expect(file).not.toContain(
+        "verification code or link, return `Needs user input:`"
+      );
+    }
+
+    // `google_workspace_read` redacts every six-digit code out of its results,
+    // so hunting for an OTP there could only ever end in a consent prompt.
+    expect(instructions).not.toContain(
+      "resolve it from the candidate's inbox with `google_workspace_read`"
+    );
+    expect(instructions).toContain(
+      "Never search for a\none-time code with `google_workspace_read`"
+    );
+    expect(instructions).toContain("ask them to paste it in the chat");
+    expect(instructions).toContain("Never relay an authorization pairing");
+    expect(instructions).toContain(
+      "Never send the candidate an authorization pairing code or a `connect.vercel.com` URL."
+    );
+  });
+
   it("submits a completed ATS login without inspecting injected credentials", () => {
     const browserSkill = readFileSync(
       "agent/subagents/worker/skills/browser-execution/SKILL.md",

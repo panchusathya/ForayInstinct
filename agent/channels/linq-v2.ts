@@ -458,7 +458,12 @@ async function prepareInboundMessage(
         ...auth.attributes,
         workspaceId: scope.workspaceId,
       },
-      principalId: auth.principalId,
+      // The phone is the candidate's durable identity, so iMessage must forward
+      // the same principal id the web channel and the schedules do. Anything
+      // else gives Vercel Connect a different subject over iMessage, and a
+      // Google grant made on the web is invisible here: every Gmail call then
+      // asks the candidate to authorize Google again.
+      principalId: scope.userId,
     },
   };
 }
