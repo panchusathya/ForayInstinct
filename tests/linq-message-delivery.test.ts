@@ -5,11 +5,11 @@ import workerCancellationHook from "../agent/hooks/worker-cancellation-delivery"
 
 const channelCapture = vi.hoisted(() => ({ config: undefined as unknown }));
 const screenshotMocks = vi.hoisted(() => ({
-  consumeLatestApplicationSubmissionScreenshot:
+  consumePendingApplicationSubmissionScreenshots:
     vi.fn<
       (
         _scope: unknown
-      ) => Promise<{ mimeType: string; png: Buffer } | undefined>
+      ) => Promise<{ kind: string; mimeType: string; png: Buffer }[]>
     >(),
 }));
 const cardPngMocks = vi.hoisted(() => ({
@@ -30,8 +30,8 @@ vi.mock("eve/channels/chat-sdk", () => ({
   },
 }));
 vi.mock("@/db/services/application-submission-screenshots", () => ({
-  consumeLatestApplicationSubmissionScreenshot:
-    screenshotMocks.consumeLatestApplicationSubmissionScreenshot,
+  consumePendingApplicationSubmissionScreenshots:
+    screenshotMocks.consumePendingApplicationSubmissionScreenshots,
 }));
 vi.mock("@/lib/goforay/request-job-card-png", () => ({
   renderJobCardPng: cardPngMocks.renderJobCardPng,
@@ -51,7 +51,10 @@ type HandlerParameters = Parameters<typeof deliverCompletedMessage>;
 
 describe("Linq message delivery", () => {
   beforeEach(() => {
-    screenshotMocks.consumeLatestApplicationSubmissionScreenshot.mockReset();
+    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockReset();
+    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
+      []
+    );
     cardPngMocks.renderJobCardPng.mockReset();
     cardPngMocks.renderJobCardPng.mockResolvedValue(undefined);
   });
@@ -512,11 +515,14 @@ describe("Linq message delivery", () => {
   });
 
   it("posts a confirmation screenshot on rich iMessage after a submitted report", async () => {
-    screenshotMocks.consumeLatestApplicationSubmissionScreenshot.mockResolvedValue(
-      {
-        mimeType: "image/png",
-        png: Buffer.from("png-bytes"),
-      }
+    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        {
+          kind: "submitted",
+          mimeType: "image/png",
+          png: Buffer.from("png-bytes"),
+        },
+      ]
     );
     const { context, post } = handlerContext("message-1", {}, "iMessage");
 
@@ -532,7 +538,7 @@ describe("Linq message delivery", () => {
     );
 
     expect(
-      screenshotMocks.consumeLatestApplicationSubmissionScreenshot
+      screenshotMocks.consumePendingApplicationSubmissionScreenshots
     ).toHaveBeenCalledWith({
       userId: "user-1",
       workspaceId: "workspace-1",
@@ -553,11 +559,14 @@ describe("Linq message delivery", () => {
   });
 
   it("keeps SMS on the text confirmation when a screenshot is available", async () => {
-    screenshotMocks.consumeLatestApplicationSubmissionScreenshot.mockResolvedValue(
-      {
-        mimeType: "image/png",
-        png: Buffer.from("png-bytes"),
-      }
+    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        {
+          kind: "submitted",
+          mimeType: "image/png",
+          png: Buffer.from("png-bytes"),
+        },
+      ]
     );
     const { context, post } = handlerContext();
 
@@ -573,13 +582,106 @@ describe("Linq message delivery", () => {
     );
 
     expect(
-      screenshotMocks.consumeLatestApplicationSubmissionScreenshot
+      screenshotMocks.consumePendingApplicationSubmissionScreenshots
     ).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledExactlyOnceWith({
       markdown: "applied to staff engineer at acme.",
     });
   });
+
+  it("posts every review slice before the candidate approves a submission", async () => {
+    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        { kind: "review", mimeType: "image/png", png: Buffer.from("top") },
+        { kind: "review", mimeType: "image/png", png: Buffer.from("bottom") },
+      ]
+    );
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+
+    await trackWorkerCancellation(
+      submissionApprovalResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    await deliverCompletedMessage(
+      completedEvent({
+        message: "Ready to submit Staff Engineer at Acme. Reply yes.",
+      }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    // The pause is a `failure` status, so delivery has to be armed off the
+    // blocker prefix rather than a successful worker result.
+    expect(post).toHaveBeenNthCalledWith(1, {
+      files: [
+        {
+          data: Buffer.from("top"),
+          filename: "application-review-1.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown:
+        "Before I submit — page 1 of 2. Reply *yes* to submit, or tell me what to change.",
+    });
+    expect(post).toHaveBeenNthCalledWith(2, {
+      files: [
+        {
+          data: Buffer.from("bottom"),
+          filename: "application-review-2.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown:
+        "Before I submit — page 2 of 2. Reply *yes* to submit, or tell me what to change.",
+    });
+    expect(post).toHaveBeenNthCalledWith(3, {
+      markdown: "ready to submit staff engineer at acme. reply yes.",
+    });
+  });
+
+  it("leaves an ordinary worker failure without a screenshot post", async () => {
+    screenshotMocks.consumePendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [{ kind: "review", mimeType: "image/png", png: Buffer.from("top") }]
+    );
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+
+    await trackWorkerCancellation(
+      submissionApprovalResult("Needs user input: what is your start date?"),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    await deliverCompletedMessage(
+      completedEvent({ message: "When can you start?" }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(
+      screenshotMocks.consumePendingApplicationSubmissionScreenshots
+    ).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      markdown: "when can you start?",
+    });
+  });
 });
+
+function submissionApprovalResult(
+  message = "Needs submission approval: Staff Engineer at Acme."
+): Parameters<NonNullable<typeof trackWorkerCancellation>>[0] {
+  return {
+    result: {
+      callId: "call-approve",
+      kind: "tool-result",
+      output: { message, status: "failure" },
+      toolName: "worker",
+    },
+    sequence: 0,
+    status: "completed",
+    stepIndex: 0,
+    turnId: "turn-1",
+  };
+}
 
 function submittedApplicationResult(): Parameters<
   NonNullable<typeof trackWorkerCancellation>

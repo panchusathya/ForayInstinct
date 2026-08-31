@@ -91,6 +91,7 @@ describe("root and worker capability boundaries", () => {
       "list_vault.ts",
       "manage_browsers.ts",
       "provision_login.ts",
+      "request_submission_approval.ts",
       "solve_captcha.ts",
       "stage_default_goforay_resume.ts",
       "stage_goforay_document.ts",
@@ -115,6 +116,7 @@ describe("root and worker capability boundaries", () => {
       "fill_from_vault",
       "manage_browsers",
       "provision_login",
+      "request_submission_approval",
       "solve_captcha",
     ]) {
       const source = readFileSync(`${workerTools}/${tool}.ts`, "utf8");
@@ -123,6 +125,10 @@ describe("root and worker capability boundaries", () => {
       expect(source).toContain("requireWorkerScope(context)");
       expect(source).toContain("requireOwnedBrowserSession");
     }
+    // The review gate must not be able to submit the application it captures.
+    expect(
+      readFileSync(`${workerTools}/request_submission_approval.ts`, "utf8")
+    ).not.toMatch(/computer\.|\.click\(|playwright\.execute/);
     expect(existsSync(`${workerRoot}/hooks/session-owner.ts`)).toBe(true);
     expect(existsSync(`${workerRoot}/skills/browser-execution/SKILL.md`)).toBe(
       true

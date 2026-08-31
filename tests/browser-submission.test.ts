@@ -6,6 +6,7 @@ import {
 } from "../lib/browser-submission";
 
 const mocks = vi.hoisted(() => ({
+  currentKernelPageUrl: vi.fn<() => Promise<string | undefined>>(),
   captureScreenshot:
     vi.fn<
       (
@@ -18,7 +19,7 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       (
         _sessionId: string,
-        _input: unknown,
+        _input: { code: string },
         _options: unknown
       ) => Promise<{ error?: string; result?: unknown; success: boolean }>
     >(),
@@ -72,7 +73,7 @@ vi.mock("@/lib/kernel", () => ({
 }));
 
 vi.mock("@/lib/manager/server/kernel-native-autofill", () => ({
-  currentKernelPageUrl: vi.fn<() => Promise<undefined>>(async () => undefined),
+  currentKernelPageUrl: mocks.currentKernelPageUrl,
   snapshotKernelPage: mocks.snapshotKernelPage,
 }));
 
@@ -193,6 +194,7 @@ describe("playwright checkpoints observe a submission without final_output", () 
     });
     mocks.recordBrowserRunCheckpoint.mockResolvedValue();
     mocks.saveApplicationSubmissionScreenshot.mockResolvedValue();
+    mocks.currentKernelPageUrl.mockResolvedValue(undefined);
     mocks.executePlaywright.mockResolvedValue({
       result: { success: true },
       success: true,
@@ -235,6 +237,7 @@ describe("playwright checkpoints observe a submission without final_output", () 
       { userId: "user-1", workspaceId: "workspace-1" },
       "browser-1",
       {
+        kind: "submitted",
         page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/applicationSubmitted",
         png: Buffer.from([137, 80, 78, 71]),
       }
@@ -296,6 +299,192 @@ describe("playwright checkpoints observe a submission without final_output", () 
       })
     );
     expect(mocks.captureScreenshot).not.toHaveBeenCalled();
+    expect(mocks.saveApplicationSubmissionScreenshot).not.toHaveBeenCalled();
+  });
+});
+
+const scrollAdvanceCode = "top: before + window.innerHeight";
+const scrollResetCode = "top: 0";
+const maskAddCode = "style.id = styleId";
+const maskRemoveCode = "getElementById(styleId)?.remove()";
+
+describe("the review gate pauses an application before its final submit", () => {
+  let executedCode: string[] = [];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    executedCode = [];
+    mocks.requireWorkerScope.mockResolvedValue({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+    });
+    mocks.requireOwnedBrowserSession.mockResolvedValue({
+      sessionId: "browser-1",
+    });
+    mocks.recordBrowserRunCheckpoint.mockResolvedValue();
+    mocks.saveApplicationSubmissionScreenshot.mockResolvedValue();
+    mocks.currentKernelPageUrl.mockResolvedValue(
+      "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review?step=4"
+    );
+    mocks.snapshotKernelPage.mockResolvedValue({
+      body: "Review your application. Submit",
+      url: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review",
+    });
+    mocks.captureScreenshot.mockResolvedValue({
+      arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer,
+    });
+    // Reports one more viewport below the fold, then the bottom of the form.
+    let advances = 0;
+    mocks.executePlaywright.mockImplementation(async (_sessionId, { code }) => {
+      executedCode.push(code);
+      if (!code.includes(scrollAdvanceCode)) return { success: true };
+      advances += 1;
+      return { result: { atBottom: advances >= 2 }, success: true };
+    });
+  });
+
+  it("stores each review slice and records the pause without submitting", async () => {
+    const { default: requestSubmissionApproval } =
+      await import("../agent/subagents/worker/tools/request_submission_approval");
+
+    const result = await requestSubmissionApproval.execute(
+      {
+        apply_url:
+          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+        role: "Staff Engineer",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({ captured: 2, status: "awaiting_approval" });
+    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(2);
+    for (const call of mocks.saveApplicationSubmissionScreenshot.mock.calls) {
+      expect(call[2]).toEqual({
+        kind: "review",
+        page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review",
+        png: Buffer.from([137, 80, 78, 71]),
+      });
+    }
+    // The trail is how the coordinator matches a paused worker to a posting.
+    expect(mocks.recordBrowserRunCheckpoint).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      "browser-1",
+      {
+        action: "review",
+        actions: [
+          "role: Staff Engineer",
+          "apply_url: https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+          "review screenshots: 2",
+        ],
+        page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review",
+        phase: "submission_approval",
+        state: "awaiting_approval",
+      }
+    );
+  });
+
+  it("never reports a pause as an observed submission", async () => {
+    const { default: requestSubmissionApproval } =
+      await import("../agent/subagents/worker/tools/request_submission_approval");
+
+    await requestSubmissionApproval.execute(
+      {
+        apply_url:
+          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+        role: "Staff Engineer",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    for (const call of mocks.recordBrowserRunCheckpoint.mock.calls) {
+      expect(call[2]).not.toMatchObject({ state: "submission_observed" });
+    }
+    for (const call of mocks.saveApplicationSubmissionScreenshot.mock.calls) {
+      expect(call[2]).not.toMatchObject({ kind: "submitted" });
+    }
+    // Nothing the gate runs may activate a control on the page.
+    for (const code of executedCode) {
+      expect(code).not.toMatch(/\.click\(|press\(|Submit/);
+    }
+  });
+
+  it("holds the vault mask across every slice and leaves the page at the top", async () => {
+    const { default: requestSubmissionApproval } =
+      await import("../agent/subagents/worker/tools/request_submission_approval");
+
+    await requestSubmissionApproval.execute(
+      {
+        apply_url:
+          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+        role: "Staff Engineer",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    // Masking per capture would unmask the page between shots and could expose
+    // an injected password in the next one.
+    expect(
+      executedCode.filter((code) => code.includes(maskAddCode))
+    ).toHaveLength(1);
+    const removeIndex = executedCode.findIndex((code) =>
+      code.includes(maskRemoveCode)
+    );
+    expect(removeIndex).toBe(executedCode.length - 1);
+    expect(
+      executedCode.filter((code) => code.includes(scrollResetCode))
+    ).toHaveLength(1);
+  });
+
+  it("stops capturing at the slice ceiling when the page never reports a bottom", async () => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, { code }) => {
+      executedCode.push(code);
+      if (!code.includes(scrollAdvanceCode)) return { success: true };
+      return { result: { atBottom: false }, success: true };
+    });
+    const { default: requestSubmissionApproval } =
+      await import("../agent/subagents/worker/tools/request_submission_approval");
+
+    const result = await requestSubmissionApproval.execute(
+      {
+        apply_url:
+          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+        role: "Staff Engineer",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({ captured: 3 });
+  });
+
+  it("still gates when no screenshot could be captured", async () => {
+    mocks.captureScreenshot.mockResolvedValue({
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    const { default: requestSubmissionApproval } =
+      await import("../agent/subagents/worker/tools/request_submission_approval");
+
+    const result = await requestSubmissionApproval.execute(
+      {
+        apply_url:
+          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+        role: "Staff Engineer",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({ captured: 0, status: "awaiting_approval" });
+    // With no screenshot, the candidate needs the live view to check the form.
+    expect(JSON.stringify(result)).toContain("live-view URL");
     expect(mocks.saveApplicationSubmissionScreenshot).not.toHaveBeenCalled();
   });
 });

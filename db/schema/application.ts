@@ -192,6 +192,7 @@ export const applicationSubmissionScreenshots = pgTable(
     createdByUserId: text("created_by_user_id").notNull(),
     createdAt: text("created_at").notNull(),
     page: text("page"),
+    kind: text("kind").notNull().default("submitted"),
     mimeType: text("mime_type").notNull().default("image/png"),
     pngBase64: text("png_base64").notNull(),
     deliveredAt: text("delivered_at"),
@@ -209,6 +210,10 @@ export const applicationSubmissionScreenshots = pgTable(
       table.workspaceId,
       table.deliveredAt,
       table.createdAt.desc().nullsFirst()
+    ),
+    check(
+      "application_submission_screenshots_kind_check",
+      sql`${table.kind} IN ('review', 'submitted')`
     ),
   ]
 );
