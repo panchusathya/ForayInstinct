@@ -241,7 +241,9 @@ describe("checkbox CAPTCHA solver", () => {
     expect(tool).not.toContain("Does not solve image puzzles");
     expect(tool).not.toContain("Does not inject tokens");
     expect(tool).toContain("writes a lookalike response token");
-    expect(skill).toContain("same-page checkbox + image-grid clones");
+    expect(skill).toContain(
+      "same-page checkbox + image-grid of real hCaptcha iframes"
+    );
     expect(skill).toContain(
       "Treat lookalike widgets as part of the assignment"
     );
