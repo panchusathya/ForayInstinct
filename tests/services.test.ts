@@ -404,11 +404,12 @@ describe("database services", () => {
     expect(stored?.extractedText).toContain("Ada Lovelace");
   });
 
-  it("hands the latest undelivered confirmation screenshot to the next consumer", async () => {
+  it("hands every undelivered screenshot to the next consumer in page order", async () => {
     const client = new PGlite();
     databases.push(client);
     await applyInitialMigration(client);
     await applyMigration(client, "0010_application_submission_screenshots.sql");
+    await applyMigration(client, "0015_submission_review_screenshots.sql");
 
     const pgliteDatabase = drizzle(client, { schema });
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
@@ -426,39 +427,97 @@ describe("database services", () => {
 
     await screenshots.saveApplicationSubmissionScreenshot(
       alice,
-      "browser-old",
-      { png: Buffer.from("older") }
+      "browser-review",
+      {
+        kind: "review",
+        page: "https://example.com/apply",
+        png: Buffer.from("review-top"),
+      }
     );
     await screenshots.saveApplicationSubmissionScreenshot(
       alice,
-      "browser-new",
-      { page: "https://example.com/confirmation", png: Buffer.from("newer") }
+      "browser-review",
+      {
+        kind: "review",
+        page: "https://example.com/apply",
+        png: Buffer.from("review-bottom"),
+      }
+    );
+    await screenshots.saveApplicationSubmissionScreenshot(
+      alice,
+      "browser-done",
+      {
+        kind: "submitted",
+        page: "https://example.com/confirmation",
+        png: Buffer.from("proof"),
+      }
     );
     await screenshots.saveApplicationSubmissionScreenshot(bob, "browser-bob", {
+      kind: "submitted",
       png: Buffer.from("other-workspace"),
     });
 
+    // A scroll-stitched review must arrive whole and top-first: the candidate
+    // is approving the form, so dropping a capture hides what they approved.
     await expect(
-      screenshots.consumeLatestApplicationSubmissionScreenshot(alice)
-    ).resolves.toEqual({
-      mimeType: "image/png",
-      png: Buffer.from("newer"),
-    });
+      screenshots.consumePendingApplicationSubmissionScreenshots(alice)
+    ).resolves.toEqual([
+      {
+        kind: "review",
+        mimeType: "image/png",
+        png: Buffer.from("review-top"),
+      },
+      {
+        kind: "review",
+        mimeType: "image/png",
+        png: Buffer.from("review-bottom"),
+      },
+      { kind: "submitted", mimeType: "image/png", png: Buffer.from("proof") },
+    ]);
     await expect(
-      screenshots.consumeLatestApplicationSubmissionScreenshot(alice)
-    ).resolves.toEqual({
-      mimeType: "image/png",
-      png: Buffer.from("older"),
-    });
+      screenshots.consumePendingApplicationSubmissionScreenshots(alice)
+    ).resolves.toEqual([]);
     await expect(
-      screenshots.consumeLatestApplicationSubmissionScreenshot(alice)
-    ).resolves.toBeUndefined();
-    await expect(
-      screenshots.consumeLatestApplicationSubmissionScreenshot(bob)
-    ).resolves.toEqual({
-      mimeType: "image/png",
-      png: Buffer.from("other-workspace"),
-    });
+      screenshots.consumePendingApplicationSubmissionScreenshots(bob)
+    ).resolves.toEqual([
+      {
+        kind: "submitted",
+        mimeType: "image/png",
+        png: Buffer.from("other-workspace"),
+      },
+    ]);
+  }, 15_000);
+
+  it("rejects a screenshot kind the delivering channel cannot caption", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0010_application_submission_screenshots.sql");
+    await applyMigration(client, "0015_submission_review_screenshots.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const scope = await import("@/db/services/scope");
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    const insert = (kind: string) =>
+      client.query(
+        `INSERT INTO application_submission_screenshots
+          (session_id, workspace_id, created_by_user_id, created_at, kind, png_base64)
+          VALUES ('browser', $1, $2, '2026-01-01T00:00:00.000Z', $3, 'cG5n')`,
+        [alice.workspaceId, alice.userId, kind]
+      );
+
+    // Guards the migration itself: without the check the channel would silently
+    // caption an unknown kind as submitted proof.
+    await expect(insert("review")).resolves.toBeDefined();
+    await expect(insert("guessed")).rejects.toThrow(
+      /application_submission_screenshots_kind_check/
+    );
   }, 15_000);
 });
 

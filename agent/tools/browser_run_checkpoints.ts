@@ -19,7 +19,7 @@ export default defineDynamic({
       return {
         list_browser_run_checkpoints: defineTool({
           description:
-            "Read recent browser-run checkpoints for this workspace, grouped by browser session. Call this when a worker returns an empty, missing, or malformed result, or when more than one application is in flight. Each session lists its pages, phases, states, and times. A `submission_observed` state means the ATS confirmed the application even if the worker did not report it.",
+            "Read recent browser-run checkpoints for this workspace, grouped by browser session. Call this when a worker returns an empty, missing, or malformed result, or when more than one application is in flight. Each session lists its pages, phases, states, and times. A `submission_observed` state means the ATS confirmed the application even if the worker did not report it. An `awaiting_approval` state means the application is filled and paused for the candidate to review before submitting, so nothing has been sent yet.",
           inputSchema: z.object({
             limit: z.number().int().min(1).max(100).optional(),
           }),

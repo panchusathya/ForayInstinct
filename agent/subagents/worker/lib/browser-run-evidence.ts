@@ -1,4 +1,7 @@
-import { captureMaskedKernelScreenshot } from "@/agent/subagents/worker/lib/kernel-screenshot";
+import {
+  captureMaskedKernelScreenshot,
+  captureMaskedReviewScreenshots,
+} from "@/agent/subagents/worker/lib/kernel-screenshot";
 import type { AccessScope } from "@/lib/access-scope";
 import { saveApplicationSubmissionScreenshot } from "@/db/services/application-submission-screenshots";
 import {
@@ -52,12 +55,7 @@ export async function recordBrowserActionCheckpoint(
         }),
   }).catch((error: unknown) => {
     console.error("[browser-checkpoint] persistence failed", {
-      error:
-        error instanceof Error
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : "unknown",
+      error: evidenceErrorMessage(error),
       phase: checkpoint.phase,
       session_id: sessionId,
     });
@@ -76,18 +74,65 @@ async function persistSubmissionScreenshot(
     const png = await captureMaskedKernelScreenshot(sessionId, signal);
     if (png.byteLength === 0) return;
     await saveApplicationSubmissionScreenshot(scope, sessionId, {
+      kind: "submitted",
       page,
       png,
     });
   } catch (error: unknown) {
     console.error("[submission-screenshot] capture failed", {
-      error:
-        error instanceof Error
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : "unknown",
+      error: evidenceErrorMessage(error),
       session_id: sessionId,
     });
   }
+}
+
+/**
+ * The pause before an application's final submit. Captures the completed form
+ * for the candidate to check and records the pause on the checkpoint trail, so
+ * an application waiting on approval is distinguishable from one abandoned
+ * mid-run. Deliberately never classified as `submission_observed`: nothing has
+ * been submitted at this point.
+ */
+export async function recordSubmissionReviewEvidence(
+  scope: AccessScope,
+  sessionId: string,
+  assignment: { applyUrl: string; role: string },
+  signal?: AbortSignal
+) {
+  const page = await currentKernelPageUrl({
+    browserSessionId: sessionId,
+    signal,
+  }).catch(() => undefined);
+  const captures = await captureMaskedReviewScreenshots(sessionId, signal);
+  for (const png of captures) {
+    await saveApplicationSubmissionScreenshot(scope, sessionId, {
+      kind: "review",
+      page: browserPageLocation(page),
+      png,
+    });
+  }
+  await recordBrowserRunCheckpoint(scope, sessionId, {
+    action: "review",
+    // The coordinator matches a paused worker to the posting under discussion
+    // from this trail, so the role and apply URL belong on the checkpoint.
+    actions: [
+      `role: ${assignment.role}`,
+      `apply_url: ${assignment.applyUrl}`,
+      `review screenshots: ${String(captures.length)}`,
+    ],
+    page: browserPageLocation(page),
+    phase: "submission_approval",
+    state: "awaiting_approval",
+  }).catch((error: unknown) => {
+    console.error("[submission-approval] persistence failed", {
+      error: evidenceErrorMessage(error),
+      session_id: sessionId,
+    });
+  });
+  return captures.length;
+}
+
+function evidenceErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return typeof error === "string" ? error : "unknown";
 }

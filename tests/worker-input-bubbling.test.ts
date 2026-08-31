@@ -41,7 +41,7 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain("never put an identifier");
     expect(instructions).toContain("raw HTTPS setup URL on its own line");
     expect(instructions).toContain(
-      "structured `Needs user input:`, `Needs vault setup:`, or `Needs email OTP:` failure"
+      "structured `Needs submission approval:`, `Needs user input:`, `Needs vault setup:`, or `Needs email OTP:` failure"
     );
     expect(workerInstructions).toContain("Needs vault setup:");
     expect(workerInstructions).toContain(
@@ -58,6 +58,19 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain("timeout_seconds` of at least 900");
     expect(workerInstructions).toContain("timeout_seconds` of at least 900");
     expect(browserSkill).toContain("twelve minutes");
+
+    // The candidate reviews every application before it goes out, so all three
+    // layers have to agree that the final submit waits for their reply.
+    expect(instructions).toContain(
+      "returns a `Needs submission approval:` blocker"
+    );
+    expect(instructions).toContain("never approve on");
+    expect(workerInstructions).toContain(
+      "Never submit a job application on the first pass"
+    );
+    expect(workerInstructions).toContain("request_submission_approval");
+    expect(browserSkill).toContain("Submission review gate");
+    expect(browserSkill).toContain("request_submission_approval");
     expect(workerInstructions).toContain("twelve minutes");
   });
 

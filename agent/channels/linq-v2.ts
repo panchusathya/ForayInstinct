@@ -35,7 +35,7 @@ import {
   retryLinqResumeSave,
 } from "@/lib/linq-resume-import";
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
-import { consumeLatestApplicationSubmissionScreenshot } from "@/db/services/application-submission-screenshots";
+import { consumePendingApplicationSubmissionScreenshots } from "@/db/services/application-submission-screenshots";
 import { normalizeTaskStatus } from "@/lib/task-completion";
 import { linkCandidate, recordConversationMessage } from "@/lib/goforay/bridge";
 import { saveCandidateDocument } from "@/db/services/candidate-documents";
@@ -66,11 +66,19 @@ const workerResultSchema = z.object({
   kind: z.literal("tool-result"),
   output: z
     .object({
+      message: z.string().optional(),
       status: z.string(),
     })
     .loose(),
   toolName: z.literal("worker"),
 });
+
+/**
+ * The worker pauses with this prefix once an application is filled and only the
+ * submit control is left. The pause is a `failure` status, so screenshot
+ * delivery cannot be armed off a successful result alone.
+ */
+const submissionApprovalPrefix = "Needs submission approval:";
 const jobCardResultSchema = z.object({
   kind: z.literal("tool-result"),
   output: z.object({ cards: z.array(goForayJobCardSchema) }),
@@ -124,19 +132,25 @@ const { bot, channel, send } = chatSdkChannel({
       const result = taskCancelResultSchema.safeParse(event.result);
       const sourceMessageId = context.thread?.toJSON().currentMessage?.id;
       const workerResult = workerResultSchema.safeParse(event.result);
-      if (
-        workerResult.success &&
-        normalizeTaskStatus(workerResult.data.output.status) === "success"
-      ) {
-        context.state.pendingSubmissionScreenshot = {
-          turnId: event.turnId,
-        };
-        await reactToCurrentMessage(
-          context,
-          sourceMessageId,
-          "✅",
-          "application-submitted"
-        );
+      if (workerResult.success) {
+        const submitted =
+          normalizeTaskStatus(workerResult.data.output.status) === "success";
+        const awaitingApproval = (workerResult.data.output.message ?? "")
+          .trimStart()
+          .startsWith(submissionApprovalPrefix);
+        if (submitted || awaitingApproval) {
+          context.state.pendingSubmissionScreenshot = {
+            turnId: event.turnId,
+          };
+          // A review pause must not read as a finished application, so the two
+          // outcomes get different reactions.
+          await reactToCurrentMessage(
+            context,
+            sourceMessageId,
+            submitted ? "✅" : "👀",
+            submitted ? "application-submitted" : "application-review"
+          );
+        }
       }
       const jobCards = jobCardResultSchema.safeParse(event.result);
       if (jobCards.success) {
@@ -656,27 +670,43 @@ async function deliverSubmissionScreenshot(
 ) {
   if (!isRichLinqThread(thread)) return;
   try {
-    const screenshot =
-      await consumeLatestApplicationSubmissionScreenshot(scope);
-    if (!screenshot) return;
-    await thread.post({
-      markdown: "",
-      files: [
-        {
-          data: screenshot.png,
-          filename: "application-submitted.png",
-          mimeType: screenshot.mimeType,
-        },
-      ],
-    });
-    void recordConversationMessage({
-      scope,
-      conversationId: `linq:${scope.userId}`,
-      channel: "linq",
-      direction: "outbound",
-      body: "application submitted screenshot",
-      sourceMessageId: `linq:${turnId}:submission-screenshot`,
-    }).catch(() => undefined);
+    const screenshots =
+      await consumePendingApplicationSubmissionScreenshots(scope);
+    // A review is scroll-stitched across several captures, so post each one in
+    // page order rather than only the last. The batch can also carry an older
+    // undelivered proof, so number the review pages among themselves.
+    const reviewPages = screenshots.filter(
+      (screenshot) => screenshot.kind === "review"
+    ).length;
+    let reviewPage = 0;
+    for (const [position, screenshot] of screenshots.entries()) {
+      const review = screenshot.kind === "review";
+      if (review) reviewPage += 1;
+      await thread.post({
+        markdown: review
+          ? `Before I submit — page ${String(reviewPage)} of ${String(reviewPages)}. Reply *yes* to submit, or tell me what to change.`
+          : "",
+        files: [
+          {
+            data: screenshot.png,
+            filename: review
+              ? `application-review-${String(reviewPage)}.png`
+              : "application-submitted.png",
+            mimeType: screenshot.mimeType,
+          },
+        ],
+      });
+      void recordConversationMessage({
+        scope,
+        conversationId: `linq:${scope.userId}`,
+        channel: "linq",
+        direction: "outbound",
+        body: review
+          ? "application review screenshot"
+          : "application submitted screenshot",
+        sourceMessageId: `linq:${turnId}:${screenshot.kind}-screenshot:${String(position)}`,
+      }).catch(() => undefined);
+    }
   } catch {
     // The coordinator's text confirmation remains useful if media upload fails.
   }
