@@ -18,6 +18,11 @@ import { ensureKernelBrowserProfile } from "@/lib/manager/server/kernel-profile"
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import {
+  describeBrowserSessionFailure,
+  forgetDeadBrowserSession,
+  isKernelSessionDead,
+} from "@/agent/subagents/worker/lib/challenge-diagnostics";
+import {
   isResolvedWorkdayRoute,
   isWorkdayApplicationUrl,
   normalizeWorkdayRouteResult,
@@ -223,7 +228,12 @@ export default defineTool({
                 return null;
               }
               return value;
-            } catch {
+            } catch (error: unknown) {
+              // A session Kernel has reclaimed must not linger as a local row:
+              // the worker would keep passing its id to tools that all fail.
+              if (isKernelSessionDead(describeBrowserSessionFailure(error))) {
+                await forgetDeadBrowserSession(scope, sessionId);
+              }
               return null;
             }
           })
@@ -258,7 +268,15 @@ export default defineTool({
       case "delete": {
         const sessionId = requireSessionId(input.session_id);
         await requireOwnedBrowserSession(scope, sessionId);
-        await kernel.browsers.deleteByID(sessionId, { signal });
+        try {
+          await kernel.browsers.deleteByID(sessionId, { signal });
+        } catch (error: unknown) {
+          // Kernel expiring the session first must not leave the local row
+          // behind. Deleting something already gone is the outcome asked for.
+          if (!isKernelSessionDead(describeBrowserSessionFailure(error))) {
+            throw error;
+          }
+        }
         await deleteBrowserSession(scope, sessionId);
         return "Browser session deleted successfully";
       }

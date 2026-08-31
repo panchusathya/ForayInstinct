@@ -52,9 +52,13 @@ describe("worker input bubbling", () => {
     expect(browserSkill).toContain("visible password rules");
     expect(browserSkill).toContain("provision_login");
     expect(browserSkill).toContain("no registration path");
-    expect(instructions).toContain("timeout_seconds` of at least 1800");
-    expect(workerInstructions).toContain("timeout_seconds` of at least 1800");
-    expect(browserSkill).toContain("twenty-five minutes");
+    // The Kernel session must outlive the turn budget. When it does not, it
+    // expires mid-application and every later tool call fails for a reason
+    // unrelated to the page.
+    expect(instructions).toContain("timeout_seconds` of at least 900");
+    expect(workerInstructions).toContain("timeout_seconds` of at least 900");
+    expect(browserSkill).toContain("twelve minutes");
+    expect(workerInstructions).toContain("twelve minutes");
   });
 
   it("reads email OTP from Gmail instead of asking the candidate", () => {

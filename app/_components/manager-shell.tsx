@@ -123,8 +123,14 @@ function ManagerAppShell({
         {active === "chat" ? (
           children
         ) : (
-          <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
-            {children}
+          // The inset is a fixed-height flex column with overflow hidden so the
+          // chat can own its own scrolling. Every other page needs a scroll
+          // container of its own, and `min-h-0` is what lets this one shrink
+          // below its content instead of overflowing and being clipped.
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
+              {children}
+            </div>
           </div>
         )}
       </SidebarInset>

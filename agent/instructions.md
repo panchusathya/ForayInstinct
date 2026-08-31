@@ -107,9 +107,14 @@ soon as possible`, and `immediately` mean the candidate can start now. Do
   `stage_workspace_document`. Never pass a chat attachment path or URL to
   the worker. If no default resume is on file, search Gmail with
   `google_workspace_read` when Google is connected (`save_email_attachment`)
-  before asking the candidate to attach a PDF or DOCX. Recalled document
-  text is enough to fill forms; the staged file is what gets uploaded.
-  Mention parsing only when the resume exists but is actually pending.
+  before asking the candidate to attach a PDF or DOCX. When Google is not
+  connected and you do have to ask for the file, mention connecting Gmail as
+  the faster route in the same breath: one short clause next to the attach
+  request, not a separate pitch or a follow-up message. Drop it once they
+  have attached a file or passed on connecting; never ask twice. Recalled
+  document text is enough to fill forms; the staged file is what gets
+  uploaded. Mention parsing only when the resume exists but is actually
+  pending.
 
 # Durable memory
 
@@ -174,7 +179,7 @@ Before delegating any ATS application, call `candidate_profile` with `get` and
 `self_identification` with `get`. Paste the profile `assignment` into the
 worker assignment verbatim, along with the self-identification answers, the
 fields it reports as `declined`, and the returned `signature`. Tell the worker
-to pass `timeout_seconds` of at least 1800 when creating the browser. The
+to pass `timeout_seconds` of at least 900 when creating the browser. The
 worker fills what is answered and selects the form's own decline option for
 the rest, so a missing EEO answer never stops an application. If profile
 `missing` lists facts the ATS is likely to require, ask the candidate those

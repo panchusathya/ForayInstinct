@@ -4,6 +4,10 @@ import { kernel } from "@/lib/kernel";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/browser-run-evidence";
+import {
+  handleBrowserToolFailure,
+  logChallengeProbe,
+} from "@/agent/subagents/worker/lib/challenge-diagnostics";
 
 const inputSchema = z.object({
   code: z.string().min(1),
@@ -34,6 +38,14 @@ export default defineTool({
         },
         context.abortSignal
       );
+      if (!response.success) {
+        await logChallengeProbe({
+          sessionId: input.session_id,
+          signal: context.abortSignal,
+          trigger: "playwright_execution_failed",
+          workspaceId: scope.workspaceId,
+        });
+      }
       return response;
     } catch (error) {
       await recordBrowserActionCheckpoint(
@@ -47,7 +59,14 @@ export default defineTool({
         },
         context.abortSignal
       );
-      throw error;
+      throw await handleBrowserToolFailure({
+        error,
+        scope,
+        sessionId: input.session_id,
+        signal: context.abortSignal,
+        tool: "execute_playwright_code",
+        trigger: "playwright_threw",
+      });
     }
   },
 });

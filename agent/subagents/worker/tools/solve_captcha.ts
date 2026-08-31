@@ -9,6 +9,7 @@ import {
 } from "@/agent/subagents/worker/lib/captcha-solver";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
+import { handleBrowserToolFailure } from "@/agent/subagents/worker/lib/challenge-diagnostics";
 import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoints";
 import { kernel } from "@/lib/kernel";
 
@@ -26,7 +27,26 @@ export default defineTool({
     context
   ): Promise<z.infer<typeof captchaSolveResultSchema>> {
     const scope = await requireWorkerScope(context);
-    await requireOwnedBrowserSession(scope, input.session_id);
+    // Logged before the ownership check, and before any page work, so that an
+    // invocation is recorded even when the session is already gone. "The solver
+    // was never called" and "the solver was called too late" are different
+    // bugs, and every other line in this tool is downstream of a live session.
+    console.info("[captcha-solver] invoked", {
+      browser_session_id: input.session_id,
+      workspace_id: scope.workspaceId,
+    });
+    try {
+      await requireOwnedBrowserSession(scope, input.session_id);
+    } catch (error: unknown) {
+      throw await handleBrowserToolFailure({
+        error,
+        scope,
+        sessionId: input.session_id,
+        signal: context.abortSignal,
+        tool: "solve_captcha",
+        trigger: "solve_captcha_ownership",
+      });
+    }
     const signal = context.abortSignal;
 
     const inspected = normalizeCaptchaInspectResult(

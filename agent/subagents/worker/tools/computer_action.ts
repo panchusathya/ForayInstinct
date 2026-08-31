@@ -5,6 +5,7 @@ import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/browser-run-evidence";
 import { maskVaultFields } from "@/agent/subagents/worker/lib/kernel-screenshot";
+import { handleBrowserToolFailure } from "@/agent/subagents/worker/lib/challenge-diagnostics";
 
 const actionSchema = z.object({
   type: z.enum([
@@ -255,7 +256,14 @@ export default defineTool({
         },
         context.abortSignal
       );
-      throw error;
+      throw await handleBrowserToolFailure({
+        error,
+        scope,
+        sessionId: input.session_id,
+        signal: context.abortSignal,
+        tool: "computer_action",
+        trigger: "computer_action_failed",
+      });
     }
   },
   toModelOutput(output) {

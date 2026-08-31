@@ -23,6 +23,13 @@ export const captchaInspectResultSchema = z.object({
   url: z.string().optional(),
 });
 
+export const captchaProbeResultSchema = z.object({
+  kernelDeclined: z.boolean(),
+  kinds: z.array(captchaKindSchema),
+  token: z.boolean(),
+  url: z.string().optional(),
+});
+
 export const captchaCompleteResultSchema = z.object({
   challenge: z.boolean(),
   injected: z.boolean(),
@@ -320,6 +327,21 @@ const injectLookalikeToken = async () => page.evaluate(() => {
  * tool clicks with Kernel computer controls, then Playwright completes tiles
  * and writes a lookalike response token when the page exposes captcha fields.
  */
+/**
+ * Observes the page without touching it. `captchaInspectCode` clicks as part of
+ * inspecting, so it cannot be used to answer "was a challenge on screen?" on a
+ * path where the worker has already failed; this can.
+ */
+export const captchaProbeCode = `${captchaHelpers}
+const found = await detect();
+return {
+  kernelDeclined: found.kernelDeclined,
+  kinds: found.kinds,
+  token: found.token,
+  url: page.url(),
+};
+`;
+
 export const captchaInspectCode = `${captchaHelpers}
 const before = await detect();
 if (before.token && !before.kinds.includes("hcaptcha_challenge")) {
@@ -401,6 +423,14 @@ export function normalizeCaptchaInspectResult(
 ): z.infer<typeof captchaInspectResultSchema> | undefined {
   if (!response.success) return undefined;
   const parsed = captchaInspectResultSchema.safeParse(response.result);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function normalizeCaptchaProbeResult(
+  response: PlaywrightExecuteResponse
+): z.infer<typeof captchaProbeResultSchema> | undefined {
+  if (!response.success) return undefined;
+  const parsed = captchaProbeResultSchema.safeParse(response.result);
   return parsed.success ? parsed.data : undefined;
 }
 
