@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { readOrImportDefaultResume } from "@/db/services/default-resume";
-import { kernel } from "@/lib/kernel";
+import { browserProvider } from "@/lib/browser";
 
 const inputSchema = z.object({
   session_id: z.string().min(1),
@@ -52,7 +52,8 @@ export default defineTool({
     }
     const filename = safeFilename(document.filename);
     const path = `/tmp/goforay-default-resume-${filename}`;
-    await kernel.browsers.fs.writeFile(input.session_id, document.bytes, {
+    await browserProvider.stageFile(input.session_id, {
+      bytes: document.bytes,
       path,
     });
     return { filename, path };

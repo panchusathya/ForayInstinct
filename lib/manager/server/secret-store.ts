@@ -3,6 +3,7 @@ import {
   deleteEncryptedSecret,
   readEncryptedSecret,
   writeEncryptedSecret,
+  type SecretNamespace,
 } from "@/db/services/secrets";
 import type { AccessScope } from "../../access-scope";
 import { env } from "@/lib/env";
@@ -18,59 +19,73 @@ export function secretStoreStatus() {
 
 export async function writeSecret({
   id,
+  namespace,
   scope,
   value,
 }: {
   readonly id: string;
-  readonly namespace: "vault";
+  readonly namespace: SecretNamespace;
   readonly scope: AccessScope;
   readonly value: string;
 }) {
-  await writeEncryptedSecret(scope, id, encryptSecret(scope, id, value));
+  await writeEncryptedSecret(
+    scope,
+    namespace,
+    id,
+    encryptSecret(scope, namespace, id, value)
+  );
 }
 
 export async function readSecret({
   id,
+  namespace,
   scope,
 }: {
   readonly id: string;
-  readonly namespace: "vault";
+  readonly namespace: SecretNamespace;
   readonly scope: AccessScope;
 }) {
-  const encrypted = await readEncryptedSecret(scope, id);
-  return encrypted ? decryptSecret(scope, id, encrypted) : undefined;
+  const encrypted = await readEncryptedSecret(scope, namespace, id);
+  return encrypted ? decryptSecret(scope, namespace, id, encrypted) : undefined;
 }
 
 export async function hasSecret({
   id,
+  namespace,
   scope,
 }: {
   readonly id: string;
-  readonly namespace: "vault";
+  readonly namespace: SecretNamespace;
   readonly scope: AccessScope;
 }) {
-  return (await readEncryptedSecret(scope, id)) !== undefined;
+  return (await readEncryptedSecret(scope, namespace, id)) !== undefined;
 }
 
 export async function deleteSecret({
   id,
+  namespace,
   scope,
 }: {
   readonly id: string;
-  readonly namespace: "vault";
+  readonly namespace: SecretNamespace;
   readonly scope: AccessScope;
 }) {
-  await deleteEncryptedSecret(scope, id);
+  await deleteEncryptedSecret(scope, namespace, id);
 }
 
-function encryptSecret(scope: AccessScope, id: string, value: string) {
+function encryptSecret(
+  scope: AccessScope,
+  namespace: SecretNamespace,
+  id: string,
+  value: string
+) {
   const iv = randomBytes(12);
   const cipher = createCipheriv(
     "aes-256-gcm",
     Buffer.from(env.SECRET_ENCRYPTION_KEY, "base64"),
     iv
   );
-  cipher.setAAD(secretAad(scope, id));
+  cipher.setAAD(secretAad(scope, namespace, id));
   const ciphertext = Buffer.concat([
     cipher.update(value, "utf8"),
     cipher.final(),
@@ -83,7 +98,12 @@ function encryptSecret(scope: AccessScope, id: string, value: string) {
   ].join(".");
 }
 
-function decryptSecret(scope: AccessScope, id: string, value: string) {
+function decryptSecret(
+  scope: AccessScope,
+  namespace: SecretNamespace,
+  id: string,
+  value: string
+) {
   const [version, encodedIv, encodedTag, encodedCiphertext] = value.split(".");
   if (version !== "v1" || !encodedIv || !encodedTag || !encodedCiphertext) {
     throw new Error("The stored secret uses an unsupported format.");
@@ -94,7 +114,7 @@ function decryptSecret(scope: AccessScope, id: string, value: string) {
     Buffer.from(env.SECRET_ENCRYPTION_KEY, "base64"),
     Buffer.from(encodedIv, "base64url")
   );
-  decipher.setAAD(secretAad(scope, id));
+  decipher.setAAD(secretAad(scope, namespace, id));
   decipher.setAuthTag(Buffer.from(encodedTag, "base64url"));
   return Buffer.concat([
     decipher.update(Buffer.from(encodedCiphertext, "base64url")),
@@ -102,6 +122,6 @@ function decryptSecret(scope: AccessScope, id: string, value: string) {
   ]).toString("utf8");
 }
 
-function secretAad(scope: AccessScope, id: string) {
-  return Buffer.from(`${scope.workspaceId}\u0000vault\u0000${id}`);
+function secretAad(scope: AccessScope, namespace: SecretNamespace, id: string) {
+  return Buffer.from([scope.workspaceId, namespace, id].join("\u0000"));
 }

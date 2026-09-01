@@ -1,4 +1,4 @@
-import type { PlaywrightExecuteResponse } from "@onkernel/sdk/resources/browsers";
+import type { PlaywrightResponse } from "@/lib/browser/contract";
 
 export type WorkdayRouteState =
   | "email_login_ready"
@@ -303,7 +303,7 @@ export function workdayRestoreCode(applicationUrl: string) {
 }
 
 export function normalizeWorkdayRouteResult(
-  response: PlaywrightExecuteResponse
+  response: PlaywrightResponse
 ): WorkdayRouteResult {
   // A timed-out or rejected execution is not evidence the site failed to load.
   // Collapsing the two hid real timeouts behind a navigation verdict and made

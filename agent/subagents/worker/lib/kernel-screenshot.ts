@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { browserProvider, isGatewayProvider } from "@/lib/browser";
 import { maxApplicationReviewCaptures } from "@/lib/browser-submission";
 import { kernel } from "@/lib/kernel";
 import {
@@ -65,6 +66,18 @@ export async function captureMaskedKernelScreenshot(
   sessionId: string,
   signal?: AbortSignal
 ) {
+  if (isGatewayProvider(browserProvider)) {
+    const captures = await browserProvider.captureScreenshots(
+      sessionId,
+      {
+        maskCss: vaultScreenshotMaskCss,
+        maskStyleId: vaultScreenshotMaskStyleId,
+        mode: "viewport",
+      },
+      signal
+    );
+    return captures[0] ?? Buffer.alloc(0);
+  }
   const removeMask = await maskVaultFields(sessionId, signal);
   try {
     return await captureKernelScreenshot(sessionId, signal);
@@ -226,6 +239,20 @@ export async function captureMaskedReviewScreenshots(
   sessionId: string,
   signal?: AbortSignal
 ) {
+  if (isGatewayProvider(browserProvider)) {
+    // The gateway holds real Playwright pages, so masking, full-page capture,
+    // and scroll-slicing all run natively in its process.
+    return browserProvider.captureScreenshots(
+      sessionId,
+      {
+        maskCss: vaultScreenshotMaskCss,
+        maskStyleId: vaultScreenshotMaskStyleId,
+        maxSlices: maxApplicationReviewCaptures,
+        mode: "full_page",
+      },
+      signal
+    );
+  }
   const removeMask = await maskVaultFields(sessionId, signal);
   let root: ReviewScrollRoot | undefined;
   try {

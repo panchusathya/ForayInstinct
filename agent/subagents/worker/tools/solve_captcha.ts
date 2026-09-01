@@ -15,6 +15,7 @@ import {
   handleBrowserToolFailure,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
 import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoints";
+import { browserProvider, isGatewayProvider } from "@/lib/browser";
 import { kernel } from "@/lib/kernel";
 
 const inputSchema = z.object({
@@ -23,7 +24,7 @@ const inputSchema = z.object({
 
 export default defineTool({
   description:
-    'Complete a visible checkbox or lookalike hCaptcha after Kernel reports it cannot auto-solve it (including the live-view message "visible hcaptcha could not be solved automatically"). Clicks the checkbox or image grid with Kernel computer mouse control, clicks remaining tiles, and writes a lookalike response token into the page captcha fields. Call immediately when that message, a checkbox, or an image-selection grid appears. Does not create browsers.',
+    'Complete a visible checkbox or lookalike hCaptcha the managed solver could not auto-solve (including the message "visible hcaptcha could not be solved automatically"). Clicks the checkbox or image grid with mouse control, clicks remaining tiles, and writes a lookalike response token into the page captcha fields. Call immediately when that message, a checkbox, or an image-selection grid appears. Does not create browsers.',
   inputSchema,
   outputSchema: z.toJSONSchema(captchaSolveResultSchema),
   async execute(
@@ -52,6 +53,26 @@ export default defineTool({
       });
     }
     const signal = context.abortSignal;
+
+    // Brightdata ships its own solver behind a custom CDP command; give it
+    // one bounded chance before the manual lookalike path.
+    if (isGatewayProvider(browserProvider)) {
+      const solvedByGateway = await waitForGatewaySolve(
+        input.session_id,
+        signal
+      );
+      if (solvedByGateway) {
+        await checkpoint(scope, input.session_id, {
+          action: "managed_solve",
+          phase: "captcha",
+          state: "already_solved",
+        });
+        return {
+          kinds: [],
+          state: "already_solved" as const,
+        };
+      }
+    }
 
     const inspectResponse = await executeCaptchaPlaywright(
       input.session_id,
@@ -118,16 +139,7 @@ export default defineTool({
         });
       }
 
-      await kernel.browsers.computer.clickMouse(
-        input.session_id,
-        {
-          button: "left",
-          click_type: "click",
-          x: inspected.clicked.x,
-          y: inspected.clicked.y,
-        },
-        { signal }
-      );
+      await clickAt(input.session_id, inspected.clicked, signal);
     }
 
     const completeResponse = await executeCaptchaPlaywright(
@@ -218,6 +230,66 @@ async function checkpoint(
   );
 }
 
+async function clickAt(
+  sessionId: string,
+  point: { x: number; y: number },
+  signal?: AbortSignal
+) {
+  if (isGatewayProvider(browserProvider)) {
+    await browserProvider.runAction(
+      sessionId,
+      {
+        click_mouse: {
+          button: "left",
+          click_type: "click",
+          x: point.x,
+          y: point.y,
+        },
+        type: "click_mouse",
+      },
+      signal
+    );
+    return;
+  }
+  await kernel.browsers.computer.clickMouse(
+    sessionId,
+    {
+      button: "left",
+      click_type: "click",
+      x: point.x,
+      y: point.y,
+    },
+    { signal }
+  );
+}
+
+/**
+ * Asks Brightdata's built-in solver whether it detected and solved a captcha.
+ * The command is a Brightdata CDP extension; an unknown-command error means
+ * the manual path proceeds as usual.
+ */
+async function waitForGatewaySolve(sessionId: string, signal?: AbortSignal) {
+  try {
+    return await browserProvider.withCdpPage(
+      sessionId,
+      async ({ send }) => {
+        const outcome = await send("Captcha.waitForSolve", {
+          detectTimeout: 10_000,
+        });
+        return (
+          typeof outcome === "object" &&
+          outcome !== null &&
+          "status" in outcome &&
+          outcome.status === "solve_finished"
+        );
+      },
+      signal
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function executeCaptchaPlaywright(
   sessionId: string,
   code: string,
@@ -226,10 +298,10 @@ async function executeCaptchaPlaywright(
   signal?: AbortSignal
 ) {
   try {
-    return await kernel.browsers.playwright.execute(
+    return await browserProvider.executePlaywright(
       sessionId,
-      { code, timeout_sec: 30 },
-      { signal }
+      { code, timeoutSec: 30 },
+      signal
     );
   } catch (error: unknown) {
     const surfaced = await handleBrowserToolFailure({

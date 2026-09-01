@@ -1,0 +1,29 @@
+# Fly.io config for the browser gateway. Sessions live in this process's
+# memory (CDP WebSockets to Brightdata), so run exactly ONE always-on machine:
+#   fly scale count 1
+app = "foray-browser-gateway"
+primary_region = "iad"
+
+[build]
+dockerfile = "services/browser-gateway/Dockerfile"
+
+[env]
+PORT = "8080"
+
+[http_service]
+internal_port = 8080
+force_https = true
+auto_stop_machines = false
+auto_start_machines = false
+min_machines_running = 1
+
+[[http_service.checks]]
+interval = "15s"
+timeout = "5s"
+grace_period = "10s"
+method = "GET"
+path = "/health"
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = "512mb"

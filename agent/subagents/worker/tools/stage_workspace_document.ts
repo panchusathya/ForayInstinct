@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { readCandidateDocument } from "@/db/services/candidate-documents";
-import { kernel } from "@/lib/kernel";
+import { browserProvider } from "@/lib/browser";
 
 const inputSchema = z.object({
   document_id: z.string().min(1).max(80),
@@ -30,7 +30,8 @@ export default defineTool({
     }
     const filename = safeFilename(document.filename);
     const path = `/tmp/workspace-${input.document_id}-${filename}`;
-    await kernel.browsers.fs.writeFile(input.session_id, document.bytes, {
+    await browserProvider.stageFile(input.session_id, {
+      bytes: document.bytes,
       path,
     });
     return { filename, path };

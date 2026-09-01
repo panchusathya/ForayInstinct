@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { kernel } from "@/lib/kernel";
+import { browserProvider } from "@/lib/browser";
 
 const postActionBrowserStateSchema = z.object({
   botOrChallenge: z.boolean(),
@@ -94,11 +94,11 @@ export async function inspectPostActionBrowserState(
   sessionId: string,
   signal?: AbortSignal
 ): Promise<PostActionBrowserState | undefined> {
-  const response = await kernel.browsers.playwright
-    .execute(
+  const response = await browserProvider
+    .executePlaywright(
       sessionId,
-      { code: postActionBrowserStateProbeCode, timeout_sec: 10 },
-      { signal }
+      { code: postActionBrowserStateProbeCode, timeoutSec: 10 },
+      signal
     )
     .catch(() => undefined);
   const parsed = postActionBrowserStateSchema.safeParse(response?.result);

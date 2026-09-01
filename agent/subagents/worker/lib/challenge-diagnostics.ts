@@ -4,7 +4,7 @@ import {
 } from "@/agent/subagents/worker/lib/captcha-solver";
 import { deleteBrowserSession } from "@/db/services/browsers";
 import type { AccessScope } from "@/lib/access-scope";
-import { kernel } from "@/lib/kernel";
+import { browserProvider } from "@/lib/browser";
 
 /**
  * Why a browser call could not reach the page, split by the layer that
@@ -16,10 +16,6 @@ import { kernel } from "@/lib/kernel";
  */
 export function describeBrowserSessionFailure(error: unknown) {
   if (typeof error === "object" && error !== null) {
-    if ("status" in error) {
-      if (error.status === 410) return "session_gone";
-      if (error.status === 404) return "session_not_found";
-    }
     if (
       "error" in error &&
       typeof error.error === "object" &&
@@ -28,6 +24,19 @@ export function describeBrowserSessionFailure(error: unknown) {
     ) {
       if (error.error.code === "session_gone") return "session_gone";
       if (error.error.code === "not_found") return "session_not_found";
+      if (error.error.code === "session_not_found") {
+        return "session_not_found";
+      }
+      // The gateway's Brightdata sessions are pinned to one registrable
+      // domain; a session killed by a cross-domain hop needs different
+      // guidance than an expired one.
+      if (error.error.code === "cross_domain_navigation") {
+        return "cross_domain_navigation";
+      }
+    }
+    if ("status" in error) {
+      if (error.status === 410) return "session_gone";
+      if (error.status === 404) return "session_not_found";
     }
   }
   if (
@@ -57,7 +66,7 @@ export const browserSessionNotOwnedMessage = "Browser session not found.";
  */
 export function isDeadBrowserExecutionError(error: string | undefined) {
   if (!error) return false;
-  return /target (?:page|frame|context)?\s*(?:has been )?(?:closed|crashed)|browser has (?:been )?(?:closed|disconnected)|session (?:closed|gone|no longer exists)|browser is not connected/iu.test(
+  return /target (?:page|frame|context)?\s*(?:has been )?(?:closed|crashed)|browser has (?:been )?(?:closed|disconnected)|session (?:closed|gone|no longer exists)|browser is not connected|websocket (?:closed|disconnected|error)|connection (?:closed|terminated)/iu.test(
     error
   );
 }
@@ -119,11 +128,15 @@ export function browserExecutionFailureDetails(error: unknown) {
   };
 }
 
-/** Kernel has reclaimed the session, whatever the local row still says. */
-export function isKernelSessionDead(
+/** The backend has reclaimed the session, whatever the local row still says. */
+export function isBrowserSessionDead(
   failure: ReturnType<typeof describeBrowserSessionFailure>
 ) {
-  return failure === "session_gone" || failure === "session_not_found";
+  return (
+    failure === "session_gone" ||
+    failure === "session_not_found" ||
+    failure === "cross_domain_navigation"
+  );
 }
 
 /**
@@ -189,8 +202,13 @@ export async function handleBrowserToolFailure(input: {
     tool: input.tool,
     workspace_id: input.scope.workspaceId,
   });
-  if (isKernelSessionDead(failure)) {
+  if (isBrowserSessionDead(failure)) {
     await forgetDeadBrowserSession(input.scope, input.sessionId);
+  }
+  if (failure === "cross_domain_navigation") {
+    return new Error(
+      `Browser session ${input.sessionId} ended because the page left the domain the session was created for. Create a new browser with manage_browsers, passing start_url set to the destination you were navigating to, and continue there; do not reuse this session_id.`
+    );
   }
   return browserSessionEndedError(input.sessionId);
 }
@@ -249,10 +267,10 @@ export async function logChallengeProbe(input: {
   readonly workspaceId: string;
 }) {
   try {
-    const response = await kernel.browsers.playwright.execute(
+    const response = await browserProvider.executePlaywright(
       input.sessionId,
-      { code: captchaProbeCode, timeout_sec: 10 },
-      { signal: input.signal }
+      { code: captchaProbeCode, timeoutSec: 10 },
+      input.signal
     );
     const probe = normalizeCaptchaProbeResult(response);
     if (!probe) {

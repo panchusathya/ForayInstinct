@@ -1,4 +1,4 @@
-import type { PlaywrightExecuteResponse } from "@onkernel/sdk/resources/browsers";
+import type { PlaywrightResponse } from "@/lib/browser/contract";
 import { z } from "zod";
 
 const captchaKindSchema = z.enum([
@@ -419,7 +419,7 @@ return {
 `;
 
 export function normalizeCaptchaInspectResult(
-  response: PlaywrightExecuteResponse
+  response: PlaywrightResponse
 ): z.infer<typeof captchaInspectResultSchema> | undefined {
   if (!response.success) return undefined;
   const parsed = captchaInspectResultSchema.safeParse(response.result);
@@ -427,7 +427,7 @@ export function normalizeCaptchaInspectResult(
 }
 
 export function normalizeCaptchaProbeResult(
-  response: PlaywrightExecuteResponse
+  response: PlaywrightResponse
 ): z.infer<typeof captchaProbeResultSchema> | undefined {
   if (!response.success) return undefined;
   const parsed = captchaProbeResultSchema.safeParse(response.result);
@@ -435,7 +435,7 @@ export function normalizeCaptchaProbeResult(
 }
 
 export function normalizeCaptchaCompleteResult(
-  response: PlaywrightExecuteResponse
+  response: PlaywrightResponse
 ): z.infer<typeof captchaCompleteResultSchema> | undefined {
   if (!response.success) return undefined;
   const parsed = captchaCompleteResultSchema.safeParse(response.result);

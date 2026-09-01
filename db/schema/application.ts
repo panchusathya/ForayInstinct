@@ -276,7 +276,7 @@ export const encryptedSecrets = pgTable(
     }).onDelete("cascade"),
     check(
       "encrypted_secrets_namespace_check",
-      sql`${table.namespace} = 'vault'`
+      sql`${table.namespace} in ('vault', 'browser-state')`
     ),
   ]
 );

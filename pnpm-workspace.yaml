@@ -1,5 +1,6 @@
 packages:
   - "."
+  - "services/browser-gateway"
 
 minimumReleaseAgeStrict: true
 minimumReleaseAge: 1440

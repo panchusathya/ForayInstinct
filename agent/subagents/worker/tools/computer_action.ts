@@ -1,6 +1,12 @@
 import { defineTool, toolOutput, toolOutputPart } from "eve/tools";
 import { z } from "zod";
+import { browserProvider, isGatewayProvider } from "@/lib/browser";
+import type { GatewayAction } from "@/lib/browser/contract";
 import { kernel } from "@/lib/kernel";
+import {
+  vaultScreenshotMaskCss,
+  vaultScreenshotMaskStyleId,
+} from "@/lib/vault-screenshot-mask";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/browser-run-evidence";
@@ -22,12 +28,8 @@ const actionSchema = z.object({
     "press_key",
     "scroll",
     "drag_mouse",
-    "set_cursor",
     "sleep",
-    "write_clipboard",
-    "read_clipboard",
     "screenshot",
-    "get_mouse_position",
   ]),
   click_mouse: z
     .object({
@@ -78,11 +80,9 @@ const actionSchema = z.object({
       hold_keys: z.array(z.string()).optional(),
     })
     .optional(),
-  set_cursor: z.object({ hidden: z.boolean() }).optional(),
   sleep: z
     .object({ duration_ms: z.number().int().min(0).max(2_000) })
     .optional(),
-  write_clipboard: z.object({ text: z.string() }).optional(),
   screenshot: z
     .object({
       region: z
@@ -107,7 +107,7 @@ const outputSchema = z.object({
   data: z.unknown().optional(),
   message: z.string(),
   mimeType: z.literal("image/png").optional(),
-  screenshotBase64: z.string().optional(),
+  screenshotsBase64: z.array(z.string()).optional(),
 });
 
 export default defineTool({
@@ -119,121 +119,18 @@ export default defineTool({
     const scope = await requireWorkerScope(context);
     await requireOwnedBrowserSession(scope, input.session_id);
 
-    const computer = kernel.browsers.computer;
-    const data: unknown[] = [];
     let browserState: Awaited<ReturnType<typeof inspectPostActionBrowserState>>;
     let blockerInstruction: string | undefined;
-    let screenshotBase64: string | undefined;
+    const screenshotsBase64: string[] = [];
 
     try {
       for (const action of input.actions) {
-        switch (action.type) {
-          case "click_mouse":
-            await computer.clickMouse(
-              input.session_id,
-              requiredAction(action.click_mouse, action.type),
-              { signal: context.abortSignal }
-            );
-            break;
-          case "move_mouse":
-            await computer.moveMouse(
-              input.session_id,
-              requiredAction(action.move_mouse, action.type),
-              { signal: context.abortSignal }
-            );
-            break;
-          case "type_text":
-            await computer.typeText(
-              input.session_id,
-              requiredAction(action.type_text, action.type),
-              { signal: context.abortSignal }
-            );
-            break;
-          case "press_key":
-            await computer.pressKey(
-              input.session_id,
-              requiredAction(action.press_key, action.type),
-              { signal: context.abortSignal }
-            );
-            break;
-          case "scroll":
-            await computer.scroll(
-              input.session_id,
-              requiredAction(action.scroll, action.type),
-              { signal: context.abortSignal }
-            );
-            break;
-          case "drag_mouse":
-            await computer.dragMouse(
-              input.session_id,
-              requiredAction(action.drag_mouse, action.type),
-              { signal: context.abortSignal }
-            );
-            break;
-          case "set_cursor":
-            data.push(
-              await computer.setCursorVisibility(
-                input.session_id,
-                requiredAction(action.set_cursor, action.type),
-                { signal: context.abortSignal }
-              )
-            );
-            break;
-          case "sleep":
-            await computer.batch(
-              input.session_id,
-              {
-                actions: [
-                  {
-                    sleep: requiredAction(action.sleep, action.type),
-                    type: "sleep",
-                  },
-                ],
-              },
-              { signal: context.abortSignal }
-            );
-            break;
-          case "write_clipboard":
-            await computer.writeClipboard(
-              input.session_id,
-              requiredAction(action.write_clipboard, action.type),
-              { signal: context.abortSignal }
-            );
-            break;
-          case "read_clipboard":
-            data.push(
-              await computer.readClipboard(input.session_id, {
-                signal: context.abortSignal,
-              })
-            );
-            break;
-          case "get_mouse_position":
-            data.push(
-              await computer.getMousePosition(input.session_id, {
-                signal: context.abortSignal,
-              })
-            );
-            break;
-          case "screenshot": {
-            const removeMask = await maskVaultFields(
-              input.session_id,
-              context.abortSignal
-            );
-            try {
-              const response = await computer.captureScreenshot(
-                input.session_id,
-                action.screenshot,
-                { signal: context.abortSignal }
-              );
-              screenshotBase64 = Buffer.from(
-                await response.arrayBuffer()
-              ).toString("base64");
-            } finally {
-              await removeMask();
-            }
-            break;
-          }
-        }
+        const captured = await runOneAction(
+          input.session_id,
+          action,
+          context.abortSignal
+        );
+        screenshotsBase64.push(...captured);
         // A batch can put exploratory recovery actions after a submit. Stop
         // before they can refill or submit again if that click opened an OTP
         // or a bot challenge.
@@ -267,13 +164,13 @@ export default defineTool({
         context.abortSignal
       );
       return outputSchema.parse({
-        data: data.length > 0 ? data : undefined,
         message:
           blockerInstruction ??
           `Executed ${String(input.actions.length)} computer action${input.actions.length === 1 ? "" : "s"}.`,
         browserState,
-        mimeType: screenshotBase64 ? "image/png" : undefined,
-        screenshotBase64,
+        mimeType: screenshotsBase64.length > 0 ? "image/png" : undefined,
+        screenshotsBase64:
+          screenshotsBase64.length > 0 ? screenshotsBase64 : undefined,
       });
     } catch (error) {
       await recordBrowserActionCheckpoint(
@@ -299,7 +196,7 @@ export default defineTool({
     }
   },
   toModelOutput(output) {
-    if (!output.screenshotBase64) {
+    if (!output.screenshotsBase64 || output.screenshotsBase64.length === 0) {
       return toolOutput.json({
         data: output.data,
         message: output.message,
@@ -311,12 +208,124 @@ export default defineTool({
           ? output.message
           : `${output.message}\n${JSON.stringify(output.data)}`
       ),
-      toolOutputPart.file(output.screenshotBase64, {
-        mediaType: output.mimeType ?? "image/png",
-      }),
+      ...output.screenshotsBase64.map((screenshot) =>
+        toolOutputPart.file(screenshot, {
+          mediaType: output.mimeType ?? "image/png",
+        })
+      ),
     ]);
   },
 });
+
+/** Runs a single action; returns any screenshots it captured. */
+async function runOneAction(
+  sessionId: string,
+  action: z.infer<typeof actionSchema>,
+  signal: AbortSignal
+): Promise<string[]> {
+  if (isGatewayProvider(browserProvider)) {
+    const gatewayAction: GatewayAction =
+      action.type === "screenshot"
+        ? {
+            ...action,
+            // The gateway applies the vault mask around its own capture; the
+            // mask has to ride along because the gateway knows nothing about
+            // vault fields.
+            screenshot: {
+              ...action.screenshot,
+              mask_css: vaultScreenshotMaskCss,
+              mask_style_id: vaultScreenshotMaskStyleId,
+            },
+          }
+        : action;
+    const result = await browserProvider.runAction(
+      sessionId,
+      gatewayAction,
+      signal
+    );
+    return result.screenshotsBase64 ?? [];
+  }
+  return runKernelAction(sessionId, action, signal);
+}
+
+async function runKernelAction(
+  sessionId: string,
+  action: z.infer<typeof actionSchema>,
+  signal: AbortSignal
+): Promise<string[]> {
+  const computer = kernel.browsers.computer;
+  switch (action.type) {
+    case "click_mouse":
+      await computer.clickMouse(
+        sessionId,
+        requiredAction(action.click_mouse, action.type),
+        { signal }
+      );
+      return [];
+    case "move_mouse":
+      await computer.moveMouse(
+        sessionId,
+        requiredAction(action.move_mouse, action.type),
+        { signal }
+      );
+      return [];
+    case "type_text":
+      await computer.typeText(
+        sessionId,
+        requiredAction(action.type_text, action.type),
+        { signal }
+      );
+      return [];
+    case "press_key":
+      await computer.pressKey(
+        sessionId,
+        requiredAction(action.press_key, action.type),
+        { signal }
+      );
+      return [];
+    case "scroll":
+      await computer.scroll(
+        sessionId,
+        requiredAction(action.scroll, action.type),
+        { signal }
+      );
+      return [];
+    case "drag_mouse":
+      await computer.dragMouse(
+        sessionId,
+        requiredAction(action.drag_mouse, action.type),
+        { signal }
+      );
+      return [];
+    case "sleep":
+      await computer.batch(
+        sessionId,
+        {
+          actions: [
+            {
+              sleep: requiredAction(action.sleep, action.type),
+              type: "sleep",
+            },
+          ],
+        },
+        { signal }
+      );
+      return [];
+    case "screenshot": {
+      const removeMask = await maskVaultFields(sessionId, signal);
+      try {
+        const response = await computer.captureScreenshot(
+          sessionId,
+          action.screenshot,
+          { signal }
+        );
+        return [Buffer.from(await response.arrayBuffer()).toString("base64")];
+      } finally {
+        await removeMask();
+      }
+    }
+  }
+}
 
 function requiredAction<T>(value: T | undefined, action: string): T {
   if (value === undefined) {

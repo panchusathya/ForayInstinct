@@ -41,7 +41,14 @@ export const env = createEnv({
     DATABASE_URL: previewDeployment
       ? databaseUrlSchema.default(previewDatabaseUrl)
       : databaseUrlSchema,
-    KERNEL_API_KEY: requiredValue,
+    // Which backend hosts worker browsers. "kernel" keeps Kernel-hosted
+    // sessions; "gateway" routes through the Brightdata browser gateway
+    // service. The variable is the rollout and rollback switch.
+    BROWSER_PROVIDER: z.enum(["kernel", "gateway"]).default("kernel"),
+    BROWSER_GATEWAY_URL: z.url().optional(),
+    BROWSER_GATEWAY_SECRET: requiredValue.optional(),
+    // Required while BROWSER_PROVIDER is "kernel" (enforced below).
+    KERNEL_API_KEY: requiredValue.optional(),
     // Optional Kernel dashboard proxy. When set, worker browsers keep
     // stealth (CAPTCHA solver) and replace Kernel's default shared ISP
     // exit with this proxy.
@@ -71,7 +78,7 @@ export const env = createEnv({
     // GoForay bridge. Empty keeps the upstream OpenInstinct experience
     // usable; deployed candidate workflows require both values.
     EXA_API_KEY: requiredValue.optional(),
-    JUICEBOX_API_URL: z.string().url().optional(),
+    JUICEBOX_API_URL: z.url().optional(),
     OPENINSTINCT_SHARED_SECRET: z.string().min(32).optional(),
 
     // Optional
@@ -120,6 +127,22 @@ if (
 ) {
   throw new Error(
     "JUICEBOX_API_URL and OPENINSTINCT_SHARED_SECRET must be configured together."
+  );
+}
+
+if (env.BROWSER_PROVIDER === "kernel" && env.KERNEL_API_KEY === undefined) {
+  throw new Error(
+    'KERNEL_API_KEY is required while BROWSER_PROVIDER is "kernel".'
+  );
+}
+
+if (
+  env.BROWSER_PROVIDER === "gateway" &&
+  (env.BROWSER_GATEWAY_URL === undefined ||
+    env.BROWSER_GATEWAY_SECRET === undefined)
+) {
+  throw new Error(
+    'BROWSER_GATEWAY_URL and BROWSER_GATEWAY_SECRET are required while BROWSER_PROVIDER is "gateway".'
   );
 }
 const authHostname = new URL(env.BETTER_AUTH_URL).hostname;

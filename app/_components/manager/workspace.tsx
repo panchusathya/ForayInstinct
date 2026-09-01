@@ -64,9 +64,9 @@ export function WorkspaceManager({
                 {browserReady ? "Connected" : "Unavailable"}
               </span>
             }
-            description="Run isolated browsers in your Kernel account."
+            description="Run isolated remote browsers for applications."
             icon={<CloudIcon />}
-            label="Kernel browser"
+            label="Managed browser"
           />
           <ConnectorRow
             action={
@@ -204,7 +204,7 @@ function channelAvailabilityMessage({
   const messages = [
     browserReady
       ? "WebChat is ready."
-      : "KERNEL_API_KEY is required to enable WebChat.",
+      : "A browser backend (KERNEL_API_KEY or the browser gateway) is required to enable WebChat.",
     linqPhoneNumber
       ? `iMessage opens ${linqPhoneNumber}.`
       : "Set up Linq to enable iMessage.",

@@ -5,8 +5,8 @@ import {
   browserExecutionFailureDetails,
   describeBrowserSessionFailure,
   diagnosticErrorCode,
+  isBrowserSessionDead,
   isDeadBrowserExecutionError,
-  isKernelSessionDead,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
 
 describe("browser session failure classification", () => {
@@ -99,12 +99,26 @@ describe("browser session failure classification", () => {
     });
   });
 
-  it("treats only a Kernel-side death as reclaimed", () => {
-    expect(isKernelSessionDead("session_gone")).toBe(true);
-    expect(isKernelSessionDead("session_not_found")).toBe(true);
+  it("treats only a backend-side death as reclaimed", () => {
+    expect(isBrowserSessionDead("session_gone")).toBe(true);
+    expect(isBrowserSessionDead("session_not_found")).toBe(true);
+    // A gateway session killed by a cross-domain hop is just as unrecoverable.
+    expect(isBrowserSessionDead("cross_domain_navigation")).toBe(true);
     // The row is gone locally, so there is nothing left to reconcile.
-    expect(isKernelSessionDead("session_not_owned")).toBe(false);
-    expect(isKernelSessionDead(undefined)).toBe(false);
+    expect(isBrowserSessionDead("session_not_owned")).toBe(false);
+    expect(isBrowserSessionDead(undefined)).toBe(false);
+  });
+
+  it("classifies the gateway's cross-domain code distinctly", () => {
+    expect(
+      describeBrowserSessionFailure(
+        kernelError(
+          410,
+          "cross_domain_navigation",
+          "session left its initial domain"
+        )
+      )
+    ).toBe("cross_domain_navigation");
   });
 
   it("tells the worker to create a new browser instead of retrying", () => {

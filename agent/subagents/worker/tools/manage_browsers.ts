@@ -1,8 +1,3 @@
-import type {
-  BrowserCreateResponse,
-  BrowserRetrieveResponse,
-  BrowserUpdateResponse,
-} from "@onkernel/sdk/resources/browsers";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import {
@@ -12,8 +7,16 @@ import {
 } from "@/db/services/browsers";
 import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoints";
 import type { AccessScope } from "@/lib/access-scope";
-import { env } from "@/lib/env";
-import { kernel } from "@/lib/kernel";
+import {
+  browserProvider,
+  isGatewayProvider,
+  type BrowserSessionDescriptor,
+} from "@/lib/browser";
+import type { PlaywrightResponse } from "@/lib/browser/contract";
+import {
+  readWorkspaceBrowserState,
+  saveWorkspaceBrowserState,
+} from "@/lib/manager/server/browser-state";
 import { ensureKernelBrowserProfile } from "@/lib/manager/server/kernel-profile";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
@@ -21,7 +24,7 @@ import {
   describeBrowserSessionFailure,
   diagnosticErrorCode,
   forgetDeadBrowserSession,
-  isKernelSessionDead,
+  isBrowserSessionDead,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
 import {
   isResolvedWorkdayRoute,
@@ -38,7 +41,7 @@ const browserTimeoutFloorSeconds = 15 * 60;
 
 const inputSchema = z
   .object({
-    action: z.enum(["create", "update", "list", "get", "delete"]),
+    action: z.enum(["create", "list", "get", "delete"]),
     session_id: z.string().optional(),
     start_url: z.url().optional(),
     timeout_seconds: z
@@ -73,36 +76,36 @@ export default defineTool({
         const isWorkday =
           input.start_url !== undefined &&
           isWorkdayApplicationUrl(input.start_url);
-        const profileId = await ensureKernelBrowserProfile(scope, signal);
-        const browser = await kernel.browsers.create(
+        const persistence = await sessionPersistence(scope, signal);
+        const browser = await browserProvider.createSession(
           {
-            // Kernel start_url navigation is fire-and-forget. Workday needs a
-            // settled page before its account chooser can be routed safely.
-            start_url: isWorkday ? undefined : input.start_url,
-            stealth: true,
-            telemetry: { enabled: true },
-            timeout_seconds:
-              input.timeout_seconds ?? browserTimeoutFloorSeconds,
+            // Workday needs a settled page before its account chooser can be
+            // routed safely, so the router performs the navigation itself.
+            startUrl: isWorkday ? undefined : input.start_url,
+            timeoutSeconds: input.timeout_seconds ?? browserTimeoutFloorSeconds,
             viewport: browserViewport(input),
-            ...(profileId === undefined
-              ? {}
-              : { profile: { id: profileId, save_changes: true } }),
-            ...(env.KERNEL_PROXY_ID === undefined
-              ? {}
-              : { proxy: { id: env.KERNEL_PROXY_ID } }),
+            ...persistence,
           },
-          { signal }
+          signal
         );
         try {
           await createBrowserSession(scope, {
-            createdAt: browser.created_at,
+            createdAt: browser.created_at ?? new Date().toISOString(),
             sessionId: browser.session_id,
           });
         } catch (error) {
-          await kernel.browsers
-            .deleteByID(browser.session_id, { signal })
+          await browserProvider
+            .deleteSession(browser.session_id, signal)
             .catch(() => undefined);
           throw error;
+        }
+        if (browser.devtools_url) {
+          // Operator-facing only: the DevTools inspector grants full page
+          // control and dies with the session, so it never reaches the model.
+          console.info("[browser-session] devtools inspector available", {
+            browser_session_id: browser.session_id,
+            devtools_url: browser.devtools_url,
+          });
         }
         await recordCheckpoint(scope, browser.session_id, {
           action: "create",
@@ -122,13 +125,13 @@ export default defineTool({
             const attempt = index + 1;
             let candidate: ReturnType<typeof normalizeWorkdayRouteResult>;
             try {
-              const response = await kernel.browsers.playwright.execute(
+              const response = await browserProvider.executePlaywright(
                 browser.session_id,
                 {
                   code: workdayRouterCode(input.start_url, strategy),
-                  timeout_sec: workdayRouteTimeoutSec,
+                  timeoutSec: workdayRouteTimeoutSec,
                 },
-                { signal }
+                signal
               );
               candidate = {
                 ...normalizeWorkdayRouteResult(response),
@@ -147,8 +150,8 @@ export default defineTool({
               });
               logWorkdayRoute({
                 applicationUrl: input.start_url,
-                browser,
                 response,
+                sessionId: browser.session_id,
                 workday: candidate,
               });
             } catch (error) {
@@ -190,13 +193,13 @@ export default defineTool({
             !isResolvedWorkdayRoute(workday.state)
           ) {
             try {
-              await kernel.browsers.playwright.execute(
+              await browserProvider.executePlaywright(
                 browser.session_id,
                 {
                   code: workdayRestoreCode(input.start_url),
-                  timeout_sec: 20,
+                  timeoutSec: 20,
                 },
-                { signal }
+                signal
               );
             } catch (error) {
               if (signal.aborted) throw error;
@@ -216,12 +219,12 @@ export default defineTool({
         const browsers = await Promise.all(
           records.map(async ({ sessionId }) => {
             try {
-              const browser = await kernel.browsers.retrieve(
+              const browser = await browserProvider.getSession(
                 sessionId,
-                { include_deleted: includeDeleted },
-                { signal }
+                { includeDeleted },
+                signal
               );
-              const value = browserDescriptor(browser);
+              const value = modelDescriptor(browser);
               if (input.status === "deleted" && value.status !== "deleted") {
                 return null;
               }
@@ -230,9 +233,10 @@ export default defineTool({
               }
               return value;
             } catch (error: unknown) {
-              // A session Kernel has reclaimed must not linger as a local row:
-              // the worker would keep passing its id to tools that all fail.
-              if (isKernelSessionDead(describeBrowserSessionFailure(error))) {
+              // A session the backend has reclaimed must not linger as a local
+              // row: the worker would keep passing its id to tools that all
+              // fail.
+              if (isBrowserSessionDead(describeBrowserSessionFailure(error))) {
                 await forgetDeadBrowserSession(scope, sessionId);
               }
               return null;
@@ -253,28 +257,36 @@ export default defineTool({
       case "get": {
         const sessionId = requireSessionId(input.session_id);
         await requireOwnedBrowserSession(scope, sessionId);
-        return browserDescriptor(
-          await kernel.browsers.retrieve(sessionId, {}, { signal })
+        return modelDescriptor(
+          await browserProvider.getSession(sessionId, {}, signal)
         );
-      }
-      case "update": {
-        const sessionId = requireSessionId(input.session_id);
-        await requireOwnedBrowserSession(scope, sessionId);
-        const viewport = browserViewport(input);
-        const browser = viewport
-          ? await kernel.browsers.update(sessionId, { viewport }, { signal })
-          : await kernel.browsers.retrieve(sessionId, {}, { signal });
-        return lifecycleResult(browser);
       }
       case "delete": {
         const sessionId = requireSessionId(input.session_id);
         await requireOwnedBrowserSession(scope, sessionId);
         try {
-          await kernel.browsers.deleteByID(sessionId, { signal });
+          const { storageState } = await browserProvider.deleteSession(
+            sessionId,
+            signal
+          );
+          if (storageState !== undefined) {
+            // The gateway hands back signed-in state on close, the way
+            // deleting a Kernel browser flushes cookies into its profile.
+            await saveWorkspaceBrowserState(scope, storageState).catch(
+              (error: unknown) => {
+                console.error("[browser-state] persistence failed", {
+                  error:
+                    error instanceof Error ? error.message : "write failed",
+                  workspace_id: scope.workspaceId,
+                });
+              }
+            );
+          }
         } catch (error: unknown) {
-          // Kernel expiring the session first must not leave the local row
-          // behind. Deleting something already gone is the outcome asked for.
-          if (!isKernelSessionDead(describeBrowserSessionFailure(error))) {
+          // The backend expiring the session first must not leave the local
+          // row behind. Deleting something already gone is the outcome asked
+          // for.
+          if (!isBrowserSessionDead(describeBrowserSessionFailure(error))) {
             throw error;
           }
         }
@@ -284,6 +296,13 @@ export default defineTool({
     }
   },
 });
+
+async function sessionPersistence(scope: AccessScope, signal?: AbortSignal) {
+  if (isGatewayProvider(browserProvider)) {
+    return { storageState: await readWorkspaceBrowserState(scope) };
+  }
+  return { kernelProfileId: await ensureKernelBrowserProfile(scope, signal) };
+}
 
 function requireSessionId(sessionId: string | undefined) {
   if (!sessionId) throw new Error("A browser session ID is required.");
@@ -300,25 +319,22 @@ function browserViewport(input: z.infer<typeof inputSchema>) {
   return { height, width };
 }
 
-type KernelBrowser =
-  | BrowserCreateResponse
-  | BrowserRetrieveResponse
-  | BrowserUpdateResponse;
-
-function browserDescriptor(browser: KernelBrowser) {
+function modelDescriptor(browser: BrowserSessionDescriptor) {
   return {
-    browser_live_view_url: browser.browser_live_view_url,
+    ...(browser.browser_live_view_url === undefined
+      ? {}
+      : { browser_live_view_url: browser.browser_live_view_url }),
     session_id: browser.session_id,
-    status: browser.deleted_at ? "deleted" : "active",
-    viewport: browser.viewport ?? undefined,
+    status: browser.status === "deleted" ? "deleted" : "active",
+    viewport: browser.viewport,
   };
 }
 
 function lifecycleResult(
-  browser: KernelBrowser,
+  browser: BrowserSessionDescriptor,
   workday?: ReturnType<typeof normalizeWorkdayRouteResult>
 ) {
-  const value = browserDescriptor(browser);
+  const value = modelDescriptor(browser);
   return {
     browser: value,
     next_actions: [
@@ -330,7 +346,7 @@ function lifecycleResult(
           ]),
       `Use execute_playwright_code with session_id "${value.session_id}" for deterministic browser automation.`,
       `Use computer_action with session_id "${value.session_id}" for visual browser control.`,
-      `Use solve_captcha with session_id "${value.session_id}" immediately if Kernel reports visible hCaptcha could not be solved automatically, a checkbox remains, or a lookalike image-selection grid is visible. solve_captcha clicks tiles and writes a lookalike response token; do not request a takeover.`,
+      `Use solve_captcha with session_id "${value.session_id}" immediately if the managed solver reports a visible hCaptcha it could not solve automatically, a checkbox remains, or a lookalike image-selection grid is visible. solve_captcha clicks tiles and writes a lookalike response token; do not request a takeover.`,
       `Use manage_browsers with action "delete" and session_id "${value.session_id}" when finished.`,
     ],
     ...(workday === undefined ? {} : { workday }),
@@ -365,19 +381,19 @@ function workdayNextAction(
 
 function logWorkdayRoute({
   applicationUrl,
-  browser,
   response,
+  sessionId,
   workday,
 }: {
   applicationUrl: string;
-  browser: KernelBrowser;
-  response: Awaited<ReturnType<typeof kernel.browsers.playwright.execute>>;
+  response: PlaywrightResponse;
+  sessionId: string;
   workday: ReturnType<typeof normalizeWorkdayRouteResult>;
 }) {
   const detail = {
     actions: workday.actions ?? [],
     attempt: workday.attempt,
-    browser_session_id: browser.session_id,
+    browser_session_id: sessionId,
     execution_error: diagnosticErrorCode(response.error),
     execution_success: response.success,
     page: safeWorkdayLocation(workday.url),

@@ -2,8 +2,8 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
+import { browserProvider } from "@/lib/browser";
 import { applicationTaskDocument } from "@/lib/goforay/bridge";
-import { kernel } from "@/lib/kernel";
 
 const inputSchema = z.object({
   document_id: z.string().min(1).max(80),
@@ -38,7 +38,8 @@ export default defineTool({
       document.filename || `${input.document_id}.pdf`
     );
     const path = `/tmp/goforay-${input.document_id}-${filename}`;
-    await kernel.browsers.fs.writeFile(input.session_id, document.bytes, {
+    await browserProvider.stageFile(input.session_id, {
+      bytes: new Uint8Array(document.bytes),
       path,
     });
     return { filename, path };

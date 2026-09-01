@@ -110,18 +110,39 @@ describe("environment", () => {
     );
   });
 
-  it.each(["DATABASE_URL", "KERNEL_API_KEY"])(
-    "keeps %s required in local development",
-    async (name) => {
-      vi.stubEnv(name, "");
-      vi.stubEnv("NODE_ENV", "development");
-      vi.stubEnv("VERCEL_ENV", undefined);
+  it.each([
+    ["DATABASE_URL", "Invalid environment variables"],
+    // Optional at the schema level so the gateway provider can run without
+    // it; the cross-field check still fails the kernel default closed.
+    [
+      "KERNEL_API_KEY",
+      'KERNEL_API_KEY is required while BROWSER_PROVIDER is "kernel".',
+    ],
+  ])("keeps %s required in local development", async (name, errorMessage) => {
+    vi.stubEnv(name, "");
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("VERCEL_ENV", undefined);
 
-      await expect(import("../lib/env")).rejects.toThrow(
-        "Invalid environment variables"
-      );
-    }
-  );
+    await expect(import("../lib/env")).rejects.toThrow(errorMessage);
+  });
+
+  it("accepts a missing KERNEL_API_KEY when the gateway provider is active", async () => {
+    vi.stubEnv("KERNEL_API_KEY", "");
+    vi.stubEnv("BROWSER_PROVIDER", "gateway");
+    vi.stubEnv("BROWSER_GATEWAY_URL", "https://gateway.example.com");
+    vi.stubEnv("BROWSER_GATEWAY_SECRET", "gateway-secret");
+
+    const { env } = await import("../lib/env");
+    expect(env.BROWSER_PROVIDER).toBe("gateway");
+  });
+
+  it("requires the gateway address and secret when the gateway is active", async () => {
+    vi.stubEnv("BROWSER_PROVIDER", "gateway");
+
+    await expect(import("../lib/env")).rejects.toThrow(
+      "BROWSER_GATEWAY_URL and BROWSER_GATEWAY_SECRET are required"
+    );
+  });
 
   it.each([
     requiredEnvironment.SECRET_ENCRYPTION_KEY.slice(0, -1),
@@ -138,7 +159,10 @@ describe("environment", () => {
     ["BETTER_AUTH_SECRET", "Invalid environment variables"],
     ["BETTER_AUTH_URL", "Invalid environment variables"],
     ["DATABASE_URL", "Invalid environment variables"],
-    ["KERNEL_API_KEY", "Invalid environment variables"],
+    [
+      "KERNEL_API_KEY",
+      'KERNEL_API_KEY is required while BROWSER_PROVIDER is "kernel".',
+    ],
     ["SECRET_ENCRYPTION_KEY", "Invalid environment variables"],
   ])(
     "rejects a missing required %s value during import",

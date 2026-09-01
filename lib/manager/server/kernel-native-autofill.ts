@@ -1,6 +1,6 @@
-import Kernel from "@onkernel/sdk";
 import { z } from "zod";
-import { env } from "../../env";
+import { browserProvider } from "@/lib/browser";
+import type { CdpPageHandle } from "@/lib/browser";
 import type { AutofillClaim } from "../vault-autofill-protocol";
 import {
   classifyNativeLoginControl,
@@ -12,17 +12,7 @@ import {
   type NativeLoginPurpose,
 } from "./kernel-login-autofill";
 
-const targetListSchema = z.object({
-  targetInfos: z.array(
-    z.object({
-      targetId: z.string(),
-      type: z.string(),
-      url: z.string(),
-    })
-  ),
-});
-
-const attachedTargetSchema = z.object({ sessionId: z.string() });
+type SendCdp = CdpPageHandle["send"];
 
 const frameTreeSchema = z.object({
   frameTree: z.lazy(() => frameTreeNodeSchema),
@@ -102,7 +92,11 @@ export async function currentKernelPageOrigin({
   readonly browserSessionId: string;
   readonly signal?: AbortSignal;
 }) {
-  return withKernelPage(browserSessionId, signal, async ({ origin }) => origin);
+  return browserProvider.withCdpPage(
+    browserSessionId,
+    async ({ origin }) => origin,
+    signal
+  );
 }
 
 export async function currentKernelPageUrl({
@@ -112,7 +106,11 @@ export async function currentKernelPageUrl({
   readonly browserSessionId: string;
   readonly signal?: AbortSignal;
 }) {
-  return withKernelPage(browserSessionId, signal, async ({ url }) => url);
+  return browserProvider.withCdpPage(
+    browserSessionId,
+    async ({ url }) => url,
+    signal
+  );
 }
 
 export async function snapshotKernelPage({
@@ -122,22 +120,21 @@ export async function snapshotKernelPage({
   readonly browserSessionId: string;
   readonly signal?: AbortSignal;
 }) {
-  return withKernelPage(
+  return browserProvider.withCdpPage(
     browserSessionId,
-    signal,
-    async ({ connection, sessionId, url }) => {
-      const pageSessionId = sessionId[0];
-      if (pageSessionId === undefined) return { body: "", url };
+    async ({ send, sessionRefs, url }) => {
+      const pageSessionRef = sessionRefs[0];
+      if (pageSessionRef === undefined) return { body: "", url };
       try {
         const response = evaluatedValueSchema.parse(
-          await connection.send(
+          await send(
             "Runtime.evaluate",
             {
               expression:
                 'document.body ? document.body.innerText.slice(0, 2000) : ""',
               returnByValue: true,
             },
-            pageSessionId
+            pageSessionRef
           )
         );
         return {
@@ -150,7 +147,8 @@ export async function snapshotKernelPage({
       } catch {
         return { body: "", url };
       }
-    }
+    },
+    signal
   );
 }
 
@@ -172,10 +170,9 @@ export async function fillWithKernelNativeAutofill({
   const payload =
     kind === "login" ? undefined : buildNativeAutofillPayload(kind, claims);
 
-  return withKernelPage(
+  return browserProvider.withCdpPage(
     browserSessionId,
-    signal,
-    async ({ connection, origin, sessionId }) => {
+    async ({ origin, send, sessionRefs }) => {
       if (origin !== expectedOrigin) {
         throw new Error(
           "The active tab no longer matches the approved origin."
@@ -184,15 +181,15 @@ export async function fillWithKernelNativeAutofill({
 
       if (kind === "login") {
         const filledClaims = await fillNativeLoginControls(
-          connection,
-          sessionId,
+          send,
+          sessionRefs,
           claims,
           purpose
         );
         return { filledClaims, origin };
       }
 
-      const controls = await inspectControls(connection, sessionId, kind);
+      const controls = await inspectControls(send, sessionRefs, kind);
       if (controls.length === 0) {
         throw new Error("No visible form control is available for autofill.");
       }
@@ -200,7 +197,7 @@ export async function fillWithKernelNativeAutofill({
       let lastError: unknown;
       for (const control of controls) {
         try {
-          await connection.send(
+          await send(
             "Autofill.trigger",
             {
               fieldId: control.backendNodeId,
@@ -219,21 +216,18 @@ export async function fillWithKernelNativeAutofill({
         "Chromium could not autofill any visible control. Focus a field in the intended card or address form and retry.",
         { cause: lastError }
       );
-    }
+    },
+    signal
   );
 }
 
 async function fillNativeLoginControls(
-  connection: CdpConnection,
+  send: SendCdp,
   sessionIds: readonly string[],
   claims: readonly AutofillClaim[],
   purpose: NativeLoginPurpose
 ) {
-  const controls = await inspectNativeLoginControls(
-    connection,
-    sessionIds,
-    purpose
-  );
+  const controls = await inspectNativeLoginControls(send, sessionIds, purpose);
   const focused = controls.find((control) => control.focused);
   const frameControls = focused
     ? [
@@ -255,7 +249,7 @@ async function fillNativeLoginControls(
   }
 
   for (const { control, value } of fills) {
-    const accepted = await fillNativeLoginControl(connection, control, value);
+    const accepted = await fillNativeLoginControl(send, control, value);
     if (!accepted) {
       throw new Error("The login form rejected secure credential autofill.");
     }
@@ -277,7 +271,7 @@ function groupLoginControlsByFrame<
 }
 
 async function inspectNativeLoginControls(
-  connection: CdpConnection,
+  send: SendCdp,
   sessionIds: readonly string[],
   purpose: NativeLoginPurpose
 ) {
@@ -285,15 +279,15 @@ async function inspectNativeLoginControls(
     await Promise.all(
       sessionIds.map(async (sessionId) => {
         try {
-          await connection.send("Page.enable", undefined, sessionId);
+          await send("Page.enable", undefined, sessionId);
           const { frameTree } = frameTreeSchema.parse(
-            await connection.send("Page.getFrameTree", undefined, sessionId)
+            await send("Page.getFrameTree", undefined, sessionId)
           );
           return (
             await Promise.all(
               flattenFrames(frameTree).map(({ id: frameId }) =>
                 inspectNativeLoginFrame(
-                  connection,
+                  send,
                   sessionId,
                   frameId,
                   purpose
@@ -310,20 +304,20 @@ async function inspectNativeLoginControls(
 }
 
 async function inspectNativeLoginFrame(
-  connection: CdpConnection,
+  send: SendCdp,
   sessionId: string,
   frameId: string,
   purpose: NativeLoginPurpose
 ) {
   const { executionContextId } = isolatedWorldSchema.parse(
-    await connection.send(
+    await send(
       "Page.createIsolatedWorld",
       { frameId, worldName: "open-instinct-login-autofill" },
       sessionId
     )
   );
   const response = evaluatedValueSchema.parse(
-    await connection.send(
+    await send(
       "Runtime.evaluate",
       {
         contextId: executionContextId,
@@ -345,7 +339,7 @@ async function inspectNativeLoginFrame(
 }
 
 async function fillNativeLoginControl(
-  connection: CdpConnection,
+  send: SendCdp,
   control: ClassifiedNativeLoginControl & {
     readonly executionContextId: number;
     readonly frameId: string;
@@ -354,7 +348,7 @@ async function fillNativeLoginControl(
   value: string
 ) {
   const evaluated = evaluatedObjectSchema.parse(
-    await connection.send(
+    await send(
       "Runtime.evaluate",
       {
         contextId: control.executionContextId,
@@ -368,7 +362,7 @@ async function fillNativeLoginControl(
 
   try {
     const response = evaluatedBooleanSchema.parse(
-      await connection.send(
+      await send(
         "Runtime.callFunctionOn",
         {
           arguments: [{ value }],
@@ -382,9 +376,9 @@ async function fillNativeLoginControl(
     );
     return response.result.value;
   } finally {
-    await connection
-      .send("Runtime.releaseObject", { objectId }, control.sessionId)
-      .catch(() => undefined);
+    await send("Runtime.releaseObject", { objectId }, control.sessionId).catch(
+      () => undefined
+    );
   }
 }
 
@@ -419,7 +413,7 @@ export function buildNativeAutofillPayload(
 }
 
 async function inspectControls(
-  connection: CdpConnection,
+  send: SendCdp,
   sessionIds: readonly string[],
   kind: "address" | "payment"
 ) {
@@ -427,19 +421,16 @@ async function inspectControls(
     await Promise.all(
       sessionIds.map(async (sessionId) => {
         try {
-          await connection.send("Page.enable", undefined, sessionId);
+          await send("Page.enable", undefined, sessionId);
           const { frameTree } = frameTreeSchema.parse(
-            await connection.send("Page.getFrameTree", undefined, sessionId)
+            await send("Page.getFrameTree", undefined, sessionId)
           );
           return (
             await Promise.all(
               flattenFrames(frameTree).map(({ id: frameId }) =>
-                inspectFrameControls(
-                  connection,
-                  sessionId,
-                  frameId,
-                  kind
-                ).catch(() => [])
+                inspectFrameControls(send, sessionId, frameId, kind).catch(
+                  () => []
+                )
               )
             )
           ).flat();
@@ -458,20 +449,20 @@ async function inspectControls(
 }
 
 async function inspectFrameControls(
-  connection: CdpConnection,
+  send: SendCdp,
   sessionId: string,
   frameId: string,
   kind: "address" | "payment"
 ) {
   const { executionContextId } = isolatedWorldSchema.parse(
-    await connection.send(
+    await send(
       "Page.createIsolatedWorld",
       { frameId, worldName: "open-instinct-autofill" },
       sessionId
     )
   );
   const response = evaluatedValueSchema.parse(
-    await connection.send(
+    await send(
       "Runtime.evaluate",
       {
         contextId: executionContextId,
@@ -487,7 +478,7 @@ async function inspectFrameControls(
     await Promise.all(
       descriptors.map(async (descriptor, order) => {
         const evaluated = evaluatedObjectSchema.parse(
-          await connection.send(
+          await send(
             "Runtime.evaluate",
             {
               contextId: executionContextId,
@@ -501,7 +492,7 @@ async function inspectFrameControls(
 
         try {
           const described = describedNodeSchema.parse(
-            await connection.send("DOM.describeNode", { objectId }, sessionId)
+            await send("DOM.describeNode", { objectId }, sessionId)
           );
           return {
             backendNodeId: described.node.backendNodeId,
@@ -512,9 +503,9 @@ async function inspectFrameControls(
             standard: standardAutocomplete(kind, descriptor.autocomplete),
           };
         } finally {
-          await connection
-            .send("Runtime.releaseObject", { objectId }, sessionId)
-            .catch(() => undefined);
+          await send("Runtime.releaseObject", { objectId }, sessionId).catch(
+            () => undefined
+          );
         }
       })
     )
@@ -531,200 +522,6 @@ const controlInspectionExpression = `(() => {
     return [{ autocomplete: element.autocomplete || "", focused: document.activeElement === element, index }];
   });
 })()`;
-
-async function withKernelPage<T>(
-  browserSessionId: string,
-  signal: AbortSignal | undefined,
-  operation: (page: {
-    readonly connection: CdpConnection;
-    readonly origin: string;
-    readonly sessionId: readonly string[];
-    readonly url: string;
-  }) => Promise<T>
-) {
-  const browser = await new Kernel({
-    apiKey: env.KERNEL_API_KEY,
-  }).browsers.retrieve(browserSessionId, {}, { signal });
-  const connection = await CdpConnection.connect(browser.cdp_ws_url, signal);
-
-  try {
-    const { targetInfos } = targetListSchema.parse(
-      await connection.send("Target.getTargets")
-    );
-    const target = targetInfos.findLast(
-      ({ type, url }) => type === "page" && isWebUrl(url)
-    );
-    if (!target) throw new Error("No active browser tab was found.");
-
-    const { sessionId: pageSessionId } = attachedTargetSchema.parse(
-      await connection.send("Target.attachToTarget", {
-        flatten: true,
-        targetId: target.targetId,
-      })
-    );
-    const sessionIds = [pageSessionId];
-    try {
-      await connection.send("Page.enable", undefined, pageSessionId);
-      const { frameTree } = frameTreeSchema.parse(
-        await connection.send("Page.getFrameTree", undefined, pageSessionId)
-      );
-      const frameIds = new Set(flattenFrames(frameTree).map(({ id }) => id));
-      const iframeTargets = targetInfos.filter(
-        ({ targetId, type }) => type === "iframe" && frameIds.has(targetId)
-      );
-      for (const iframeTarget of iframeTargets) {
-        const attached = attachedTargetSchema.safeParse(
-          await connection
-            .send("Target.attachToTarget", {
-              flatten: true,
-              targetId: iframeTarget.targetId,
-            })
-            .catch(() => undefined)
-        );
-        if (attached.success) sessionIds.push(attached.data.sessionId);
-      }
-
-      return await operation({
-        connection,
-        origin: new URL(target.url).origin,
-        sessionId: sessionIds,
-        url: target.url,
-      });
-    } finally {
-      await Promise.all(
-        sessionIds.map((sessionId) =>
-          connection
-            .send("Target.detachFromTarget", { sessionId })
-            .catch(() => undefined)
-        )
-      );
-    }
-  } finally {
-    connection.close();
-  }
-}
-
-class CdpConnection {
-  readonly #pending = new Map<
-    number,
-    {
-      readonly reject: (reason?: unknown) => void;
-      readonly resolve: (value: unknown) => void;
-    }
-  >();
-  #nextId = 1;
-
-  private constructor(
-    private readonly socket: WebSocket,
-    signal: AbortSignal | undefined
-  ) {
-    socket.addEventListener("message", (event) => {
-      this.#onMessage(event);
-    });
-    socket.addEventListener("close", () => {
-      this.#rejectPending(new Error("The Kernel CDP connection closed."));
-    });
-    signal?.addEventListener(
-      "abort",
-      () => {
-        this.close();
-      },
-      { once: true }
-    );
-  }
-
-  static async connect(url: string, signal?: AbortSignal) {
-    const socket = new WebSocket(url);
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = () => {
-        socket.removeEventListener("open", onOpen);
-        socket.removeEventListener("error", onError);
-        signal?.removeEventListener("abort", onAbort);
-      };
-      const onOpen = () => {
-        cleanup();
-        resolve();
-      };
-      const onError = () => {
-        cleanup();
-        reject(new Error("Could not connect to the Kernel browser over CDP."));
-      };
-      const onAbort = () => {
-        cleanup();
-        socket.close();
-        reject(
-          signal?.reason instanceof Error
-            ? signal.reason
-            : new Error("The CDP connection was aborted.")
-        );
-      };
-      socket.addEventListener("open", onOpen, { once: true });
-      socket.addEventListener("error", onError, { once: true });
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-    return new CdpConnection(socket, signal);
-  }
-
-  send(method: string, params?: object, sessionId?: string) {
-    const id = this.#nextId++;
-    return new Promise<unknown>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.#pending.delete(id);
-        reject(new Error(`Chromium did not respond to ${method}.`));
-      }, 15_000);
-      this.#pending.set(id, {
-        reject(reason) {
-          clearTimeout(timeout);
-          reject(
-            reason instanceof Error
-              ? reason
-              : new Error("The Chromium command failed.")
-          );
-        },
-        resolve(value) {
-          clearTimeout(timeout);
-          resolve(value);
-        },
-      });
-      this.socket.send(JSON.stringify({ id, method, params, sessionId }));
-    });
-  }
-
-  close() {
-    this.socket.close();
-  }
-
-  #onMessage(event: MessageEvent) {
-    if (typeof event.data !== "string") return;
-    let rawMessage: unknown;
-    try {
-      rawMessage = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    const message = cdpResponseSchema.safeParse(rawMessage);
-    if (!message.success || message.data.id === undefined) return;
-    const pending = this.#pending.get(message.data.id);
-    if (!pending) return;
-    this.#pending.delete(message.data.id);
-    if (message.data.error) {
-      pending.reject(new Error(message.data.error.message));
-    } else {
-      pending.resolve(message.data.result);
-    }
-  }
-
-  #rejectPending(error: Error) {
-    for (const { reject } of this.#pending.values()) reject(error);
-    this.#pending.clear();
-  }
-}
-
-const cdpResponseSchema = z.object({
-  error: z.object({ message: z.string() }).optional(),
-  id: z.number().int().optional(),
-  result: z.unknown().optional(),
-});
 
 function flattenFrames(
   node: z.infer<typeof frameTreeNodeSchema>
@@ -765,12 +562,4 @@ function requiredClaim(values: ReadonlyMap<string, string>, token: string) {
   if (!value)
     throw new Error("The saved payment card is incomplete or invalid.");
   return value;
-}
-
-function isWebUrl(value: string) {
-  try {
-    return ["http:", "https:"].includes(new URL(value).protocol);
-  } catch {
-    return false;
-  }
 }

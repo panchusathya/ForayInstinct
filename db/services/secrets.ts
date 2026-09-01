@@ -2,8 +2,11 @@ import { and, eq } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
 import { db, encryptedSecrets } from "@/db";
 
+export type SecretNamespace = "browser-state" | "vault";
+
 export async function writeEncryptedSecret(
   scope: AccessScope,
+  namespace: SecretNamespace,
   id: string,
   encryptedValue: string
 ) {
@@ -13,7 +16,7 @@ export async function writeEncryptedSecret(
     .values({
       encryptedValue,
       id,
-      namespace: "vault",
+      namespace,
       updatedAt,
       workspaceId: scope.workspaceId,
     })
@@ -27,14 +30,18 @@ export async function writeEncryptedSecret(
     });
 }
 
-export async function readEncryptedSecret(scope: AccessScope, id: string) {
+export async function readEncryptedSecret(
+  scope: AccessScope,
+  namespace: SecretNamespace,
+  id: string
+) {
   const rows = await db
     .select({ encryptedValue: encryptedSecrets.encryptedValue })
     .from(encryptedSecrets)
     .where(
       and(
         eq(encryptedSecrets.workspaceId, scope.workspaceId),
-        eq(encryptedSecrets.namespace, "vault"),
+        eq(encryptedSecrets.namespace, namespace),
         eq(encryptedSecrets.id, id)
       )
     )
@@ -42,13 +49,17 @@ export async function readEncryptedSecret(scope: AccessScope, id: string) {
   return rows[0]?.encryptedValue;
 }
 
-export async function deleteEncryptedSecret(scope: AccessScope, id: string) {
+export async function deleteEncryptedSecret(
+  scope: AccessScope,
+  namespace: SecretNamespace,
+  id: string
+) {
   await db
     .delete(encryptedSecrets)
     .where(
       and(
         eq(encryptedSecrets.workspaceId, scope.workspaceId),
-        eq(encryptedSecrets.namespace, "vault"),
+        eq(encryptedSecrets.namespace, namespace),
         eq(encryptedSecrets.id, id)
       )
     );

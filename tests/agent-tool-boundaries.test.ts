@@ -150,9 +150,12 @@ describe("root and worker capability boundaries", () => {
       "manage_browsers",
       "solve_captcha",
     ]) {
+      // Tools reach the browser only through the shared provider; the Kernel
+      // SDK client stays behind lib/browser and lib/kernel.
       const source = readFileSync(`${workerTools}/${tool}.ts`, "utf8");
-      expect(source).toContain('from "@/lib/kernel"');
+      expect(source).toContain('from "@/lib/browser"');
       expect(source).not.toContain("new Kernel(");
+      expect(source).not.toContain("@onkernel/sdk");
     }
     expect(readFileSync(`${workerTools}/fill_from_vault.ts`, "utf8")).toContain(
       'from "@/lib/manager/server/kernel-native-autofill"'

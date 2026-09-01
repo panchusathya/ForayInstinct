@@ -28,6 +28,14 @@ export default {
     // a reusable component surface wider than this minimal chat consumes.
     "components/ai-elements/**/*.tsx": ["exports", "files", "types"],
     "components/ui/**/*.tsx": ["exports", "files", "types"],
+    // The wire contract is shared with services/browser-gateway, which
+    // imports it relatively from outside this knip project.
+    "lib/browser/contract.ts": ["exports", "types"],
   },
-  project: ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+  // The gateway is its own workspace package with its own tsconfig and tests.
+  ignore: ["services/browser-gateway/**"],
+  project: [
+    "**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
+    "!services/browser-gateway/**",
+  ],
 } satisfies KnipConfig;

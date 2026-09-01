@@ -35,7 +35,7 @@ pnpm bench:compare .eve/browser-benchmarks/baseline.json .eve/browser-benchmarks
 Edit `lib/browser/benchmark-tasks.ts` to add starter tasks shared by the CLI and
 home-page runner. Every eval case should have a stable prompt and one or more
 deterministic reply fragments. A task passes only when the expected reply is
-present, the agent returns `completed`, and a Kernel Playwright,
+present, the agent returns `completed`, and a browser Playwright,
 computer-action, or browser-curl call completed, so a plausible answer from
 another source does not count. Agent time is measured from durable
 `message.received` to the terminal `message.completed` event. LLM cost sums

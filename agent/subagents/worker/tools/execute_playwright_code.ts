@@ -1,6 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { kernel } from "@/lib/kernel";
+import { browserProvider } from "@/lib/browser";
+import type { PlaywrightResponse } from "@/lib/browser/contract";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/browser-run-evidence";
@@ -27,14 +28,12 @@ export default defineTool({
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
     await requireOwnedBrowserSession(scope, input.session_id);
-    let response: Awaited<
-      ReturnType<typeof kernel.browsers.playwright.execute>
-    >;
+    let response: PlaywrightResponse;
     try {
-      response = await kernel.browsers.playwright.execute(
+      response = await browserProvider.executePlaywright(
         input.session_id,
-        { code: input.code, timeout_sec: 30 },
-        { signal: context.abortSignal }
+        { code: input.code, timeoutSec: 30 },
+        context.abortSignal
       );
     } catch (error) {
       await recordBrowserActionCheckpoint(

@@ -12,10 +12,15 @@ import {
 } from "@/db/services/candidate-profile";
 import { ensureScope } from "@/db/services/scope";
 import { readWorkspaceKernelProfileId } from "@/db/services/workspaces";
+import { browserProvider, isGatewayProvider } from "@/lib/browser";
 import {
   candidateProfilePatchSchema,
   candidateProfileResponseSchema,
 } from "@/lib/candidate-profile";
+import {
+  clearWorkspaceBrowserState,
+  hasWorkspaceBrowserState,
+} from "@/lib/manager/server/browser-state";
 import { deleteKernelBrowserProfile } from "@/lib/manager/server/kernel-profile";
 
 export const dynamic = "force-dynamic";
@@ -54,7 +59,11 @@ export async function POST(request: Request) {
     }
     const mutation = mutationSchema.parse(await request.json());
     if (mutation.action === "sign_out_everywhere") {
-      await deleteKernelBrowserProfile(scope);
+      if (isGatewayProvider(browserProvider)) {
+        await clearWorkspaceBrowserState(scope);
+      } else {
+        await deleteKernelBrowserProfile(scope);
+      }
       return Response.json(await readProfileSnapshot(scope), {
         headers: { "Cache-Control": "no-store" },
       });
@@ -81,7 +90,13 @@ async function readProfileSnapshot(
   const [profile, identity, kernelProfileId] = await Promise.all([
     readCandidateProfile(scope),
     readCandidateContactIdentity(scope),
-    readWorkspaceKernelProfileId(scope),
+    // The field gates the "Sign out everywhere" button; on the gateway the
+    // saved storage state plays the role the Kernel profile did.
+    isGatewayProvider(browserProvider)
+      ? hasWorkspaceBrowserState(scope).then((stored) =>
+          stored ? "gateway-browser-state" : ""
+        )
+      : readWorkspaceKernelProfileId(scope),
   ]);
   return candidateProfileResponseSchema.parse({
     identity: seedIdentity(identity),

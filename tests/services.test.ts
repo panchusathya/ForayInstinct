@@ -164,19 +164,42 @@ describe("database services", () => {
     expect(await vault.listVaultItems(alice)).toHaveLength(1);
     expect(await vault.deleteVaultItem(bob, "vault-alice")).toBe(false);
 
-    await secrets.writeEncryptedSecret(alice, "shared-id", "ciphertext-alice");
-    await secrets.writeEncryptedSecret(bob, "shared-id", "ciphertext-bob");
-    expect(await secrets.readEncryptedSecret(alice, "shared-id")).toBe(
+    await secrets.writeEncryptedSecret(
+      alice,
+      "vault",
+      "shared-id",
       "ciphertext-alice"
     );
-    expect(await secrets.readEncryptedSecret(bob, "shared-id")).toBe(
+    await secrets.writeEncryptedSecret(
+      bob,
+      "vault",
+      "shared-id",
       "ciphertext-bob"
     );
-    await secrets.deleteEncryptedSecret(alice, "shared-id");
+    expect(await secrets.readEncryptedSecret(alice, "vault", "shared-id")).toBe(
+      "ciphertext-alice"
+    );
+    expect(await secrets.readEncryptedSecret(bob, "vault", "shared-id")).toBe(
+      "ciphertext-bob"
+    );
+    // Namespaces isolate values sharing a workspace and id.
+    await secrets.writeEncryptedSecret(
+      alice,
+      "browser-state",
+      "shared-id",
+      "ciphertext-browser"
+    );
+    expect(await secrets.readEncryptedSecret(alice, "vault", "shared-id")).toBe(
+      "ciphertext-alice"
+    );
+    await secrets.deleteEncryptedSecret(alice, "vault", "shared-id");
     expect(
-      await secrets.readEncryptedSecret(alice, "shared-id")
+      await secrets.readEncryptedSecret(alice, "vault", "shared-id")
     ).toBeUndefined();
-    expect(await secrets.readEncryptedSecret(bob, "shared-id")).toBe(
+    expect(
+      await secrets.readEncryptedSecret(alice, "browser-state", "shared-id")
+    ).toBe("ciphertext-browser");
+    expect(await secrets.readEncryptedSecret(bob, "vault", "shared-id")).toBe(
       "ciphertext-bob"
     );
 
@@ -658,6 +681,7 @@ async function applyMigration(database: PGlite, name: string) {
 async function applyInitialMigration(database: PGlite) {
   await applyMigration(database, "0000_fluffy_the_spike.sql");
   await applyMigration(database, "0009_candidate_profile.sql");
+  await applyMigration(database, "0018_browser_state_namespace.sql");
 }
 
 /**
