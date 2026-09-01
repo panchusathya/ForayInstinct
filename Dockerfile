@@ -1,8 +1,9 @@
-# Build context must be the REPO ROOT: the image needs both the service and
-# the shared wire contract at lib/browser/contract.ts.
-#
-#   fly deploy --config services/browser-gateway/fly.toml \
-#     --dockerfile services/browser-gateway/Dockerfile .
+# Builds ONLY the browser gateway (services/browser-gateway) — not the Next.js
+# app, which deploys to Vercel via eve. This file lives at the repo root so
+# Railway (and any Docker host) picks it up automatically with zero build
+# configuration; the build context must be the repo root because the image
+# needs both the service and the shared wire contract at
+# lib/browser/contract.ts.
 #
 # playwright-core only connects over CDP to Brightdata's remote browser, so no
 # browser binaries are installed here.

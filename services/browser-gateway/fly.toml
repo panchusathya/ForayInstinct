@@ -5,7 +5,9 @@ app = "foray-browser-gateway"
 primary_region = "iad"
 
 [build]
-dockerfile = "services/browser-gateway/Dockerfile"
+# The gateway's Dockerfile lives at the repo root (single copy, shared with
+# Railway's zero-config detection); its build context is the repo root.
+dockerfile = "Dockerfile"
 
 [env]
 PORT = "8080"

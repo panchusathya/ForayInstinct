@@ -61,10 +61,11 @@ Windows the paths land on the current drive; fine for everything but staging).
 
 ## Deploy (Railway — recommended, no CLI needed)
 
-The repo-root `railway.json` already tells Railway how to build this service
-(the Dockerfile, repo-root build context so `lib/browser/contract.ts` is
-included, `/health` checks, one replica, no app sleep). Steps, all in the
-browser:
+The gateway's Dockerfile lives at the **repo root**, which Railway picks up
+automatically with zero build configuration (the repo-root `railway.json`
+additionally pins `/health` checks, one replica, and no app sleep; the
+root `.dockerignore` keeps the build context to the two copied paths).
+Steps, all in the browser:
 
 1. Sign in at railway.com (GitHub login) and create a project → **Deploy from
    GitHub repo** → pick this repository. Leave **Root Directory** as `/`.
@@ -96,8 +97,7 @@ fly apps create foray-browser-gateway   # once
 fly secrets set --config services/browser-gateway/fly.toml \
   BRIGHTDATA_CUSTOMER_ID=... BRIGHTDATA_ZONE=... \
   BRIGHTDATA_PASSWORD=... GATEWAY_AUTH_SECRET=...
-fly deploy --config services/browser-gateway/fly.toml \
-  --dockerfile services/browser-gateway/Dockerfile .
+fly deploy --config services/browser-gateway/fly.toml .
 fly scale count 1 --config services/browser-gateway/fly.toml   # exactly one machine
 ```
 
