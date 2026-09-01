@@ -343,15 +343,9 @@ describe("playwright checkpoints observe a submission without final_output", () 
       expect.objectContaining({})
     );
     expect(
-      mocks.executePlaywright.mock.calls.some((call) => {
-        const input = call[1];
-        return (
-          typeof input === "object" &&
-          input !== null &&
-          "code" in input &&
-          input.code === captchaProbeCode
-        );
-      })
+      mocks.executePlaywright.mock.calls.some(
+        (call) => call[1].code === captchaProbeCode
+      )
     ).toBe(false);
   });
 
@@ -379,15 +373,9 @@ describe("playwright checkpoints observe a submission without final_output", () 
       success: false,
     });
     expect(
-      mocks.executePlaywright.mock.calls.some((call) => {
-        const input = call[1];
-        return (
-          typeof input === "object" &&
-          input !== null &&
-          "code" in input &&
-          input.code === captchaProbeCode
-        );
-      })
+      mocks.executePlaywright.mock.calls.some(
+        (call) => call[1].code === captchaProbeCode
+      )
     ).toBe(false);
   });
 });
