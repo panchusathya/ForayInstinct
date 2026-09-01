@@ -9,6 +9,10 @@ export default defineAgent({
   // prompt caching and cannot be replaced by a stale workspace DB setting.
   model: chatGatewayModel,
   reasoning: "low",
+  limits: {
+    maxInputTokensPerSession: 1_000_000,
+    maxOutputTokensPerSession: 40_000,
+  },
   compaction: {
     thresholdPercent: 0.7,
   },

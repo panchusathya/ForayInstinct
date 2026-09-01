@@ -27,7 +27,9 @@ import {
   updateBrowserRunTask,
 } from "@/app/_lib/browser-run-store";
 
-const taskTimeoutMs = 15 * 60_000;
+// Match the server-side application-worker safety ceiling. The worker itself
+// owns cancellation; this is only the UI's durable-stream observation window.
+const taskTimeoutMs = 20 * 60_000;
 
 export function BrowserRunDetail({ groupId }: { readonly groupId: string }) {
   const router = useRouter();

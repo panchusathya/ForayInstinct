@@ -183,6 +183,75 @@ export const browserRunCheckpoints = pgTable(
   ]
 );
 
+/** Metadata-only lifecycle record for one delegated application worker. */
+export const applicationExecutions = pgTable(
+  "application_executions",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    createdByUserId: text("created_by_user_id").notNull(),
+    rootSessionId: text("root_session_id").notNull(),
+    parentCallId: text("parent_call_id").notNull(),
+    workerSessionId: text("worker_session_id"),
+    browserSessionId: text("browser_session_id"),
+    role: text("role").notNull().default(""),
+    company: text("company").notNull().default(""),
+    applyUrl: text("apply_url").notNull().default(""),
+    model: text("model").notNull(),
+    status: text("status").notNull().default("queued"),
+    activeTurnId: text("active_turn_id"),
+    activeStartedAt: text("active_started_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    finishedAt: text("finished_at"),
+  },
+  (table) => [
+    foreignKey({
+      name: "application_executions_membership_fkey",
+      columns: [table.workspaceId, table.createdByUserId],
+      foreignColumns: [
+        workspaceMemberships.workspaceId,
+        workspaceMemberships.userId,
+      ],
+    }).onDelete("cascade"),
+    uniqueIndex("application_executions_root_call_idx").on(
+      table.rootSessionId,
+      table.parentCallId
+    ),
+    index("application_executions_workspace_updated_idx").on(
+      table.workspaceId,
+      table.updatedAt.desc().nullsFirst()
+    ),
+    index("application_executions_active_idx").on(
+      table.status,
+      table.activeStartedAt
+    ),
+  ]
+);
+
+/** Append-only safe events. `id` is Eve's stable stream-event identifier. */
+export const applicationExecutionEvents = pgTable(
+  "application_execution_events",
+  {
+    id: text("id").primaryKey(),
+    executionId: text("execution_id")
+      .notNull()
+      .references(() => applicationExecutions.id, { onDelete: "cascade" }),
+    eventType: text("event_type").notNull(),
+    stage: text("stage").notNull(),
+    toolName: text("tool_name"),
+    status: text("status"),
+    errorCode: text("error_code"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("application_execution_events_execution_created_idx").on(
+      table.executionId,
+      table.createdAt.desc().nullsFirst()
+    ),
+  ]
+);
+
 export const applicationSubmissionScreenshots = pgTable(
   "application_submission_screenshots",
   {

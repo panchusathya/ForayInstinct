@@ -9,6 +9,33 @@ afterEach(async () => {
 });
 
 describe("database migrations", () => {
+  it("creates metadata-only application execution traces", async () => {
+    const database = createDatabase();
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(database, "0001_better-auth.sql");
+    await applyMigration(database, "0002_heavy_celestials.sql");
+    await applyMigration(database, "0019_application_execution_traces.sql");
+
+    await database.exec(`
+      INSERT INTO workspaces VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO workspace_memberships VALUES ('workspace-1', 'user-1', 'owner', '2026-01-01');
+      INSERT INTO application_executions (
+        id, workspace_id, created_by_user_id, root_session_id, parent_call_id,
+        model, created_at, updated_at
+      ) VALUES (
+        'execution-1', 'workspace-1', 'user-1', 'root-1', 'call-1',
+        'alibaba/qwen3-vl-235b-a22b-instruct', '2026-01-01', '2026-01-01'
+      );
+      INSERT INTO application_execution_events (
+        id, execution_id, event_type, stage, created_at
+      ) VALUES ('event-1', 'execution-1', 'worker.dispatched', 'dispatch', '2026-01-01');
+    `);
+
+    await expect(
+      database.query("SELECT execution_id FROM application_execution_events")
+    ).resolves.toMatchObject({ rows: [{ execution_id: "execution-1" }] });
+  }, 15_000);
+
   it("creates a validated schema and keeps adoption migrations idempotent", async () => {
     const database = createDatabase();
 

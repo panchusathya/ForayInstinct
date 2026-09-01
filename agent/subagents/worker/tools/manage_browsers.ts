@@ -6,6 +6,7 @@ import {
   listBrowserSessions,
 } from "@/db/services/browsers";
 import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoints";
+import { attachBrowserToApplicationExecution } from "@/db/services/application-executions";
 import type { AccessScope } from "@/lib/access-scope";
 import {
   browserProvider,
@@ -99,6 +100,11 @@ export default defineTool({
             .catch(() => undefined);
           throw error;
         }
+        await attachBrowserToApplicationExecution(
+          scope,
+          browser.session_id,
+          context.session.id
+        ).catch(() => undefined);
         if (browser.devtools_url) {
           // Operator-facing only: the DevTools inspector grants full page
           // control and dies with the session, so it never reaches the model.

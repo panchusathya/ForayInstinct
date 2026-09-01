@@ -5,6 +5,8 @@ import { z } from "zod";
 import {
   account,
   agentSessions,
+  applicationExecutionEvents,
+  applicationExecutions,
   applicationSubmissionScreenshots,
   browserRunCheckpoints,
   browserSessions,
@@ -42,6 +44,8 @@ describe("database schema", () => {
         agentSessions,
         browserSessions,
         browserRunCheckpoints,
+        applicationExecutions,
+        applicationExecutionEvents,
         applicationSubmissionScreenshots,
         chats,
         encryptedSecrets,
@@ -61,6 +65,8 @@ describe("database schema", () => {
       "agent_sessions",
       "browser_sessions",
       "browser_run_checkpoints",
+      "application_executions",
+      "application_execution_events",
       "application_submission_screenshots",
       "chats",
       "encrypted_secrets",
@@ -120,6 +126,7 @@ describe("database schema", () => {
       agentSessions,
       browserSessions,
       browserRunCheckpoints,
+      applicationExecutions,
       applicationSubmissionScreenshots,
     ]) {
       const foreignKeys = getTableConfig(table).foreignKeys;

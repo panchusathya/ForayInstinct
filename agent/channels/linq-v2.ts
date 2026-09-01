@@ -52,6 +52,9 @@ import { blockerKind, normalizeTaskStatus } from "@/lib/task-completion";
 import { linkCandidate, recordConversationMessage } from "@/lib/goforay/bridge";
 import { saveCandidateDocument } from "@/db/services/candidate-documents";
 import { inferCandidateDocumentKind } from "@/lib/candidate-documents";
+import { Client } from "eve/client";
+import { getVercelOidcToken } from "@vercel/oidc";
+import { findRestartableApplicationExecutions } from "@/db/services/application-executions";
 
 const verifiedPhoneUserSchema = z.object({
   id: z.string().min(1),
@@ -638,6 +641,16 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
     {}
   );
 
+  const restartQuery = applicationRestartQuery(message.text);
+  if (restartQuery) {
+    const restart = await restartTrackedApplication(
+      thread,
+      inbound,
+      restartQuery
+    );
+    if (restart) return;
+  }
+
   try {
     await bot.getAdapter("linq").markRead(thread.id, message.id);
   } catch {
@@ -658,6 +671,69 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
     },
     { auth: inbound.auth, thread }
   );
+}
+
+/** Explicit restart is intentionally narrow: normal conversational retries keep context. */
+function applicationRestartQuery(text: string) {
+  const match =
+    /^\s*restart\s+(?:the\s+)?(.+?)(?:\s+application)?\s*[.!?]?\s*$/iu.exec(
+      text
+    );
+  return match?.[1]?.trim();
+}
+
+async function restartTrackedApplication(
+  thread: Thread,
+  inbound: Awaited<ReturnType<typeof prepareInboundMessage>>,
+  query: string
+) {
+  const matches = await findRestartableApplicationExecutions(
+    inbound.scope,
+    query
+  );
+  if (matches.length !== 1 || !matches[0]?.applyUrl) {
+    await thread.post({
+      markdown:
+        matches.length > 1
+          ? "I found more than one matching application. Reply with the role title and its apply URL so I restart the right one."
+          : "I do not have a tracked application matching that name. Reply with the role title and apply URL and I’ll start a fresh run.",
+    });
+    return true;
+  }
+  const execution = matches[0];
+  try {
+    const client = new Client({
+      auth: {
+        vercelOidc: { token: () => getVercelOidcToken() },
+      },
+      host: env.BETTER_AUTH_URL,
+      redirect: "error",
+    });
+    await client.sessions.attach(execution.rootSessionId).reset({
+      reason: "Explicit application restart requested by the candidate.",
+    });
+    await send(
+      {
+        context: [
+          CURRENT_FORAY_POLICY,
+          `Start a new application worker now. The previous run was terminally retired and must not be resumed. Application trace identity: role=${execution.role}; company=${execution.company}; apply_url=${execution.applyUrl}`,
+        ],
+        message: `Apply to ${execution.role || "this role"} at ${execution.company || "this company"}.`,
+      },
+      { auth: inbound.auth, thread }
+    );
+    return true;
+  } catch (error) {
+    console.error("[application-execution] restart failed", {
+      error: error instanceof Error ? error.message : "unknown",
+      root_session_id: execution.rootSessionId,
+    });
+    await thread.post({
+      markdown:
+        "I found that application, but could not safely reset its old run. Reply with the apply URL and I’ll start a new run.",
+    });
+    return true;
+  }
 }
 
 async function prepareInboundMessage(

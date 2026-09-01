@@ -16,6 +16,7 @@
     "@t3-oss/env-nextjs": "0.13.11",
     "@tailwindcss/postcss": "4.3.3",
     "@vercel/connect": "^2.0.0",
+    "@vercel/oidc": "3.8.5",
     "@workflow/world-vercel": "5.0.0-beta.40",
     "ai": "^7.0.79",
     "better-auth": "1.7.2",

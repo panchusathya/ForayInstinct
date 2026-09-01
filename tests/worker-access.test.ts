@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { accessScopeForUser, type AccessScope } from "@/lib/access-scope";
 
 const mocks = vi.hoisted(() => ({
+  assertApplicationWorkerWithinBudget: vi.fn<() => Promise<void>>(),
   claimSession: vi.fn(),
   ensureScope: vi.fn(),
   isSessionOwned:
@@ -13,6 +14,10 @@ vi.mock("@/db/services/sessions", () => ({
   isSessionOwned: mocks.isSessionOwned,
 }));
 vi.mock("@/db/services/scope", () => ({ ensureScope: mocks.ensureScope }));
+vi.mock("@/db/services/application-executions", () => ({
+  assertApplicationWorkerWithinBudget:
+    mocks.assertApplicationWorkerWithinBudget,
+}));
 
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 

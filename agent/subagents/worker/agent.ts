@@ -10,6 +10,10 @@ export default defineAgent({
   // The Qwen VL instruct variant is optimized for direct responses rather
   // than extended reasoning traces.
   reasoning: "none",
+  limits: {
+    maxInputTokensPerSession: 500_000,
+    maxOutputTokensPerSession: 20_000,
+  },
   outputSchema: taskCompletionSchema,
   compaction: {
     thresholdPercent: 0.7,

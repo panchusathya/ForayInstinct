@@ -1,5 +1,9 @@
 import { eveChannel } from "eve/channels/eve";
-import { ForbiddenError, UnauthenticatedError } from "eve/channels/auth";
+import {
+  ForbiddenError,
+  UnauthenticatedError,
+  vercelOidc,
+} from "eve/channels/auth";
 import { isSessionOwned } from "@/db/services/sessions";
 import {
   accessScopeForPhone,
@@ -33,6 +37,9 @@ export default eveChannel({
         principalType: "user",
       };
     },
+    // The application-worker watchdog is an in-project Vercel workload. It
+    // needs only Eve's fixed-session control routes, never browser/user data.
+    vercelOidc(),
   ],
 });
 

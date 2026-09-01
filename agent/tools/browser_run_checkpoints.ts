@@ -2,6 +2,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 import { z } from "zod";
 import { groupBrowserRunCheckpoints } from "@/lib/browser-submission";
 import { listRecentBrowserRunCheckpoints } from "@/db/services/browser-run-checkpoints";
+import { listApplicationExecutionTraces } from "@/db/services/application-executions";
 import { scopeFromPrincipal } from "@/lib/access-scope";
 
 /**
@@ -29,6 +30,21 @@ export default defineDynamic({
               limit ?? 100
             );
             return { sessions: groupBrowserRunCheckpoints(checkpoints) };
+          },
+        }),
+        list_application_execution_traces: defineTool({
+          description:
+            "Read the safe lifecycle trace for recent application workers, including role/company labels, normalized posting URLs, worker/browser session ids, model, timestamps, and terminal status. Use this before claiming an application is stalled, restarted, or submitted. It never contains profile, form, screenshot, prompt, or reasoning data.",
+          inputSchema: z.object({
+            limit: z.number().int().min(1).max(100).optional(),
+          }),
+          async execute({ limit }) {
+            return {
+              executions: await listApplicationExecutionTraces(
+                scope,
+                limit ?? 50
+              ),
+            };
           },
         }),
       };
