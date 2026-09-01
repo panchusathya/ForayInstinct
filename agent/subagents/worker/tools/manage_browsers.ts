@@ -328,8 +328,9 @@ function lifecycleResult(
         : [
             `Use workday.today (${workday.today.isoDate}, ${workday.today.timeZone}) for signature and date fields; it is the browser's own date.`,
           ]),
-      `Use execute_playwright_code with session_id "${value.session_id}" for deterministic browser automation.`,
-      `Use computer_action with session_id "${value.session_id}" for visual browser control.`,
+      `For a third-party ATS page, take one masked computer_action screenshot with session_id "${value.session_id}" first and identify the live page state, provider or iframe only if visible, form step, existing resume, overlays, and any blocker before execute_playwright_code. Do not assume an iframe or #resume.`,
+      `Use execute_playwright_code with session_id "${value.session_id}" for deterministic fills, file upload, and verification against those observed controls.`,
+      `Use computer_action with session_id "${value.session_id}" for visual browser control and to re-observe after navigation or a failed action.`,
       `Use solve_captcha with session_id "${value.session_id}" immediately if Kernel reports visible hCaptcha could not be solved automatically, a checkbox remains, or a lookalike image-selection grid is visible. solve_captcha clicks tiles and writes a lookalike response token; do not request a takeover.`,
       `Use manage_browsers with action "delete" and session_id "${value.session_id}" when finished.`,
     ],

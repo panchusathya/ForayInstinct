@@ -1,10 +1,5 @@
-import {
-  captchaProbeCode,
-  normalizeCaptchaProbeResult,
-} from "@/agent/subagents/worker/lib/captcha-solver";
 import { deleteBrowserSession } from "@/db/services/browsers";
 import type { AccessScope } from "@/lib/access-scope";
-import { kernel } from "@/lib/kernel";
 
 /**
  * Why a browser call could not reach the page, split by the layer that
@@ -89,6 +84,41 @@ export function diagnosticErrorCode(error: unknown) {
   return "playwright_execution";
 }
 
+const uploadPayloadError =
+  /setInputFiles|payloads\[\d+\]\.buffer|expected Buffer, got undefined/iu;
+
+/** A setInputFiles payload that cannot succeed no matter how often it is retried. */
+export function isUploadPayloadError(error: unknown) {
+  const message =
+    typeof error === "string"
+      ? error
+      : error instanceof Error
+        ? error.message
+        : "";
+  return uploadPayloadError.test(message);
+}
+
+/**
+ * A 30-second Kernel abort or locator timeout is not an OTP or CAPTCHA signal.
+ * Walking every frame after that only keeps a struggling iframe busy.
+ */
+export function shouldInspectPostActionBrowserState(
+  errorCode: string | undefined
+) {
+  return errorCode !== "timeout";
+}
+
+export const playwrightObserveThenActInstruction =
+  "Take one masked computer_action screenshot, identify the live page state, provider or iframe only if visible, form step, existing resume, overlays, and any blocker, then use at most one different Playwright tactic against those observed controls. Do not replay the same selector or refill the form. After two failed fill tactics, capture for approval if the form looks filled or report the verified blocker.";
+
+export const playwrightUploadPayloadInstruction =
+  "Do not retry this upload code. Stage the resume with stage_default_goforay_resume if needed and attach only the returned browser-local path with setInputFiles; never pass a Buffer or payload object. Then take one masked computer_action screenshot before any further fill.";
+
+export function playwrightFailureNextAction(error: unknown) {
+  if (isUploadPayloadError(error)) return playwrightUploadPayloadInstruction;
+  return playwrightObserveThenActInstruction;
+}
+
 /**
  * Keep returned Kernel failures useful in production without copying secrets
  * from a browser request into logs. Kernel can include a quoted token, cookie,
@@ -161,9 +191,8 @@ export async function forgetDeadBrowserSession(
 
 /**
  * Handles a failed browser call: reconciles a dead session and returns the
- * error to surface, or probes the page for a challenge when the session is
- * still alive. Returning the replacement error keeps the decision in one place
- * rather than repeated at each tool.
+ * error to surface. Ordinary Playwright failures are not CAPTCHA signals; the
+ * worker re-observes with a masked screenshot instead of an automatic probe.
  */
 export async function handleBrowserToolFailure(input: {
   readonly error: unknown;
@@ -175,18 +204,13 @@ export async function handleBrowserToolFailure(input: {
 }) {
   const failure = describeBrowserSessionFailure(input.error);
   if (failure === undefined) {
-    await logChallengeProbe({
-      sessionId: input.sessionId,
-      signal: input.signal,
-      trigger: input.trigger,
-      workspaceId: input.scope.workspaceId,
-    });
     return input.error;
   }
   console.warn("[browser-session] unusable", {
     browser_session_id: input.sessionId,
     reason: failure,
     tool: input.tool,
+    trigger: input.trigger,
     workspace_id: input.scope.workspaceId,
   });
   if (isKernelSessionDead(failure)) {
@@ -215,6 +239,7 @@ export async function diagnoseBrowserExecutionFailure(input: {
     error: details.error,
     error_code: sessionEnded ? "session_gone" : details.errorCode,
     tool: input.tool,
+    trigger: input.trigger,
     workspace_id: input.scope.workspaceId,
   });
   if (sessionEnded) {
@@ -225,62 +250,6 @@ export async function diagnoseBrowserExecutionFailure(input: {
       workspace_id: input.scope.workspaceId,
     });
     await forgetDeadBrowserSession(input.scope, input.sessionId);
-  } else {
-    await logChallengeProbe({
-      sessionId: input.sessionId,
-      signal: input.signal,
-      trigger: input.trigger,
-      workspaceId: input.scope.workspaceId,
-    });
   }
   return { ...details, sessionEnded };
-}
-
-/**
- * Records whether a challenge widget was on screen at a moment the worker could
- * not make progress. The probe is read-only, and its own failure is the other
- * half of the answer: a `session_gone` here means the session died before any
- * CAPTCHA could have been missed.
- */
-export async function logChallengeProbe(input: {
-  readonly sessionId: string;
-  readonly signal?: AbortSignal;
-  readonly trigger: string;
-  readonly workspaceId: string;
-}) {
-  try {
-    const response = await kernel.browsers.playwright.execute(
-      input.sessionId,
-      { code: captchaProbeCode, timeout_sec: 10 },
-      { signal: input.signal }
-    );
-    const probe = normalizeCaptchaProbeResult(response);
-    if (!probe) {
-      console.warn("[challenge-probe] page could not be observed", {
-        browser_session_id: input.sessionId,
-        ...browserExecutionFailureDetails(response.error),
-        trigger: input.trigger,
-        workspace_id: input.workspaceId,
-      });
-      return;
-    }
-    console.info("[challenge-probe] observed", {
-      browser_session_id: input.sessionId,
-      challenge_present: probe.kinds.length > 0,
-      kernel_declined: probe.kernelDeclined,
-      kinds: probe.kinds,
-      token: probe.token,
-      trigger: input.trigger,
-      url: probe.url,
-      workspace_id: input.workspaceId,
-    });
-  } catch (error: unknown) {
-    // A diagnostic must never change the outcome of the call that triggered it.
-    console.warn("[challenge-probe] could not reach the page", {
-      browser_session_id: input.sessionId,
-      reason: describeBrowserSessionFailure(error) ?? "probe_failed",
-      trigger: input.trigger,
-      workspace_id: input.workspaceId,
-    });
-  }
 }

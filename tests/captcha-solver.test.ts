@@ -4,7 +4,9 @@ import { z } from "zod";
 import {
   captchaCompleteCode,
   captchaInspectCode,
+  captchaProbeCode,
   normalizeCaptchaInspectResult,
+  normalizeCaptchaProbeResult,
 } from "../agent/subagents/worker/lib/captcha-solver";
 import solveCaptcha from "../agent/subagents/worker/tools/solve_captcha";
 
@@ -117,6 +119,20 @@ describe("checkbox CAPTCHA solver", () => {
     expect(captchaCompleteCode).not.toContain('createElement("textarea")');
     expect(captchaCompleteCode).toContain("h-captcha-response");
     expect(captchaCompleteCode).toContain("hcaptcha_challenge");
+    expect(captchaInspectCode).not.toContain("contentFrame().catch");
+    expect(captchaCompleteCode).not.toContain("contentFrame().catch");
+    expect(captchaProbeCode).not.toContain("contentFrame().catch");
+    expect(
+      normalizeCaptchaProbeResult({
+        result: {
+          kernelDeclined: false,
+          kinds: ["hcaptcha"],
+          token: false,
+          url: "https://jobs.example/apply",
+        },
+        success: true,
+      })
+    ).toMatchObject({ kinds: ["hcaptcha"], token: false });
   });
 
   it("clicks image-challenge widgets instead of skipping them", () => {

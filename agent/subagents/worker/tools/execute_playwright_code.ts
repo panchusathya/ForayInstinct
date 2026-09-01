@@ -9,6 +9,8 @@ import {
   diagnosticErrorCode,
   diagnoseBrowserExecutionFailure,
   handleBrowserToolFailure,
+  playwrightFailureNextAction,
+  shouldInspectPostActionBrowserState,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
 import {
   inspectPostActionBrowserState,
@@ -22,7 +24,7 @@ const inputSchema = z.object({
 
 export default defineTool({
   description:
-    'Execute Playwright/TypeScript automation code against an existing browser session with a 30-second ceiling. Batch related operations, use "domcontentloaded" or a precise locator with waits of at most five seconds except for one managed CAPTCHA wait of at most 20 seconds, and never wait for "networkidle" or use fixed multi-second sleeps. Use solve_captcha for a checkbox or lookalike hCaptcha, including image grids and response-field tokens. Does not create or delete browsers.',
+    'Execute Playwright/TypeScript automation code against an existing browser session with a 30-second ceiling after a masked computer_action screenshot has identified the live controls. Batch related operations, use "domcontentloaded" or a precise locator with waits of at most five seconds except for one managed CAPTCHA wait of at most 20 seconds, and never wait for "networkidle" or use fixed multi-second sleeps. On failure, obey next_action: screenshot once and change tactic; do not replay the same selector or pass a Buffer to setInputFiles. Use solve_captcha for a checkbox or lookalike hCaptcha, including image grids and response-field tokens. Does not create or delete browsers.',
   inputSchema,
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
@@ -68,11 +70,22 @@ export default defineTool({
           tool: "execute_playwright_code",
           trigger: "playwright_execution_failed",
         });
-    const browserState = await inspectPostActionBrowserState(
-      input.session_id,
-      context.abortSignal
-    );
+    const skipPostActionInspect =
+      executionFailure?.sessionEnded === true ||
+      (executionFailure !== undefined &&
+        !shouldInspectPostActionBrowserState(executionFailure.errorCode));
+    const browserState = skipPostActionInspect
+      ? undefined
+      : await inspectPostActionBrowserState(
+          input.session_id,
+          context.abortSignal
+        );
     const blockerInstruction = postActionBrowserStateInstruction(browserState);
+    const failureInstruction =
+      response.success || executionFailure?.sessionEnded
+        ? undefined
+        : playwrightFailureNextAction(response.error);
+    const nextAction = blockerInstruction ?? failureInstruction;
     await recordBrowserActionCheckpoint(
       scope,
       input.session_id,
@@ -84,7 +97,7 @@ export default defineTool({
             ? "session_gone"
             : executionFailure?.errorCode,
         phase: "playwright",
-        actions: blockerInstruction ? [blockerInstruction] : undefined,
+        actions: nextAction ? [nextAction] : undefined,
         state: response.success ? "completed" : "failed",
       },
       context.abortSignal
@@ -97,9 +110,7 @@ export default defineTool({
     return {
       ...response,
       ...(browserState === undefined ? {} : { browser_state: browserState }),
-      ...(blockerInstruction === undefined
-        ? {}
-        : { next_action: blockerInstruction }),
+      ...(nextAction === undefined ? {} : { next_action: nextAction }),
     };
   },
 });

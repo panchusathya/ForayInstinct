@@ -10,6 +10,11 @@ import {
   reviewScrollCode,
   reviewScrollRootProbeCode,
 } from "../agent/subagents/worker/lib/kernel-screenshot";
+import { captchaProbeCode } from "../agent/subagents/worker/lib/captcha-solver";
+import {
+  playwrightObserveThenActInstruction,
+  playwrightUploadPayloadInstruction,
+} from "../agent/subagents/worker/lib/challenge-diagnostics";
 
 const mocks = vi.hoisted(() => ({
   currentKernelPageUrl: vi.fn<() => Promise<string | undefined>>(),
@@ -298,7 +303,9 @@ describe("playwright checkpoints observe a submission without final_output", () 
       { userId: "user-1", workspaceId: "workspace-1" },
       "browser-1",
       expect.objectContaining({
-        actions: ["submission evidence: application received"],
+        actions: expect.arrayContaining([
+          "submission evidence: application received",
+        ]),
         errorCode: "playwright_execution",
         phase: "playwright",
         state: "failed",
@@ -306,6 +313,82 @@ describe("playwright checkpoints observe a submission without final_output", () 
     );
     expect(mocks.captureScreenshot).not.toHaveBeenCalled();
     expect(mocks.saveApplicationSubmissionScreenshot).not.toHaveBeenCalled();
+  });
+
+  it("asks the worker to re-observe after a Playwright timeout instead of probing for a CAPTCHA", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.executePlaywright.mockResolvedValue({
+      error: "The operation was aborted due to timeout",
+      success: false,
+    });
+    const { default: executePlaywrightCode } =
+      await import("../agent/subagents/worker/tools/execute_playwright_code");
+
+    const result = await executePlaywrightCode.execute(
+      {
+        code: "await page.locator('#resume').setInputFiles('/tmp/goforay-resume.pdf')",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({
+      next_action: playwrightObserveThenActInstruction,
+      success: false,
+    });
+    expect(mocks.executePlaywright).toHaveBeenCalledExactlyOnceWith(
+      "browser-1",
+      expect.objectContaining({ timeout_sec: 30 }),
+      expect.objectContaining({})
+    );
+    expect(
+      mocks.executePlaywright.mock.calls.some((call) => {
+        const input = call[1];
+        return (
+          typeof input === "object" &&
+          input !== null &&
+          "code" in input &&
+          input.code === captchaProbeCode
+        );
+      })
+    ).toBe(false);
+  });
+
+  it("forbids retrying a broken setInputFiles Buffer payload", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.executePlaywright.mockResolvedValue({
+      error:
+        "locator.setInputFiles: payloads[0].buffer: expected Buffer, got undefined",
+      success: false,
+    });
+    const { default: executePlaywrightCode } =
+      await import("../agent/subagents/worker/tools/execute_playwright_code");
+
+    const result = await executePlaywrightCode.execute(
+      {
+        code: "await page.locator('#resume').setInputFiles({ buffer: undefined })",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({
+      next_action: playwrightUploadPayloadInstruction,
+      success: false,
+    });
+    expect(
+      mocks.executePlaywright.mock.calls.some((call) => {
+        const input = call[1];
+        return (
+          typeof input === "object" &&
+          input !== null &&
+          "code" in input &&
+          input.code === captchaProbeCode
+        );
+      })
+    ).toBe(false);
   });
 });
 

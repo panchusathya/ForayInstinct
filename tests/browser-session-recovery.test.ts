@@ -7,6 +7,11 @@ import {
   diagnosticErrorCode,
   isDeadBrowserExecutionError,
   isKernelSessionDead,
+  isUploadPayloadError,
+  playwrightFailureNextAction,
+  playwrightObserveThenActInstruction,
+  playwrightUploadPayloadInstruction,
+  shouldInspectPostActionBrowserState,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
 
 describe("browser session failure classification", () => {
@@ -29,7 +34,10 @@ describe("browser session failure classification", () => {
     ).toBe("session_not_owned");
   });
 
-  it("leaves an ordinary page failure unclassified so it can be probed", () => {
+  it("leaves an ordinary page failure unclassified so the worker can re-observe", () => {
+    // Ordinary failures used to trigger an automatic CAPTCHA probe. They now
+    // stay unclassified so execute_playwright_code can return a screenshot
+    // next_action instead of walking every iframe.
     expect(
       describeBrowserSessionFailure(
         new Error("locator.click: Timeout 5000ms exceeded.")
@@ -117,6 +125,28 @@ describe("browser session failure classification", () => {
       "Create a new browser with manage_browsers"
     );
     expect(error.message).toContain("do not reuse this session_id");
+  });
+
+  it("classifies a broken setInputFiles payload as non-retryable", () => {
+    expect(
+      isUploadPayloadError(
+        "locator.setInputFiles: payloads[0].buffer: expected Buffer, got undefined"
+      )
+    ).toBe(true);
+    expect(
+      isUploadPayloadError("locator.click: Timeout 5000ms exceeded.")
+    ).toBe(false);
+    expect(
+      playwrightFailureNextAction(
+        "locator.setInputFiles: payloads[0].buffer: expected Buffer, got undefined"
+      )
+    ).toBe(playwrightUploadPayloadInstruction);
+    expect(
+      playwrightFailureNextAction("The operation was aborted due to timeout")
+    ).toBe(playwrightObserveThenActInstruction);
+    expect(shouldInspectPostActionBrowserState("timeout")).toBe(false);
+    expect(shouldInspectPostActionBrowserState("selector")).toBe(true);
+    expect(shouldInspectPostActionBrowserState(undefined)).toBe(true);
   });
 });
 

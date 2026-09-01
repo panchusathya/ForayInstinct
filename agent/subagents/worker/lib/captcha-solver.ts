@@ -120,7 +120,12 @@ const collectWidgets = async (root) => {
     if (kind && box && box.width > 0 && box.height > 0) {
       widgets.push({ box, kind });
     }
-    const child = await iframe.contentFrame().catch(() => null);
+    let child = null;
+    try {
+      child = await Promise.resolve(iframe.contentFrame());
+    } catch {
+      child = null;
+    }
     if (child) widgets.push(...await collectWidgets(child));
   }
   return widgets;
