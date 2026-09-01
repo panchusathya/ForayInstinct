@@ -34,4 +34,26 @@ describe("application fill handoff", () => {
     expect(workerInstructions).toContain("stage_default_goforay_resume");
     expect(browserSkill).toContain("stage the default resume");
   });
+
+  it("observes third-party ATS pages before scripting Playwright", () => {
+    expect(workerInstructions).toContain(
+      "Observe then act on third-party ATS pages"
+    );
+    expect(workerInstructions).toContain(
+      "Do not assume Greenhouse, an embedded iframe, or `#resume`"
+    );
+    expect(workerInstructions).toContain("Never pass a Buffer");
+    expect(workerInstructions).toContain("Obey a tool `next_action`");
+    expect(browserSkill).toContain(
+      "take one masked `computer_action` screenshot next"
+    );
+    expect(browserSkill).toContain(
+      "Do not assume Greenhouse, an embedded iframe, or `#resume`"
+    );
+    expect(browserSkill).toContain("never pass a Buffer");
+    expect(browserSkill).toContain("it is not the first perception step");
+    expect(browserSkill).not.toContain(
+      "Prefer Playwright for navigation, inspection, extraction"
+    );
+  });
 });

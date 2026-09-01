@@ -283,6 +283,13 @@ describe("Kernel browser contract", () => {
           typeof action === "string" && action.includes("solve_captcha")
       )
     ).toBe(true);
+    expect(
+      result.next_actions.some(
+        (action) =>
+          typeof action === "string" &&
+          action.includes("masked computer_action screenshot")
+      )
+    ).toBe(true);
 
     expect(mocks.createBrowser).toHaveBeenCalledExactlyOnceWith(
       {
