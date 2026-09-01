@@ -5,6 +5,7 @@ import {
   readCandidateProfile,
   saveCandidateProfile,
 } from "@/db/services/candidate-profile";
+import { hasDefaultResume } from "@/db/services/candidate-documents";
 import { scopeFromPrincipal } from "@/lib/access-scope";
 import {
   candidateProfilePatchSchema,
@@ -39,13 +40,16 @@ export default defineDynamic({
               action === "save"
                 ? (await saveCandidateProfile(scope, profile ?? {})).profile
                 : await readCandidateProfile(scope);
-            const identity = await readCandidateContactIdentity(scope);
+            const [identity, hasResume] = await Promise.all([
+              readCandidateContactIdentity(scope),
+              hasDefaultResume(scope),
+            ]);
             const summary = candidateProfileSummary(stored, identity, {
               allPositions,
             });
             return {
               assignment: summary.text,
-              missing: missingProfileFields(stored),
+              missing: missingProfileFields(stored, { hasResume }),
               truncated: summary.truncated,
             };
           },

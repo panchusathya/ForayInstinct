@@ -48,7 +48,7 @@ import {
   listPendingApplicationSubmissionScreenshotScopes,
   releaseApplicationSubmissionScreenshots,
 } from "@/db/services/application-submission-screenshots";
-import { normalizeTaskStatus } from "@/lib/task-completion";
+import { blockerKind, normalizeTaskStatus } from "@/lib/task-completion";
 import { linkCandidate, recordConversationMessage } from "@/lib/goforay/bridge";
 import { saveCandidateDocument } from "@/db/services/candidate-documents";
 import { inferCandidateDocumentKind } from "@/lib/candidate-documents";
@@ -85,12 +85,6 @@ const workerResultSchema = z.object({
   toolName: z.literal("worker"),
 });
 
-/**
- * The worker pauses with this prefix once an application is filled and only the
- * submit control is left. The pause is a `failure` status, so screenshot
- * delivery cannot be armed off a successful result alone.
- */
-const submissionApprovalPrefix = "Needs submission approval:";
 const jobCardResultSchema = z.object({
   kind: z.literal("tool-result"),
   output: z.object({ cards: z.array(goForayJobCardSchema) }),
@@ -224,9 +218,13 @@ const { bot, channel, send } = chatSdkChannel({
       if (workerResult.success) {
         const submitted =
           normalizeTaskStatus(workerResult.data.output.status) === "success";
-        const awaitingApproval = (workerResult.data.output.message ?? "")
-          .trimStart()
-          .startsWith(submissionApprovalPrefix);
+        // The worker pauses with this blocker once an application is filled
+        // and only the submit control is left. That pause carries a `failure`
+        // status, so screenshot delivery cannot be armed off a successful
+        // result alone. Every blocker prefix is owned by `blockerKind`.
+        const awaitingApproval =
+          blockerKind(workerResult.data.output.message ?? "") ===
+          "submissionApproval";
         const caller =
           session.session.auth?.current ?? session.session.auth?.initiator;
         // The worker may capture review images correctly but produce a final

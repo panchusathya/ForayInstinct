@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isClosedPosting,
   locationFromResult,
   reasonsForCandidate,
   relevanceTokens,
@@ -54,6 +55,19 @@ describe("goforay role relevance", () => {
           "https://jobs.lever.co/example/2f1c9a44-1b2e-4c3d-9e8f-7a6b5c4d3e2f"
         )
       ).toMatchObject({ verdict: "reject", reason: "title-mismatch" });
+    });
+
+    it("rejects a posting the page says is closed", () => {
+      // A closed ATS posting keeps the same URL and the same title as an open
+      // one, so shape and title can never catch it. The body is all that is
+      // left, and the search response already carries it.
+      expect(
+        score(
+          "Senior Analyst, Strategic Finance",
+          "https://boards.greenhouse.io/example/jobs/4123456",
+          "This role is no longer accepting applications."
+        )
+      ).toMatchObject({ verdict: "reject", reason: "closed-posting" });
     });
 
     it("rejects a generic title on an otherwise valid posting path", () => {
@@ -140,6 +154,26 @@ describe("goforay role relevance", () => {
           wanted: [],
         })
       ).toMatchObject({ verdict: "accept", matched: [] });
+    });
+  });
+
+  describe("isClosedPosting", () => {
+    it.each([
+      "This role is no longer accepting applications.",
+      "We are not currently accepting applications for this opening.",
+      "This position has been filled.",
+      "This job is closed.",
+      "Applications are now closed.",
+    ])("reads a takedown notice: %s", (text) => {
+      expect(isClosedPosting(text)).toBe(true);
+    });
+
+    it.each([
+      "You will own the annual plan and the three statement model.",
+      "Applications are reviewed on a rolling basis.",
+      "We are no longer a ten person startup, and this role reflects that.",
+    ])("leaves an open posting alone: %s", (text) => {
+      expect(isClosedPosting(text)).toBe(false);
     });
   });
 

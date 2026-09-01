@@ -47,6 +47,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { JobCardList } from "@/app/_components/job-card";
 import { userVisibleParts } from "@/app/_lib/user-visible-parts";
+import { stripTransportDirectives } from "@/lib/goforay/delivery";
 import { jobCardsFromToolOutput } from "@/lib/goforay/job-cards";
 import { cn } from "@/lib/utils";
 
@@ -178,7 +179,7 @@ function AgentMessagePart({
     case "text":
       return (
         <MessageResponse caret="block" isAnimating={showCaret}>
-          {part.text}
+          {stripTransportDirectives(part.text)}
         </MessageResponse>
       );
     case "reasoning":

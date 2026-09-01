@@ -9,6 +9,50 @@ import {
 
 const GENERIC_TITLE_PART_RE = /^(?:careers?|jobs?|home|open roles)$/iu;
 
+const DAY_MS = 24 * 60 * 60 * 1_000;
+/**
+ * Force a re-crawl of anything Exa last saw more than a day ago. Cached body
+ * text is the reason a role taken down last week still reads as open: the
+ * closed-posting notice an ATS leaves behind is only in the live page.
+ */
+const ROLE_MAX_AGE_HOURS = 24;
+/** Older postings are rarely still open, and rarely still worth a candidate's turn. */
+const ROLE_PUBLISHED_WITHIN_DAYS = 180;
+/**
+ * Immediacy is the product. A re-crawl costs real latency, so cap it and fall
+ * back to Exa's cache rather than letting a slow crawl hold up the search.
+ */
+const FRESH_CRAWL_TIMEOUT_MS = 12_000;
+
+/**
+ * Freshest results this search can afford, degrading rather than failing.
+ * Each fallback gives up one guarantee: first the live crawl, then the
+ * publication window, which plenty of ATS pages carry no date for at all.
+ */
+async function searchRoleCandidates(query: string, limit: number) {
+  const startPublishedDate = new Date(
+    Date.now() - ROLE_PUBLISHED_WITHIN_DAYS * DAY_MS
+  ).toISOString();
+
+  const fresh = await exaSearch({
+    query,
+    limit,
+    maxAgeHours: ROLE_MAX_AGE_HOURS,
+    startPublishedDate,
+    signal: AbortSignal.timeout(FRESH_CRAWL_TIMEOUT_MS),
+  }).catch((error: unknown) => {
+    console.info("[goforay] role crawl fell back to cached results", {
+      reason: error instanceof Error ? error.message : "unknown",
+    });
+    return null;
+  });
+
+  const dated =
+    fresh ?? (await exaSearch({ query, limit, startPublishedDate }));
+  // An empty window is a filter artefact, not an empty market.
+  return dated.length ? dated : await exaSearch({ query, limit });
+}
+
 /**
  * Splits a page title into the role and the company. Only the spaced
  * separators count: splitting on a bare hyphen turned "Senior Manager -
@@ -74,10 +118,10 @@ export async function searchExaRoles({
   limit: number;
   wanted?: readonly string[];
 }): Promise<GoForayJobCard[]> {
-  const results = await exaSearch({
-    query: `${query} jobs careers apply in ${location}`,
-    limit,
-  });
+  const results = await searchRoleCandidates(
+    `${query} jobs careers apply in ${location}`,
+    limit
+  );
 
   const cards: GoForayJobCard[] = [];
   for (const result of results) {

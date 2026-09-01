@@ -43,14 +43,25 @@ export async function exaSearch({
   query,
   limit,
   category,
+  maxAgeHours,
   maxCharacters = 1_500,
   signal,
+  startPublishedDate,
 }: {
   query: string;
   limit: number;
   category?: "company" | "news" | "papers" | "pdf";
+  /**
+   * Re-crawl ceiling, in hours. Without it Exa serves the page text it cached
+   * whenever it last indexed the URL, so a page taken down since then still
+   * returns its original body. Exa's `livecrawl` is deprecated in favour of
+   * this, and it belongs inside `contents`.
+   */
+  maxAgeHours?: number;
   maxCharacters?: number;
   signal?: AbortSignal;
+  /** ISO 8601. Only links published after this are returned. */
+  startPublishedDate?: string;
 }): Promise<ExaResult[]> {
   if (!env.EXA_API_KEY) throw new Error("Exa search is not configured.");
 
@@ -65,7 +76,11 @@ export async function exaSearch({
       type: "auto",
       numResults: limit,
       ...(category ? { category } : {}),
-      contents: { text: { maxCharacters } },
+      ...(startPublishedDate ? { startPublishedDate } : {}),
+      contents: {
+        text: { maxCharacters },
+        ...(maxAgeHours === undefined ? {} : { maxAgeHours }),
+      },
     }),
     signal,
   });

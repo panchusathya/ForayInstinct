@@ -464,7 +464,7 @@ export async function pollPendingGoforayRoleSearches(limit = 20) {
     await completePendingRoleSearch(search.workspaceId);
     if (feed.cards.length) {
       deliveries.push({
-        message: `A background JuiceBox role search has completed. Send these verified openings to the candidate as concise numbered cards with their apply URLs; do not run another search or use web_search:\n${JSON.stringify(feed.cards)}`,
+        message: `A background JuiceBox role search has completed. Send these openings to the candidate as concise numbered cards with their apply URLs; do not run another search or use web_search:\n${JSON.stringify(feed.cards)}`,
         scope,
         threadId: search.threadId,
         workspaceId: search.workspaceId,

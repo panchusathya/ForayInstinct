@@ -15,6 +15,7 @@ import { isAggregatorHost, isAtsHost, sanitizeHostname } from "./card-logo";
 
 type RoleRejection =
   | "aggregator-host"
+  | "closed-posting"
   | "generic-title"
   | "landing-page"
   | "not-a-posting"
@@ -213,6 +214,20 @@ function postingShape(url: string): "posting" | RoleRejection {
   return "posting";
 }
 
+/**
+ * Phrases an ATS leaves on a role it has closed. Greenhouse and Lever keep the
+ * URL resolvable after a takedown, so the URL shape and the title still look
+ * exactly like an open posting and every check below passes. The body is the
+ * only signal that survives it, and the search response already carries one.
+ */
+const CLOSED_POSTING_RE =
+  /\b(?:no longer (?:accepting|accepts|being accepted|available|open)|not (?:currently )?accepting applications|this (?:job|position|posting|role|opening|requisition) (?:is|has been) (?:closed|filled|expired|removed)|position has been filled|posting has (?:expired|been closed)|applications? (?:are|is) (?:now )?closed)\b/iu;
+
+/** True when the page says the role is closed, whatever its URL looks like. */
+export function isClosedPosting(text: string) {
+  return CLOSED_POSTING_RE.test(text);
+}
+
 export function scoreRoleCandidate({
   title,
   url,
@@ -227,6 +242,12 @@ export function scoreRoleCandidate({
   const shape = postingShape(url);
   if (shape !== "posting")
     return { verdict: "reject", reason: shape, matched: [] };
+
+  // Before any relevance work: a closed posting is the right role at the wrong
+  // time, and surfacing one sends a candidate at a URL that cannot be applied
+  // to. Cheapest possible check, on text the caller already holds.
+  if (isClosedPosting(text))
+    return { verdict: "reject", reason: "closed-posting", matched: [] };
 
   const trimmedTitle = title.trim();
   if (!trimmedTitle || GENERIC_TITLE_RE.test(trimmedTitle)) {

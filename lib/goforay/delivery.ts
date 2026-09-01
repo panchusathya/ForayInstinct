@@ -1,33 +1,85 @@
 import { stripKernelLiveViewLinks } from "@/lib/goforay/kernel-links";
 
-const reactionPattern = /\s*\[\[react:(heart|laugh)\]\]\s*$/iu;
-/**
- * The one case a candidate is given the browser's live view: a CAPTCHA or an
- * identity check only they can complete in the page. Hidden like `[[react:…]]`,
- * so it never renders.
- */
-const takeoverPattern = /\[\[takeover\]\]/iu;
-const takeoverStripPattern = /\s*\[\[takeover\]\]\s*/giu;
 const urlPattern = /(https?:\/\/[^\s<]+)/giu;
 const sentencePattern = /(?<=[.!?])\s+(?=[a-z0-9])/giu;
 
 export type CandidateReaction = "heart" | "laugh";
 
 /**
+ * The model does not reliably reproduce the exact token it is told to emit:
+ * `{{react.heat}}` reached a candidate as visible text because the previous
+ * pattern accepted only `[[react:heart]]` at the very end of the message. So
+ * every directive below is matched tolerantly: either bracket family, either
+ * separator, and the spellings the model actually reaches for.
+ */
+const reactionSynonyms = new Map<string, CandidateReaction>([
+  ["heart", "heart"],
+  ["hearts", "heart"],
+  ["heat", "heart"],
+  ["love", "heart"],
+  ["laugh", "laugh"],
+  ["laughing", "laugh"],
+  ["haha", "laugh"],
+  ["lol", "laugh"],
+]);
+
+const reactionPattern = /[[{]{2}\s*react\s*[.:=]\s*([a-z]+)\s*[\]}]{2}/giu;
+
+/**
+ * The one case a candidate is given the browser's live view: a CAPTCHA or an
+ * identity check only they can complete in the page. Hidden like a reaction,
+ * so it never renders.
+ */
+const takeoverPattern = /[[{]{2}\s*takeover\s*[\]}]{2}/iu;
+const takeoverStripPattern = /\s*[[{]{2}\s*takeover\s*[\]}]{2}\s*/giu;
+
+/**
+ * Anything else shaped like a transport directive: a known directive name, or
+ * a bare `word:word` / `word.word` with no spaces inside doubled brackets.
+ * Deliberately narrow, so ordinary candidate prose that happens to contain a
+ * brace is left alone.
+ */
+const directivePattern =
+  /[[{]{2}\s*(?:react[^\s\]}]*|takeover[^\s\]}]*|[a-z_]+\s*[.:=]\s*[a-z0-9_-]+)\s*[\]}]{2}/giu;
+
+/**
+ * Removes every transport directive, recognised or not. A directive the
+ * channel cannot act on is deleted rather than transmitted: printing one to a
+ * candidate is always worse than dropping the reaction it asked for.
+ */
+export function stripTransportDirectives(value: string) {
+  return value
+    .replaceAll(reactionPattern, "")
+    .replaceAll(directivePattern, "")
+    .replaceAll(/[^\S\n]{2,}/gu, " ")
+    .replaceAll(/[^\S\n]+\n/gu, "\n")
+    .trim();
+}
+
+function detectReaction(value: string): CandidateReaction | undefined {
+  for (const match of value.matchAll(reactionPattern)) {
+    const found = reactionSynonyms.get((match[1] ?? "").toLowerCase());
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
  * Last-mile guardrail for candidate text. The prompt remains the primary
- * author, but a transport should never surface a tool envelope or a JSON
- * object as though it were a human response.
+ * author, but a transport should never surface a tool envelope, a JSON
+ * object, or an internal directive as though it were a human response.
  */
 export function formatCandidateDelivery(value: string): {
   bubbles: string[];
   reaction?: CandidateReaction;
 } {
-  const reaction = reactionPattern.exec(value)?.[1] as
-    | CandidateReaction
-    | undefined;
-  let text = value.replace(reactionPattern, "").trim();
-  const takeover = takeoverPattern.test(text);
-  text = text.replace(takeoverStripPattern, "\n").trim();
+  const reaction = detectReaction(value);
+  const takeover = takeoverPattern.test(value);
+  // A takeover marker stands between ideas, so it leaves the break behind
+  // rather than closing the gap the way an inert directive does.
+  let text = stripTransportDirectives(
+    value.replaceAll(takeoverStripPattern, "\n")
+  );
   text = unwrapMachineEnvelope(text);
   if (!takeover) text = stripKernelLiveViewLinks(text);
   text = lowercaseProse(text.replaceAll("—", "-").replaceAll("–", "-"));

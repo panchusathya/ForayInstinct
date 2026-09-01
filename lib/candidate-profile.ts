@@ -123,52 +123,95 @@ export type CandidateProfileResponse = z.infer<
   typeof candidateProfileResponseSchema
 >;
 
+/**
+ * Facts an ATS wizard is likely to require and we do not have.
+ *
+ * `blocking` is the difference between a fact no application can start without
+ * and one a form asks for when it gets there: reciting all nine at intake read
+ * as an interrogation, and the worker reports a field it actually needs as a
+ * `Needs user input:` blocker anyway.
+ *
+ * `onResume` marks a fact the resume already carries. Asking a candidate to
+ * type their legal name into chat while their resume sits on file is asking
+ * twice for the same thing.
+ */
 const missingFieldChecks: readonly {
+  readonly blocking: boolean;
   readonly label: string;
   readonly missing: (profile: CandidateProfile) => boolean;
+  readonly onResume: boolean;
 }[] = [
   {
+    blocking: true,
     label: "legal first name",
     missing: (profile) => profile.legalFirstName.length === 0,
+    onResume: true,
   },
   {
+    blocking: true,
     label: "legal last name",
     missing: (profile) => profile.legalLastName.length === 0,
+    onResume: true,
   },
   {
+    blocking: false,
     label: "city",
     missing: (profile) => profile.locationCity.length === 0,
+    onResume: true,
   },
   {
+    blocking: false,
     label: "region / state",
     missing: (profile) => profile.locationRegion.length === 0,
+    onResume: true,
   },
   {
+    blocking: false,
     label: "country",
     missing: (profile) => profile.locationCountryCode.length === 0,
+    onResume: true,
   },
   {
+    blocking: true,
     label: "work authorization",
     missing: (profile) => profile.workAuthorization.length === 0,
+    onResume: false,
   },
   {
+    blocking: true,
     label: "sponsorship needed now",
     missing: (profile) => profile.requiresSponsorshipNow.length === 0,
+    onResume: false,
   },
   {
+    blocking: false,
     label: "sponsorship needed in the future",
     missing: (profile) => profile.requiresSponsorshipFuture.length === 0,
+    onResume: false,
   },
   {
+    blocking: true,
     label: "work history",
     missing: (profile) => profile.workHistory.length === 0,
+    onResume: true,
   },
 ];
 
-/** Human labels for facts an ATS wizard is likely to require and we do not have. */
-export function missingProfileFields(profile: CandidateProfile): string[] {
+/**
+ * The labels worth asking a candidate for right now. Pass `hasResume` so facts
+ * the resume already carries drop out instead of being asked for twice.
+ */
+export function missingProfileFields(
+  profile: CandidateProfile,
+  options: { readonly hasResume?: boolean } = {}
+): string[] {
   return missingFieldChecks
-    .filter((field) => field.missing(profile))
+    .filter(
+      (field) =>
+        field.blocking &&
+        field.missing(profile) &&
+        !(options.hasResume && field.onResume)
+    )
     .map((field) => field.label);
 }
 

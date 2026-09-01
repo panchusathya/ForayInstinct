@@ -8,19 +8,23 @@ import {
 } from "../lib/candidate-profile";
 
 describe("candidate profile", () => {
-  it("starts empty and reports the ATS-required gaps", () => {
+  it("starts empty and asks only for the gaps that block an application", () => {
     expect(candidateProfileSchema.parse({})).toEqual(emptyCandidateProfile);
+    // Reciting all nine at intake read as an interrogation. A form that wants
+    // a deferrable field asks for it through a `Needs user input:` blocker.
     expect(missingProfileFields(emptyCandidateProfile)).toEqual([
       "legal first name",
       "legal last name",
-      "city",
-      "region / state",
-      "country",
       "work authorization",
       "sponsorship needed now",
-      "sponsorship needed in the future",
       "work history",
     ]);
+  });
+
+  it("never asks for a fact the resume on file already carries", () => {
+    expect(
+      missingProfileFields(emptyCandidateProfile, { hasResume: true })
+    ).toEqual(["work authorization", "sponsorship needed now"]);
   });
 
   it("renders a compact assignment block without secrets", () => {

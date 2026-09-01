@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 const numResultsSchema = z.object({ numResults: z.number() });
+const freshnessSchema = z.object({
+  contents: z.object({ maxAgeHours: z.number() }),
+  startPublishedDate: z.string(),
+});
 
 describe("role search availability", () => {
   afterEach(() => {
@@ -83,6 +87,43 @@ describe("role search availability", () => {
     expect(body.numResults).toBeGreaterThan(5);
   });
 
+  it("drops a posting the page itself says is closed", async () => {
+    // A closed Greenhouse posting keeps its URL and its title, so the shape
+    // and title gate cannot see it. The body is the only signal left, and the
+    // search response already carries one.
+    const feed = await publicSearch([
+      {
+        text: "This role is no longer accepting applications. See our other openings.",
+        title: "Senior Analyst, Strategic Finance | Example Co",
+        url: "https://boards.greenhouse.io/example/jobs/4123456",
+      },
+      {
+        text: "You will own the annual plan and the three statement model.",
+        title: "Senior Analyst, Strategic Finance | Other Co",
+        url: "https://boards.greenhouse.io/other/jobs/7654321",
+      },
+    ]);
+
+    expect(feed.cards).toEqual([
+      expect.objectContaining({
+        url: "https://boards.greenhouse.io/other/jobs/7654321",
+      }),
+    ]);
+  });
+
+  it("asks Exa to re-crawl rather than serving a role from its cache", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(Response.json({ results: [] }));
+    await publicSearch([], { fetch });
+
+    const body = exaFreshness(fetch.mock.calls[0]?.[1]?.body);
+    // Cached body text is why a role taken down last week still reads as open:
+    // the closed-posting notice only exists on the live page.
+    expect(body.contents.maxAgeHours).toBeGreaterThan(0);
+    expect(Date.parse(body.startPublishedDate)).toBeLessThan(Date.now());
+  });
+
   it("reports exhausted rather than resending a role already shown", async () => {
     const feed = await publicSearch(
       [
@@ -143,6 +184,12 @@ function calledUrl(input: unknown) {
   if (input instanceof URL) return input.href;
   if (input instanceof Request) return input.url;
   return "";
+}
+
+/** The freshness parameters a stubbed Exa call asked for. */
+function exaFreshness(body: unknown) {
+  const parsed: unknown = JSON.parse(typeof body === "string" ? body : "{}");
+  return freshnessSchema.parse(parsed);
 }
 
 /** The `numResults` a stubbed Exa call asked for. */

@@ -55,3 +55,29 @@ export function parseTaskCompletion(
     return undefined;
   }
 }
+
+/**
+ * The worker's blocker vocabulary, owned here rather than restated in five
+ * prompts. Only `Needs submission approval:` was ever matched in code; every
+ * other blocker lived in the instructions alone, so nothing verified that the
+ * worker had actually reported one before the coordinator acted on it. An
+ * unavailable posting had no category at all, and a failed apply against a
+ * taken-down role was narrated to a candidate as an email OTP problem.
+ */
+const workerBlockers = [
+  ["emailOtp", "Needs email OTP:"],
+  ["postingUnavailable", "Needs posting unavailable:"],
+  ["submissionApproval", "Needs submission approval:"],
+  ["userInput", "Needs user input:"],
+  ["vaultSetup", "Needs vault setup:"],
+] as const;
+
+type WorkerBlocker = (typeof workerBlockers)[number][0];
+
+/** The blocker the worker actually reported, or undefined for anything else. */
+export function blockerKind(message: string): WorkerBlocker | undefined {
+  const trimmed = message.trimStart().toLowerCase();
+  return workerBlockers.find(([, prefix]) =>
+    trimmed.startsWith(prefix.toLowerCase())
+  )?.[0];
+}

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { formatCandidateDelivery } from "@/lib/goforay/delivery";
+import {
+  formatCandidateDelivery,
+  stripTransportDirectives,
+} from "@/lib/goforay/delivery";
 import { renderGoForayJobCard } from "@/lib/goforay/job-cards";
 
 describe("candidate delivery formatter", () => {
@@ -57,6 +60,33 @@ describe("candidate delivery formatter", () => {
         "there's a captcha i can't solve. tap in and clear it:\nhttps://abc123.live.onkernel.com/view",
       ],
     });
+  });
+
+  it("recognises a reaction the model spelled wrong", () => {
+    // `{{react.heat}}` reached a candidate as visible text: the old pattern
+    // accepted only `[[react:heart]]`, at the very end of the message.
+    expect(formatCandidateDelivery("that is great {{react.heat}}")).toEqual({
+      bubbles: ["that is great"],
+      reaction: "heart",
+    });
+    expect(formatCandidateDelivery("[[react:laugh]] ha, fair")).toEqual({
+      bubbles: ["ha, fair"],
+      reaction: "laugh",
+    });
+  });
+
+  it("deletes a directive it cannot act on rather than transmitting it", () => {
+    const delivery = formatCandidateDelivery(
+      "here you go [[send:later]] and that is everything {{react.sparkle}}"
+    );
+    expect(delivery.bubbles.join(" ")).not.toMatch(/\[\[|\{\{/u);
+    expect(delivery.reaction).toBeUndefined();
+  });
+
+  it("leaves ordinary prose containing brackets alone", () => {
+    expect(
+      stripTransportDirectives("the salary band [[ per the posting ]]")
+    ).toBe("the salary band [[ per the posting ]]");
   });
 
   it("uses a compact text card that keeps the apply URL", () => {

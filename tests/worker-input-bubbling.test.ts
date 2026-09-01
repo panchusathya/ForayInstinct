@@ -43,6 +43,16 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain(
       "structured `Needs submission approval:`, `Needs user input:`, `Needs vault setup:`, or `Needs email OTP:` failure"
     );
+    // A dead posting had no category of its own, so a failed apply against a
+    // taken-down role was reported to the candidate as an OTP problem.
+    expect(workerInstructions).toContain("Needs posting unavailable:");
+    expect(browserSkill).toContain("Needs posting unavailable:");
+    expect(instructions).toContain(
+      "When a worker returns a `Needs posting unavailable:` blocker"
+    );
+    expect(instructions).toContain(
+      "Report only the blocker the worker actually reported"
+    );
     expect(workerInstructions).toContain("Needs vault setup:");
     expect(workerInstructions).toContain(
       "Do not use `Needs user input:` for a password"

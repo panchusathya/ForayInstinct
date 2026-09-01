@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  blockerKind,
   parseTaskCompletion,
   taskCompletionSchema,
 } from "../lib/task-completion";
@@ -45,5 +46,33 @@ describe("task completion schema", () => {
       parseTaskCompletion({ message: "   ", status: "success" })
     ).toBeUndefined();
     expect(parseTaskCompletion("not json")).toBeUndefined();
+  });
+});
+
+describe("worker blockers", () => {
+  it("names the blocker the worker actually reported", () => {
+    expect(blockerKind("Needs email OTP: workday emailed a code.")).toBe(
+      "emailOtp"
+    );
+    expect(
+      blockerKind("Needs posting unavailable: the URL returns a 404.")
+    ).toBe("postingUnavailable");
+    expect(
+      blockerKind("  needs submission approval: staff engineer at acme.")
+    ).toBe("submissionApproval");
+  });
+
+  it("reports no blocker for a failure that names none", () => {
+    // The reported incident: an apply against a taken-down posting failed
+    // with no blocker, and was narrated to the candidate as an OTP problem.
+    expect(
+      blockerKind("The application could not be completed.")
+    ).toBeUndefined();
+    expect(blockerKind("")).toBeUndefined();
+    // Only the prefix counts. A message that merely mentions a code is not a
+    // request for one.
+    expect(
+      blockerKind("The page mentioned a verification code somewhere.")
+    ).toBeUndefined();
   });
 });
