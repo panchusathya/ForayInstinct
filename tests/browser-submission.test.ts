@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Script } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -34,6 +35,7 @@ const mocks = vi.hoisted(() => ({
         _options: unknown
       ) => Promise<{ error?: string; result?: unknown; success: boolean }>
     >(),
+  listBrowserRunCheckpoints: vi.fn<() => Promise<unknown[]>>(),
   recordBrowserRunCheckpoint:
     vi.fn<
       (
@@ -66,6 +68,7 @@ vi.mock("@/agent/subagents/worker/lib/owned-browser", () => ({
 }));
 
 vi.mock("@/db/services/browser-run-checkpoints", () => ({
+  listBrowserRunCheckpoints: mocks.listBrowserRunCheckpoints,
   recordBrowserRunCheckpoint: mocks.recordBrowserRunCheckpoint,
 }));
 
@@ -204,6 +207,7 @@ describe("playwright checkpoints observe a submission without final_output", () 
       sessionId: "browser-1",
     });
     mocks.recordBrowserRunCheckpoint.mockResolvedValue();
+    mocks.listBrowserRunCheckpoints.mockResolvedValue([]);
     mocks.saveApplicationSubmissionScreenshot.mockResolvedValue();
     mocks.currentKernelPageUrl.mockResolvedValue(undefined);
     mocks.executePlaywright.mockResolvedValue({
@@ -303,6 +307,7 @@ describe("playwright checkpoints observe a submission without final_output", () 
       { userId: "user-1", workspaceId: "workspace-1" },
       "browser-1",
       expect.objectContaining({
+        // oxlint-disable-next-line typescript/no-unsafe-assignment -- Vitest's asymmetric matcher is untyped.
         actions: expect.arrayContaining([
           "submission evidence: application received",
         ]),
@@ -324,6 +329,7 @@ describe("playwright checkpoints observe a submission without final_output", () 
     const { default: executePlaywrightCode } =
       await import("../agent/subagents/worker/tools/execute_playwright_code");
 
+    // oxlint-disable-next-line typescript/no-unsafe-assignment -- Eve tool output is untyped at this boundary.
     const result = await executePlaywrightCode.execute(
       {
         code: "await page.locator('#resume').setInputFiles('/tmp/goforay-resume.pdf')",
@@ -333,6 +339,7 @@ describe("playwright checkpoints observe a submission without final_output", () 
       {} as never
     );
 
+    // oxlint-disable-next-line typescript/no-unsafe-assignment -- Vitest's asymmetric matcher is untyped.
     expect(result).toMatchObject({
       next_action: playwrightObserveThenActInstruction,
       success: false,
@@ -347,6 +354,80 @@ describe("playwright checkpoints observe a submission without final_output", () 
         (call) => call[1].code === captchaProbeCode
       )
     ).toBe(false);
+  });
+
+  it("requires a screenshot after a failed Playwright call instead of retrying it", async () => {
+    mocks.listBrowserRunCheckpoints.mockResolvedValue([
+      {
+        action: "execute",
+        actions: [],
+        errorCode: "timeout",
+        phase: "playwright",
+        state: "failed",
+        trace: [],
+      },
+    ]);
+    const { default: executePlaywrightCode } =
+      await import("../agent/subagents/worker/tools/execute_playwright_code");
+
+    // oxlint-disable-next-line typescript/no-unsafe-assignment -- Eve tool output is untyped at this boundary.
+    const result = await executePlaywrightCode.execute(
+      {
+        code: "await page.locator('input[name=firstName]').fill('Ada')",
+        session_id: "browser-1",
+      },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    // oxlint-disable-next-line typescript/no-unsafe-assignment -- Vitest's asymmetric matcher is untyped.
+    expect(result).toMatchObject({
+      // oxlint-disable-next-line typescript/no-unsafe-assignment -- Vitest's asymmetric matcher is untyped.
+      next_action: expect.stringContaining("computer_action"),
+      success: false,
+    });
+    expect(mocks.executePlaywright).not.toHaveBeenCalled();
+  });
+
+  it("does not let a screenshot authorize replaying the code that failed", async () => {
+    const code = "await page.locator('input[name=firstName]').fill('Ada')";
+    const fingerprint = `playwright-code-sha256:${createHash("sha256")
+      .update(code)
+      .digest("base64url")}`;
+    mocks.listBrowserRunCheckpoints.mockResolvedValue([
+      {
+        action: "batch",
+        actions: ["screenshot"],
+        phase: "computer",
+        state: "completed",
+        trace: [],
+      },
+      {
+        action: "execute",
+        actions: [],
+        errorCode: "timeout",
+        phase: "playwright",
+        state: "failed",
+        trace: [fingerprint],
+      },
+    ]);
+    const { default: executePlaywrightCode } =
+      await import("../agent/subagents/worker/tools/execute_playwright_code");
+
+    const result = await executePlaywrightCode.execute(
+      { code, session_id: "browser-1" },
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Eve tool context is external runtime state.
+      {} as never
+    );
+
+    expect(result).toMatchObject({
+      // oxlint-disable-next-line typescript/no-unsafe-assignment -- Vitest's asymmetric matcher is untyped.
+      next_action: expect.stringContaining(
+        "exact Playwright code already failed"
+      ),
+      success: false,
+    });
+    expect(mocks.executePlaywright).not.toHaveBeenCalled();
   });
 
   it("forbids retrying a broken setInputFiles Buffer payload", async () => {

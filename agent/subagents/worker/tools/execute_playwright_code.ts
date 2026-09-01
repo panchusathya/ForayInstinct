@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { browserProvider } from "@/lib/browser";
@@ -5,6 +6,7 @@ import type { PlaywrightResponse } from "@/lib/browser/contract";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/browser-run-evidence";
+import { listBrowserRunCheckpoints } from "@/db/services/browser-run-checkpoints";
 import {
   browserSessionEndedError,
   diagnosticErrorCode,
@@ -23,6 +25,9 @@ const inputSchema = z.object({
   session_id: z.string().min(1),
 });
 
+const screenshotRecoveryInstruction =
+  "Recovery gate: call computer_action with a masked screenshot now. Identify the visible controls and use one different Playwright tactic; the failed code cannot be replayed.";
+
 export default defineTool({
   description:
     'Execute Playwright/TypeScript automation code against an existing browser session with a 30-second ceiling after a masked computer_action screenshot has identified the live controls. Batch related operations, use "domcontentloaded" or a precise locator with waits of at most five seconds except for one managed CAPTCHA wait of at most 20 seconds, and never wait for "networkidle" or use fixed multi-second sleeps. On failure, obey next_action: screenshot once and change tactic; do not replay the same selector or pass a Buffer to setInputFiles. Use solve_captcha for a checkbox or lookalike hCaptcha, including image grids and response-field tokens. Does not create or delete browsers.',
@@ -30,6 +35,19 @@ export default defineTool({
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
     await requireOwnedBrowserSession(scope, input.session_id);
+    const recoveryInstruction = await requiredPlaywrightRecovery(
+      scope,
+      input.session_id,
+      input.code
+    );
+    if (recoveryInstruction) {
+      return {
+        error:
+          "A prior Playwright failure requires visual recovery before another execution.",
+        next_action: recoveryInstruction,
+        success: false,
+      };
+    }
     let response: PlaywrightResponse;
     try {
       response = await browserProvider.executePlaywright(
@@ -98,6 +116,9 @@ export default defineTool({
         phase: "playwright",
         actions: nextAction ? [nextAction] : undefined,
         state: response.success ? "completed" : "failed",
+        trace: response.success
+          ? undefined
+          : [playwrightCodeFingerprint(input.code)],
       },
       context.abortSignal
     );
@@ -113,3 +134,45 @@ export default defineTool({
     };
   },
 });
+
+/**
+ * Tool instructions alone cannot prevent a model from repeatedly submitting
+ * the same missing selector. Checkpoints survive worker turns, so use them as
+ * the recovery boundary: a failed execution must be followed by a screenshot,
+ * and a screenshot never authorizes replaying that failed code.
+ */
+async function requiredPlaywrightRecovery(
+  scope: Awaited<ReturnType<typeof requireWorkerScope>>,
+  sessionId: string,
+  code: string
+) {
+  const checkpoints = await listBrowserRunCheckpoints(scope, sessionId).catch(
+    () => []
+  );
+  const latest = checkpoints.at(0);
+  const latestPlaywright = checkpoints.find(
+    (checkpoint) =>
+      checkpoint.action === "execute" && checkpoint.phase === "playwright"
+  );
+  const screenshotRecovered =
+    latest?.action === "batch" &&
+    latest.state === "completed" &&
+    latest.actions.includes("screenshot");
+
+  if (latestPlaywright?.state === "failed" && !screenshotRecovered) {
+    return screenshotRecoveryInstruction;
+  }
+  if (
+    latestPlaywright?.state === "failed" &&
+    latestPlaywright.trace.includes(playwrightCodeFingerprint(code))
+  ) {
+    return "Recovery gate: this exact Playwright code already failed. Use the screenshot observations for one materially different tactic, or report the verified blocker.";
+  }
+  return undefined;
+}
+
+function playwrightCodeFingerprint(code: string) {
+  return `playwright-code-sha256:${createHash("sha256")
+    .update(code)
+    .digest("base64url")}`;
+}

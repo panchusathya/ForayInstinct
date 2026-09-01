@@ -23,13 +23,13 @@ function sourceFiles(directory: string): string[] {
 }
 
 describe("root and worker capability boundaries", () => {
-  it("pins chat and browser work to GLM 5.3 Flash on AI Gateway", () => {
+  it("pins chat and browser work to their configured AI Gateway models", () => {
     const rootAgent = readFileSync("agent/agent.ts", "utf8");
     const workerAgent = readFileSync(`${workerRoot}/agent.ts`, "utf8");
     const models = readFileSync("lib/model-config.ts", "utf8");
 
-    expect(chatGatewayModel).toBe("zai/glm-5.3");
-    expect(browserGatewayModel).toBe("zai/glm-5.3");
+    expect(chatGatewayModel).toBe("alibaba/qwen3.7-flash");
+    expect(browserGatewayModel).toBe("alibaba/qwen3-vl-235b-a22b-instruct");
     expect(models).toContain(`chatGatewayModel = "${chatGatewayModel}"`);
     expect(models).toContain(`browserGatewayModel = "${browserGatewayModel}"`);
     expect(rootAgent).toContain("model: chatGatewayModel");
@@ -49,7 +49,7 @@ describe("root and worker capability boundaries", () => {
       ...sourceFiles("agent"),
       ...sourceFiles("lib"),
     ]) {
-      expect(readFileSync(file, "utf8"), file).not.toMatch(leftoverOpenAi);
+      expect(readFileSync(file, "utf8")).not.toMatch(leftoverOpenAi);
     }
   });
 
