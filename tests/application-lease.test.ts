@@ -8,6 +8,7 @@ import * as schema from "../db/schema";
 const databases: PGlite[] = [];
 
 afterEach(async () => {
+  vi.doUnmock("@/db");
   vi.resetModules();
   await Promise.all(databases.splice(0).map((database) => database.close()));
 });
