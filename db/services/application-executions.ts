@@ -361,6 +361,48 @@ export async function assertNoConcurrentApplicationWorker(input: {
   );
 }
 
+/** Whether a worker of this root session is still running or parked on the candidate. */
+export async function hasUnfinishedApplicationExecution(
+  rootSessionId: string,
+  since: Date
+) {
+  const [row] = await db
+    .select({ id: applicationExecutions.id })
+    .from(applicationExecutions)
+    .where(
+      and(
+        eq(applicationExecutions.rootSessionId, rootSessionId),
+        inArray(applicationExecutions.status, ["queued", "running", "waiting"]),
+        gte(applicationExecutions.updatedAt, since.toISOString())
+      )
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
+/** Counts one kind of trace event across every execution of a root session. */
+export async function countRecentApplicationExecutionEvents(input: {
+  eventType: string;
+  rootSessionId: string;
+  since: Date;
+}) {
+  const rows = await db
+    .select({ id: applicationExecutionEvents.id })
+    .from(applicationExecutionEvents)
+    .innerJoin(
+      applicationExecutions,
+      eq(applicationExecutionEvents.executionId, applicationExecutions.id)
+    )
+    .where(
+      and(
+        eq(applicationExecutions.rootSessionId, input.rootSessionId),
+        eq(applicationExecutionEvents.eventType, input.eventType),
+        gte(applicationExecutionEvents.createdAt, input.since.toISOString())
+      )
+    );
+  return rows.length;
+}
+
 export async function listApplicationExecutionTraces(
   scope: AccessScope,
   limit = 50

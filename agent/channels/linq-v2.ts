@@ -55,6 +55,16 @@ import { inferCandidateDocumentKind } from "@/lib/candidate-documents";
 import { Client } from "eve/client";
 import { getVercelOidcToken } from "@vercel/oidc";
 import { findRestartableApplicationExecutions } from "@/db/services/application-executions";
+import {
+  rememberLinqSessionActivity,
+  rollOverIdleLinqSession,
+} from "../lib/linq-session-rollover";
+import {
+  renderInputRequestText,
+  resolveSessionLimitPrompt,
+  sessionLimitRequests,
+  sessionStoppedMessage,
+} from "../lib/linq-input-requests";
 
 const verifiedPhoneUserSchema = z.object({
   id: z.string().min(1),
@@ -183,6 +193,37 @@ const { bot, channel, send } = chatSdkChannel({
       if (delivery.status === "delivered") {
         context.state.pendingSubmissionScreenshot = undefined;
       }
+    },
+    async "input.requested"(event, context, session) {
+      // Eve's default renders each request as a card with buttons, which Linq
+      // flattens to text whose buttons never fire. Answer the framework's own
+      // budget guardrail here so the candidate never sees it, and render the
+      // prompts that really need them as numbered plain text: a reply that
+      // matches an option's number or label resolves the request.
+      const limits = sessionLimitRequests(event.requests);
+      if (limits.length > 0) {
+        try {
+          const decision = await resolveSessionLimitPrompt({
+            requests: limits,
+            sessionId: session.session.id,
+          });
+          if (decision === "stopped" && context.thread) {
+            await context.thread.post({ markdown: sessionStoppedMessage });
+          }
+        } catch (error) {
+          console.error("[linq-session] session-limit prompt unanswered", {
+            message: error instanceof Error ? error.message : String(error),
+            session_id: session.session.id,
+          });
+        }
+      }
+      const remaining = event.requests.filter(
+        (request) => request.kind !== "session-limit"
+      );
+      if (remaining.length === 0 || !context.thread) return;
+      await context.thread.post({
+        markdown: remaining.map(renderInputRequestText).join("\n\n"),
+      });
     },
     async "authorization.required"(event, context) {
       // Eve's default handler posts Vercel Connect's device-pairing code and
@@ -575,7 +616,8 @@ async function dispatchLinqJobCardTapback(event: ReactionEvent) {
   }).catch(() => undefined);
 
   try {
-    await send(
+    await rollOverIdleLinqSession(thread);
+    const session = await send(
       {
         context: [
           CURRENT_FORAY_POLICY,
@@ -591,6 +633,7 @@ async function dispatchLinqJobCardTapback(event: ReactionEvent) {
         turnPolicy: "queue",
       }
     );
+    await rememberLinqSessionActivity(thread, session);
   } catch (error) {
     await releaseLinqCardApply(event.threadId, event.messageId);
     console.error("[goforay] tapback apply failed to start", {
@@ -661,7 +704,10 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
     await reactToLinqMessage(thread, message.id, "👍");
   }
 
-  await send(
+  // A long-quiet thread gets a fresh session: less history to re-read on
+  // every call, and the current deployment's instructions.
+  await rollOverIdleLinqSession(thread);
+  const session = await send(
     {
       context: inbound.context,
       // Persist attachments before this turn and place their extracted text in
@@ -671,6 +717,7 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
     },
     { auth: inbound.auth, thread }
   );
+  await rememberLinqSessionActivity(thread, session);
 }
 
 /** Explicit restart is intentionally narrow: normal conversational retries keep context. */
@@ -712,7 +759,7 @@ async function restartTrackedApplication(
     await client.sessions.attach(execution.rootSessionId).reset({
       reason: "Explicit application restart requested by the candidate.",
     });
-    await send(
+    const session = await send(
       {
         context: [
           CURRENT_FORAY_POLICY,
@@ -722,6 +769,7 @@ async function restartTrackedApplication(
       },
       { auth: inbound.auth, thread }
     );
+    await rememberLinqSessionActivity(thread, session);
     return true;
   } catch (error) {
     console.error("[application-execution] restart failed", {
