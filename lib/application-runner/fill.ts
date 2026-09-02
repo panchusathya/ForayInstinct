@@ -3,6 +3,7 @@ import { recordSubmissionReviewEvidence } from "@/agent/subagents/worker/lib/bro
 import {
   readCandidateContactIdentity,
   readCandidateProfile,
+  saveCandidateProfile,
 } from "@/db/services/candidate-profile";
 import { readOrImportDefaultResume } from "@/db/services/default-resume";
 import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoints";
@@ -12,6 +13,7 @@ import { suggestUnmappedFills } from "@/lib/application-runner/ambiguous";
 import {
   mapProfileToFormFields,
   type MappedFill,
+  profilePatchForAnswer,
   type VisibleFormField,
 } from "@/lib/application-runner/form-map";
 import {
@@ -27,6 +29,10 @@ import type {
   ApplicationPauseReason,
   ApplicationRunInput,
 } from "@/lib/application-runner/types";
+import {
+  type CandidateProfile,
+  candidateProfilePatchSchema,
+} from "@/lib/candidate-profile";
 import { applicationPauseMessage } from "@/lib/task-completion";
 import { z } from "zod";
 
@@ -67,6 +73,52 @@ async function applyFills(sessionId: string, fills: MappedFill[]) {
     })
   );
   return applied?.skipped ?? [];
+}
+
+/**
+ * Writes what the candidate just answered back onto their profile.
+ *
+ * Without this an answer lives only for the one pass it was given in: the next
+ * round re-derives every value from the stored profile, finds the same gap,
+ * and asks the same question again. That is the loop a candidate experiences
+ * as the runner ignoring them.
+ *
+ * Only fills the deterministic mapper could not place are considered, only
+ * fields `profilePatchForAnswer` recognizes are kept, and a value already on
+ * the profile is never overwritten — a form answer is weaker evidence than
+ * something the candidate entered deliberately.
+ */
+async function rememberAnswers(input: {
+  fields: VisibleFormField[];
+  fills: MappedFill[];
+  profile: CandidateProfile;
+  scope: ApplicationRunInput["scope"];
+}) {
+  const bySelector = new Map(
+    input.fields.map((field) => [field.selector, field] as const)
+  );
+  const current: Record<string, unknown> = { ...input.profile };
+  const patch: Record<string, unknown> = {};
+  for (const fill of input.fills) {
+    const field = bySelector.get(fill.selector);
+    if (!field) continue;
+    const candidate = profilePatchForAnswer(field, fill.value);
+    if (!candidate) continue;
+    for (const [key, value] of Object.entries(candidate)) {
+      const existing = current[key];
+      const alreadySet =
+        typeof existing === "string"
+          ? existing.trim() !== ""
+          : existing !== null;
+      if (alreadySet) continue;
+      patch[key] = value;
+    }
+  }
+  if (Object.keys(patch).length === 0) return;
+  const parsed = candidateProfilePatchSchema.safeParse(patch);
+  if (!parsed.success) return;
+  // A profile write must never take down an in-flight application.
+  await saveCandidateProfile(input.scope, parsed.data).catch(() => undefined);
 }
 
 export async function fillVisibleForm(
@@ -159,6 +211,12 @@ export async function fillVisibleForm(
     });
     if (helper.fills.length > 0) {
       await applyFills(input.browserSessionId, helper.fills);
+      await rememberAnswers({
+        fields: mapped.unmapped,
+        fills: helper.fills,
+        profile,
+        scope: input.scope,
+      });
     }
     if (helper.blocker) {
       return {

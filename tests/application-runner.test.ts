@@ -11,6 +11,7 @@ import {
 } from "@/lib/candidate-profile";
 import {
   mapProfileToFormFields,
+  profilePatchForAnswer,
   type VisibleFormField,
 } from "@/lib/application-runner/form-map";
 import { alreadyInProgressStatus } from "@/lib/task-completion";
@@ -260,5 +261,57 @@ describe("option-based questions", () => {
     );
     expect(mapped.fills).toEqual([]);
     expect(mapped.unmapped).toHaveLength(1);
+  });
+});
+
+describe("remembering an answer", () => {
+  const field = (label: string, name = "q") => ({
+    label,
+    name,
+    required: true,
+    selector: "#q",
+    tag: "input",
+    type: "text",
+  });
+
+  it("keeps a name the candidate had to supply", () => {
+    expect(profilePatchForAnswer(field("First Name"), "Sathya")).toEqual({
+      legalFirstName: "Sathya",
+    });
+  });
+
+  it("reads a work authorization answer back into the profile enum", () => {
+    expect(
+      profilePatchForAnswer(
+        field("Are you authorized to work for any employer in the US?"),
+        "Yes"
+      )
+    ).toEqual({ workAuthorization: "us_visa_no_sponsorship" });
+    expect(
+      profilePatchForAnswer(field("Work authorization"), "U.S. Citizen")
+    ).toEqual({ workAuthorization: "us_citizen" });
+  });
+
+  it("turns a sponsorship answer into the stored yes/no", () => {
+    expect(
+      profilePatchForAnswer(field("Will you require sponsorship?"), "No")
+    ).toEqual({ requiresSponsorshipNow: "no" });
+  });
+
+  it("never keeps a secret a form asked for", () => {
+    expect(profilePatchForAnswer(field("Password"), "hunter2")).toBeUndefined();
+    expect(
+      profilePatchForAnswer(field("Social Security Number"), "000-00-0000")
+    ).toBeUndefined();
+    expect(
+      profilePatchForAnswer(field("Date of Birth"), "1990-01-01")
+    ).toBeUndefined();
+  });
+
+  it("keeps nothing from a question it does not recognize", () => {
+    expect(
+      profilePatchForAnswer(field("Favorite color"), "blue")
+    ).toBeUndefined();
+    expect(profilePatchForAnswer(field("First Name"), "  ")).toBeUndefined();
   });
 });

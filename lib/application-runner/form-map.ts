@@ -1,6 +1,7 @@
 import type {
   CandidateContactIdentity,
   CandidateProfile,
+  CandidateProfilePatch,
 } from "@/lib/candidate-profile";
 
 export interface VisibleFormField {
@@ -19,13 +20,21 @@ export interface MappedFill {
   value: string;
 }
 
-const workAuthorizationLabels: Record<string, string> = {
-  other: "Other",
-  requires_sponsorship: "I will require sponsorship",
-  us_citizen: "U.S. Citizen",
-  us_permanent_resident: "Permanent Resident",
-  us_visa_no_sponsorship: "Authorized to work, no sponsorship needed",
-};
+/** The stored enum paired with the wording a form would show for it. */
+const workAuthorizationOptions = [
+  ["other", "Other"],
+  ["requires_sponsorship", "I will require sponsorship"],
+  ["us_citizen", "U.S. Citizen"],
+  ["us_permanent_resident", "Permanent Resident"],
+  ["us_visa_no_sponsorship", "Authorized to work, no sponsorship needed"],
+] as const satisfies readonly (readonly [
+  CandidateProfile["workAuthorization"],
+  string,
+])[];
+
+const workAuthorizationLabels: Record<string, string> = Object.fromEntries(
+  workAuthorizationOptions
+);
 
 /**
  * Deterministic mapping from a candidate profile onto visible form controls.
@@ -61,6 +70,87 @@ export function mapProfileToFormFields(input: {
     }
   }
   return { fills, unmapped };
+}
+
+/**
+ * The profile field a question was asking about, so an answer given once in
+ * chat is kept instead of being asked for again on the next posting.
+ *
+ * Deliberately narrower than `valueForField`: only facts a candidate states
+ * plainly and would expect us to remember. Contact details belong to the
+ * identity record, and anything a form might ask that is a secret — a
+ * password, an SSN, a date of birth — has no entry here and never will.
+ */
+export function profilePatchForAnswer(
+  field: VisibleFormField,
+  answer: string
+): CandidateProfilePatch | undefined {
+  const value = answer.trim();
+  if (value === "") return undefined;
+  const key = normalize(field.label, field.name, field.type);
+  if (/password|ssn|social.?security|date.?of.?birth|birth.?date/u.test(key)) {
+    return undefined;
+  }
+  if (/first.?name|given.?name|legal.?first/u.test(key)) {
+    return { legalFirstName: value };
+  }
+  if (/last.?name|family.?name|surname|legal.?last/u.test(key)) {
+    return { legalLastName: value };
+  }
+  if (/preferred.?name|nickname/u.test(key)) return { preferredName: value };
+  if (/city/u.test(key)) return { locationCity: value };
+  if (/state|region|province/u.test(key)) return { locationRegion: value };
+  if (/zip|postal/u.test(key)) return { locationPostalCode: value };
+  if (/headline|title/u.test(key)) return { headline: value };
+  if (/start.?date|earliest.?start|available/u.test(key)) {
+    return { earliestStartDate: value };
+  }
+  if (/sponsor/u.test(key)) {
+    const answered = yesNoFromAnswer(value);
+    return answered ? { requiresSponsorshipNow: answered } : undefined;
+  }
+  if (/relocat/u.test(key)) {
+    const answered = yesNoFromAnswer(value);
+    return answered ? { willingToRelocate: answered } : undefined;
+  }
+  if (/authoriz|work.?eligib|citizenship/u.test(key)) {
+    const authorization = workAuthorizationFromAnswer(value);
+    return authorization ? { workAuthorization: authorization } : undefined;
+  }
+  if (/salary|compensation|pay.?expect/u.test(key)) {
+    const digits = value.replace(/[^0-9]/gu, "");
+    if (digits === "") return undefined;
+    const amount = Number.parseInt(digits, 10);
+    return Number.isFinite(amount) ? { salaryMin: amount } : undefined;
+  }
+  return undefined;
+}
+
+function yesNoFromAnswer(value: string): "yes" | "no" | undefined {
+  if (/^\s*(yes|y|true)\b/iu.test(value)) return "yes";
+  if (/^\s*(no|n|false)\b/iu.test(value)) return "no";
+  return undefined;
+}
+
+function workAuthorizationFromAnswer(
+  value: string
+): CandidateProfile["workAuthorization"] | undefined {
+  const text = value.trim().toLowerCase();
+  const labelled = workAuthorizationOptions.find(
+    ([, label]) => label.toLowerCase() === text
+  );
+  if (labelled) return labelled[0];
+  if (/citizen/u.test(text)) return "us_citizen";
+  if (/permanent.?resident|green.?card/u.test(text)) {
+    return "us_permanent_resident";
+  }
+  if (/require[sd]?\s+sponsorship|need.*sponsor/u.test(text)) {
+    return "requires_sponsorship";
+  }
+  // A bare yes to "are you authorized" is only ever that much: authorized
+  // without sponsorship. Anything vaguer stays unset rather than guessed.
+  if (/^\s*(yes|y|true)\b/iu.test(text)) return "us_visa_no_sponsorship";
+  return undefined;
 }
 
 function valueForField(
