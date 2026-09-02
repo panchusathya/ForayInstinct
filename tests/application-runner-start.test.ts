@@ -3,11 +3,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   claimApplicationLease: vi.fn<() => Promise<Record<string, unknown>>>(),
   createApplicationExecution: vi.fn<() => Promise<void>>(),
-  findApplicationRun: vi.fn<() => Promise<undefined>>(),
+  findApplicationRun: vi.fn<
+    () => Promise<
+      | undefined
+      | {
+          browserSessionId?: string;
+          id: string;
+          status: string;
+          workflowRunId: string;
+        }
+    >
+  >(),
   runApplicationUntilPause: vi.fn<() => Promise<Record<string, unknown>>>(),
   updateApplicationRun:
     vi.fn<
-      (_input: { status?: string; workflowRunId?: string }) => Promise<void>
+      (_input: {
+        browserSessionId?: string;
+        pauseReason?: string | null;
+        status?: string;
+        workflowRunId?: string;
+      }) => Promise<void>
     >(),
 }));
 
@@ -100,6 +115,61 @@ describe("startApplication", () => {
     const marked = mocks.updateApplicationRun.mock.calls.at(0)?.[0];
     expect(marked?.status).toBe("running");
     expect(marked?.workflowRunId?.startsWith("inline:")).toBe(true);
+  });
+
+  it("retries a posting whose previous run timed out", async () => {
+    // The watchdog leaves the workflow id on the row it timed out, and the same
+    // session reuses that row, so this used to refuse the posting forever.
+    mocks.findApplicationRun.mockResolvedValue({
+      browserSessionId: "dead-session",
+      id: "prev",
+      status: "timed_out",
+      workflowRunId: "inline:prev",
+    });
+    mocks.runApplicationUntilPause.mockResolvedValue({
+      applyUrl,
+      message: "Needs submission approval: Strategic Finance",
+      pause: "approval",
+    });
+
+    const result = await startApplication(input);
+
+    expect(mocks.runApplicationUntilPause).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ pause: "approval", status: "waiting" });
+  });
+
+  it("drops the closed browser session before refilling", async () => {
+    mocks.findApplicationRun.mockResolvedValue({
+      browserSessionId: "dead-session",
+      id: "prev",
+      status: "timed_out",
+      workflowRunId: "inline:prev",
+    });
+    mocks.runApplicationUntilPause.mockResolvedValue({
+      applyUrl,
+      message: "Needs submission approval: Strategic Finance",
+      pause: "approval",
+    });
+
+    await startApplication(input);
+
+    expect(mocks.updateApplicationRun.mock.calls.at(0)?.[0]).toMatchObject({
+      browserSessionId: "",
+      pauseReason: null,
+    });
+  });
+
+  it("still refuses a posting whose run is waiting on the candidate", async () => {
+    mocks.findApplicationRun.mockResolvedValue({
+      id: "prev",
+      status: "waiting",
+      workflowRunId: "inline:prev",
+    });
+
+    const result = await startApplication(input);
+
+    expect(mocks.runApplicationUntilPause).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: "already_in_progress" });
   });
 
   it("does not start a second run while one already holds the posting", async () => {

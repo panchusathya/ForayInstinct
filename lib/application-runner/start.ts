@@ -13,6 +13,7 @@ import {
   type ApplicationRunInput,
   type ApplicationRunResult,
   isInlineWorkflow,
+  liveRunStatuses,
 } from "@/lib/application-runner/types";
 import { runApplicationUntilPause } from "@/lib/application-runner/run";
 import { startApplicationWorkflow } from "@/lib/application-runner/workflow";
@@ -56,11 +57,16 @@ export async function startApplication(input: {
       status: alreadyInProgressStatus,
     };
   }
+  // Refuse a duplicate dispatch only while a run is genuinely live. A finished
+  // one keeps its workflow id forever, and the execution row is reused whenever
+  // the same session retries the same posting, so matching on the id alone
+  // would make one timed-out run block that posting for good.
   const existing = await findApplicationRun({ applyUrl, scope: input.scope });
   if (
     existing?.workflowRunId !== undefined &&
     existing.workflowRunId !== null &&
-    existing.workflowRunId !== ""
+    existing.workflowRunId !== "" &&
+    liveRunStatuses.has(existing.status)
   ) {
     return {
       applyUrl,
@@ -78,8 +84,13 @@ export async function startApplication(input: {
     scope: input.scope,
   };
   const workflowRunId = await startApplicationWorkflow(runInput);
+  // A retry reuses the execution row, whose browser session the watchdog has
+  // already closed. Clear the run state so the fill opens a fresh one instead
+  // of driving a dead session.
   await updateApplicationRun({
+    browserSessionId: "",
     executionId: id,
+    pauseReason: null,
     status: "running",
     workflowRunId,
   });

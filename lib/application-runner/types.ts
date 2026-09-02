@@ -61,6 +61,16 @@ export function isInlineWorkflow(workflowRunId: string | null | undefined) {
   );
 }
 
+/**
+ * Execution statuses that still own their posting. Everything else — completed,
+ * failed, timed_out — is terminal and must not block a fresh start.
+ */
+export const liveRunStatuses: ReadonlySet<string> = new Set([
+  "queued",
+  "running",
+  "waiting",
+]);
+
 /** The durable run id to address through `workflow/api`, or nothing inline. */
 export function durableWorkflowRunId(
   workflowRunId: string | null | undefined
