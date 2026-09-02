@@ -5,7 +5,7 @@ import { scopeFromPrincipal } from "@/lib/access-scope";
 
 export default defineTool({
   description:
-    "Start filling one job application in the durable Playwright runner. Pass the posting apply_url, role, and company. Returns { status: working } when the run starts, or already_in_progress if that posting is already held. When the run pauses it returns { pause } from approval | email_otp | user_input | vault_setup | posting_unavailable — classify by that field, never by parsing Needs prefixes. Never call worker. Do not poll; wait for a pause then continue_application.",
+    "Start filling one job application in the Playwright runner. Pass the posting apply_url, role, and company. Returns already_in_progress if that posting is already held. Otherwise it fills the form and returns { status: waiting, pause } at the first pause — approval | email_otp | user_input | vault_setup | posting_unavailable — or { status: completed } if the posting needed nothing. A durable run instead returns { status: working } and reports its pause later. Classify by the pause field, never by parsing Needs prefixes. Never call worker. Do not poll; act on the pause you get back, then continue_application.",
   inputSchema: z.object({
     apply_url: z.url(),
     company: z.string().min(1).max(160).default(""),

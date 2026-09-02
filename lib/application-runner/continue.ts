@@ -5,18 +5,14 @@ import {
 import { closeApplicationBrowser } from "@/lib/application-runner/browser";
 import { submitApplication } from "@/lib/application-runner/fill";
 import { runApplicationUntilPause } from "@/lib/application-runner/run";
+import {
+  durableWorkflowRunId,
+  isInlineWorkflow,
+} from "@/lib/application-runner/types";
 import { resumeApplicationHook } from "@/lib/application-runner/workflow";
 import { safeApplyUrl } from "@/lib/application-execution";
 import type { AccessScope } from "@/lib/access-scope";
 import { pauseKindFromOutput } from "@/lib/task-completion";
-
-function isInlineWorkflow(workflowRunId: string | null | undefined) {
-  return (
-    workflowRunId === undefined ||
-    workflowRunId === null ||
-    workflowRunId.startsWith("inline:")
-  );
-}
 
 export async function continueApplication(input: {
   answers?: string;
@@ -92,10 +88,11 @@ export async function cancelApplication(input: {
       sessionId: run.browserSessionId,
     });
   }
-  if (run.workflowRunId && !run.workflowRunId.startsWith("inline:")) {
+  const durableRunId = durableWorkflowRunId(run.workflowRunId);
+  if (durableRunId) {
     try {
       const workflowApi = await import("workflow/api");
-      await workflowApi.getRun(run.workflowRunId).cancel();
+      await workflowApi.getRun(durableRunId).cancel();
     } catch {
       // Best-effort cancel of the durable run.
     }

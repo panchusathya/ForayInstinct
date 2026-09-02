@@ -12,8 +12,11 @@ import {
   applicationRunnerModel,
   type ApplicationRunInput,
   type ApplicationRunResult,
+  isInlineWorkflow,
 } from "@/lib/application-runner/types";
+import { runApplicationUntilPause } from "@/lib/application-runner/run";
 import { startApplicationWorkflow } from "@/lib/application-runner/workflow";
+import { applicationPauseMessage } from "@/lib/task-completion";
 
 export async function startApplication(input: {
   applyUrl: string;
@@ -80,11 +83,44 @@ export async function startApplication(input: {
     status: "running",
     workflowRunId,
   });
+  if (!isInlineWorkflow(workflowRunId)) {
+    return {
+      applyUrl,
+      executionId: id,
+      expiresAt: claim.expiresAt,
+      message: `Application for ${input.role} is running.`,
+      status: "working",
+    };
+  }
+  // Without a durable run nothing else will ever drive this execution, so the
+  // fill has to finish inside the caller's own invocation. It stops at the
+  // first pause, which continue_application resumes.
+  const outcome = await runApplicationUntilPause(runInput);
+  if ("done" in outcome) {
+    return {
+      applyUrl,
+      done: true,
+      executionId: id,
+      message: outcome.message,
+      status: "completed",
+    };
+  }
+  if ("pause" in outcome) {
+    return {
+      applyUrl,
+      executionId: id,
+      message: outcome.message,
+      pause: outcome.pause,
+      status: "waiting",
+    };
+  }
+  // `fillVisibleForm` only reports `continue` to its own caller, which turns it
+  // into an approval pause. Treat an unexpected one as needing a human.
   return {
     applyUrl,
     executionId: id,
-    expiresAt: claim.expiresAt,
-    message: `Application for ${input.role} is running.`,
-    status: "working",
+    message: applicationPauseMessage("user_input", applyUrl),
+    pause: "user_input",
+    status: "waiting",
   };
 }

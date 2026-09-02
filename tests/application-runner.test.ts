@@ -17,6 +17,7 @@ const databases: PGlite[] = [];
 
 afterEach(async () => {
   vi.doUnmock("@/db");
+  vi.doUnmock("@/lib/application-runner/run");
   vi.resetModules();
   await Promise.all(databases.splice(0).map((database) => database.close()));
 });
@@ -90,7 +91,7 @@ describe("application runner", () => {
       rootSessionId: "root-1",
       scope: alice,
     });
-    expect(first).toMatchObject({ status: "working" });
+    expect(first).toMatchObject({ pause: "approval", status: "waiting" });
     const second = await startApplication({
       applyUrl,
       company: "Example",
@@ -161,6 +162,16 @@ async function setupStart() {
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
   const database = pgliteDatabase as unknown as typeof db;
   vi.doMock("@/db", () => ({ ...schema, db: database }));
+  // An inline start drives the fill itself, so stub the browser-backed step and
+  // leave this case to the lease contention it is actually about.
+  vi.doMock("@/lib/application-runner/run", () => ({
+    runApplicationUntilPause: (input: { applyUrl: string }) =>
+      Promise.resolve({
+        applyUrl: input.applyUrl,
+        message: "Needs submission approval: Analyst",
+        pause: "approval",
+      }),
+  }));
 
   const [scope, runner] = await Promise.all([
     import("@/db/services/scope"),

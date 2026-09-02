@@ -42,6 +42,14 @@ export async function fillApplicationWorkflow(input: ApplicationRunInput) {
   return { done: true, message: "Application run paused too many times." };
 }
 
+/**
+ * Claims the run for the durable Workflow SDK when it is available, and
+ * otherwise reports inline ownership so the caller drives the fill itself.
+ *
+ * This never starts the fill in the background. Agent tools run inside eve's
+ * Nitro bundle, where a detached promise dies as soon as the tool's response
+ * flushes, so a fire-and-forget run silently abandoned the browser session.
+ */
 export async function startApplicationWorkflow(input: ApplicationRunInput) {
   if (env.NODE_ENV === "test") {
     return `inline:${input.executionId}`;
@@ -52,16 +60,11 @@ export async function startApplicationWorkflow(input: ApplicationRunInput) {
     return run.runId;
   } catch (error) {
     console.error(
-      "[application-runner] workflow start failed; running inline",
+      "[application-runner] workflow start unavailable; running inline",
       {
         error: error instanceof Error ? error.message : "unknown",
       }
     );
-    void runApplicationUntilPause(input).catch((cause: unknown) => {
-      console.error("[application-runner] inline run failed", {
-        error: cause instanceof Error ? cause.message : "unknown",
-      });
-    });
     return `inline:${input.executionId}`;
   }
 }

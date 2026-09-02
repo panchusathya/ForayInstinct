@@ -33,5 +33,9 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // Workflow's own transport (POST /.well-known/workflow/v1/flow) carries no
+  // browser session, so redirecting it to /sign-in would break run resumption.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|.well-known/workflow/).*)",
+  ],
 };
