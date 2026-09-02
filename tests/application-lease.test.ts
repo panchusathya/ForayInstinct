@@ -8,7 +8,6 @@ import * as schema from "../db/schema";
 const databases: PGlite[] = [];
 
 afterEach(async () => {
-  vi.doUnmock("@/db");
   vi.resetModules();
   await Promise.all(databases.splice(0).map((database) => database.close()));
 });
@@ -180,18 +179,17 @@ describe("application leases", () => {
   });
 
   it("lets the watchdog claim an expired lease", async () => {
-    const { claimApplicationLease, claimOverdueApplicationLeases } =
-      await setup();
+    const leases = await setup();
     const tracing = await import("@/lib/application-execution");
     const alice = { userId: "alice", workspaceId: "workspace:alice" };
-    await claimApplicationLease({
+    await leases.claimApplicationLease({
       applyUrl: "https://jobs.example/step/1",
       executionId: tracing.executionId("root-1", "call-1"),
       now: new Date(0),
       rootSessionId: "root-1",
       scope: alice,
     });
-    const overdue = await claimOverdueApplicationLeases(
+    const overdue = await leases.claimOverdueApplicationLeases(
       new Date(tracing.APPLICATION_WORKER_ACTIVE_MS)
     );
     expect(overdue).toEqual([
@@ -203,6 +201,7 @@ describe("application leases", () => {
 });
 
 async function setup() {
+  vi.resetModules();
   const client = new PGlite();
   databases.push(client);
   await applyMigration(client, "0000_fluffy_the_spike.sql");
