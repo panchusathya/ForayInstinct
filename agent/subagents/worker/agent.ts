@@ -15,6 +15,11 @@ export default defineAgent({
     maxOutputTokensPerSession: 20_000,
   },
   outputSchema: taskCompletionSchema,
+  // The gateway reports a 131,072-token window for this model, but eve never
+  // sets maxOutputTokens, so the provider reserves its 65,536 default and the
+  // real input ceiling is 65,536. Compaction keys off this value, so it must
+  // sit below that ceiling or it never runs before the provider rejects.
+  modelContextWindowTokens: 60_000,
   compaction: {
     thresholdPercent: 0.7,
   },

@@ -2,6 +2,20 @@ import { createHash } from "node:crypto";
 
 export const APPLICATION_WORKER_ACTIVE_MS = 20 * 60_000;
 export const APPLICATION_WATCHDOG_LEAD_MS = 60_000;
+/**
+ * How long an unfinished execution for the same posting blocks a second
+ * worker. Long enough to cover a run and a candidate's approval pause, short
+ * enough that a parked worker whose session died silently does not lock the
+ * posting for good: nothing else reaps a `waiting` row.
+ */
+export const APPLICATION_DUPLICATE_WORKER_WINDOW_MS = 2 * 60 * 60_000;
+/**
+ * How long a `queued` row with no worker session still counts as a worker on
+ * its way. eve records the dispatch before the child starts, and a dispatch
+ * eve then refuses (for example `AGENT_BUSY`) leaves a row nothing ever
+ * attaches to; past this grace such a row is a dead dispatch, not a worker.
+ */
+export const APPLICATION_DISPATCH_GRACE_MS = 60_000;
 
 export interface ApplicationIdentity {
   applyUrl: string;

@@ -635,6 +635,193 @@ describe("database services", () => {
     expect(keys).toContain("url:boards.greenhouse.io/acme/jobs/1");
   }, 15_000);
 
+  it("lets only the earliest unfinished worker per posting reach the browser", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0019_application_execution_traces.sql");
+    await applyMigration(
+      client,
+      "0020_application_execution_duplicate_guard.sql"
+    );
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, executions, tracing] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/application-executions"),
+      import("@/lib/application-execution"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+    const rootSessionId = "root-1";
+    const step = tracing.parseApplicationIdentity(
+      "Application trace identity: role=Analyst; company=Step; apply_url=https://jobs.example/step/1"
+    );
+    const other = tracing.parseApplicationIdentity(
+      "Application trace identity: role=Analyst; company=Other; apply_url=https://jobs.example/other/2"
+    );
+    const dispatch = (callId: string, identity: typeof step) =>
+      executions.createApplicationExecution({
+        callId,
+        identity,
+        model: "test-model",
+        rootSessionId,
+        scope: alice,
+      });
+    const guard = (parentCallId: string, workerSessionId: string, now?: Date) =>
+      executions.assertNoConcurrentApplicationWorker({
+        now,
+        parentCallId,
+        rootSessionId,
+        workerSessionId,
+      });
+    const attach = (callId: string, workerSessionId: string) =>
+      executions.attachApplicationWorker({
+        callId,
+        rootSessionId,
+        workerSessionId,
+      });
+    const settle = (
+      parentCallId: string,
+      workerSessionId: string,
+      status: "waiting" | "failed"
+    ) =>
+      executions.updateApplicationExecutionForWorker({
+        eventId: `${parentCallId}:${status}`,
+        eventType: status === "waiting" ? "input.requested" : "turn.failed",
+        parentCallId,
+        rootSessionId,
+        stage: status,
+        status,
+        workerSessionId,
+      });
+
+    // One dispatch batch: both rows exist before either worker runs, and
+    // identical timestamps fall back to the id tie-break.
+    await dispatch("call-1", step);
+    await dispatch("call-2", step);
+    await client.query("UPDATE application_executions SET created_at = $1", [
+      new Date().toISOString(),
+    ]);
+    const [winner, loser] = [
+      { callId: "call-1", worker: "worker-1" },
+      { callId: "call-2", worker: "worker-2" },
+    ].toSorted((left, right) =>
+      tracing
+        .executionId(rootSessionId, left.callId)
+        .localeCompare(tracing.executionId(rootSessionId, right.callId))
+    );
+    if (!winner || !loser) throw new Error("expected two dispatches");
+    await expect(guard(winner.callId, winner.worker)).resolves.toBeUndefined();
+    await expect(guard(loser.callId, loser.worker)).rejects.toThrow(
+      /^Needs existing worker: another worker \(session pending\) is already handling https:\/\/jobs\.example\/step\/1\./
+    );
+    const events = await client.query<{ event_type: string }>(
+      "SELECT event_type FROM application_execution_events WHERE execution_id = $1 ORDER BY created_at",
+      [tracing.executionId(rootSessionId, loser.callId)]
+    );
+    expect(events.rows.map((row) => row.event_type)).toContain(
+      "worker.duplicate_blocked"
+    );
+
+    // A different posting is never affected.
+    await dispatch("call-3", other);
+    await expect(guard("call-3", "worker-3")).resolves.toBeUndefined();
+    await expect(guard(winner.callId, winner.worker)).resolves.toBeUndefined();
+
+    // No identity header: nothing to compare, so the guard stays out of the way.
+    await dispatch("call-4", tracing.parseApplicationIdentity("apply please"));
+    await expect(guard("call-4", "worker-4")).resolves.toBeUndefined();
+
+    // The winner parks for approval; its resume is a new row with the same
+    // worker session, so its own earlier row must not lock it out.
+    await attach(winner.callId, winner.worker);
+    await settle(winner.callId, winner.worker, "waiting");
+    await attach(loser.callId, loser.worker);
+    await settle(loser.callId, loser.worker, "failed");
+    await dispatch("call-5", step);
+    await attach("call-5", winner.worker);
+    await expect(guard("call-5", winner.worker)).resolves.toBeUndefined();
+    // ...while a genuinely new worker for the parked posting is refused,
+    // naming the session that holds it.
+    await dispatch("call-6", step);
+    await attach("call-6", "worker-6");
+    await expect(guard("call-6", "worker-6")).rejects.toThrow(
+      `session ${winner.worker}`
+    );
+
+    // A parked worker older than the window no longer blocks a retry.
+    await expect(
+      guard(
+        "call-6",
+        "worker-6",
+        new Date(
+          Date.now() + tracing.APPLICATION_DUPLICATE_WORKER_WINDOW_MS + 1
+        )
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("ignores a dispatch eve refused when guarding a later worker", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0019_application_execution_traces.sql");
+    await applyMigration(
+      client,
+      "0020_application_execution_duplicate_guard.sql"
+    );
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, executions, tracing] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/application-executions"),
+      import("@/lib/application-execution"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+    const identity = tracing.parseApplicationIdentity(
+      "Application trace identity: role=Analyst; company=Step; apply_url=https://jobs.example/step/1"
+    );
+    // An AGENT_BUSY continuation still records a dispatch row, but no worker
+    // session ever attaches to it.
+    await executions.createApplicationExecution({
+      callId: "busy-call",
+      identity,
+      model: "test-model",
+      rootSessionId: "root-1",
+      scope: alice,
+    });
+    // Dispatched longer ago than the attach grace, yet touched recently enough
+    // to sit inside the duplicate window: a stale dispatch, not a worker.
+    await client.exec(
+      "UPDATE application_executions SET created_at = '2026-01-01T00:00:00.000Z' WHERE parent_call_id = 'busy-call'"
+    );
+    await executions.createApplicationExecution({
+      callId: "later-call",
+      identity,
+      model: "test-model",
+      rootSessionId: "root-1",
+      scope: alice,
+    });
+
+    await expect(
+      executions.assertNoConcurrentApplicationWorker({
+        parentCallId: "later-call",
+        rootSessionId: "root-1",
+        workerSessionId: "worker-later",
+      })
+    ).resolves.toBeUndefined();
+  });
+
   it("rejects a screenshot kind the delivering channel cannot caption", async () => {
     const client = new PGlite();
     databases.push(client);

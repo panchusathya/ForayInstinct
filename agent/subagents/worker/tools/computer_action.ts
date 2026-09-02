@@ -97,10 +97,25 @@ const actionSchema = z.object({
     .optional(),
 });
 
-const inputSchema = z.object({
-  session_id: z.string().min(1),
-  actions: z.array(actionSchema).min(1),
-});
+// Every screenshot reaches the vision model as a full PNG, and eve never trims
+// a tool result, so the batch itself bounds how much one call adds to context.
+const maxActionsPerBatch = 12;
+const maxScreenshotsPerBatch = 2;
+
+const inputSchema = z
+  .object({
+    session_id: z.string().min(1),
+    actions: z.array(actionSchema).min(1).max(maxActionsPerBatch),
+  })
+  .refine(
+    (value) =>
+      value.actions.filter((action) => action.type === "screenshot").length <=
+      maxScreenshotsPerBatch,
+    {
+      message: `At most ${String(maxScreenshotsPerBatch)} screenshot actions per batch; each screenshot is sent to the vision model in full.`,
+      path: ["actions"],
+    }
+  );
 
 const outputSchema = z.object({
   browserState: z.unknown().optional(),
@@ -112,7 +127,7 @@ const outputSchema = z.object({
 
 export default defineTool({
   description:
-    "Execute a bounded batch of computer actions on one browser session. Prefer one batch over repeated calls, keep sleep actions at or below two seconds, and include a screenshot last only when visual inspection is needed; screenshots are delivered directly to the vision model.",
+    "Execute a bounded batch of at most 12 computer actions on one browser session. Prefer one batch over repeated calls, keep sleep actions at or below two seconds, and include a screenshot last only when visual inspection is needed, at most two per batch; screenshots are delivered directly to the vision model.",
   inputSchema,
   outputSchema,
   async execute(input, context) {

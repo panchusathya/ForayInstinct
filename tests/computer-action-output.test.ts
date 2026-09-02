@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import computerAction from "../agent/subagents/worker/tools/computer_action";
 
 describe("computer_action model output", () => {
@@ -24,6 +25,26 @@ describe("computer_action model output", () => {
     const serialized = JSON.stringify(output);
     expect(serialized).toContain("aaaa");
     expect(serialized).toContain("bbbb");
+  });
+
+  it("caps a batch at twelve actions and two screenshots", () => {
+    const schema = computerAction.inputSchema;
+    if (!(schema instanceof z.ZodType))
+      throw new Error("expected a zod schema");
+    const accepts = (actions: { type: string }[]) =>
+      schema.safeParse({ actions, session_id: "browser-1" }).success;
+    const screenshot = { type: "screenshot" };
+    const sleep = { sleep: { duration_ms: 100 }, type: "sleep" };
+
+    expect(
+      accepts([
+        ...Array.from({ length: 10 }, () => sleep),
+        screenshot,
+        screenshot,
+      ])
+    ).toBe(true);
+    expect(accepts([screenshot, screenshot, screenshot])).toBe(false);
+    expect(accepts(Array.from({ length: 13 }, () => sleep))).toBe(false);
   });
 
   it("returns plain JSON when no screenshot was captured", () => {

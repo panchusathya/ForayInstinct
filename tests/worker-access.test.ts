@@ -3,6 +3,7 @@ import { accessScopeForUser, type AccessScope } from "@/lib/access-scope";
 
 const mocks = vi.hoisted(() => ({
   assertApplicationWorkerWithinBudget: vi.fn<() => Promise<void>>(),
+  assertNoConcurrentApplicationWorker: vi.fn<() => Promise<void>>(),
   claimSession: vi.fn(),
   ensureScope: vi.fn(),
   isSessionOwned:
@@ -17,6 +18,8 @@ vi.mock("@/db/services/scope", () => ({ ensureScope: mocks.ensureScope }));
 vi.mock("@/db/services/application-executions", () => ({
   assertApplicationWorkerWithinBudget:
     mocks.assertApplicationWorkerWithinBudget,
+  assertNoConcurrentApplicationWorker:
+    mocks.assertNoConcurrentApplicationWorker,
 }));
 
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
@@ -82,6 +85,26 @@ describe("worker access", () => {
       accessScopeForUser(principal.principalId),
       "worker-session"
     );
+  });
+
+  it("relays a duplicate-worker blocker before any browser work", async () => {
+    const principal = principalFor("better-auth:alice");
+    mocks.assertNoConcurrentApplicationWorker.mockRejectedValueOnce(
+      new Error(
+        "Needs existing worker: another worker (session worker-0) is already handling https://jobs.example/1."
+      )
+    );
+
+    await expect(
+      requireWorkerScope({
+        session: workerSession({ current: null, initiator: principal }),
+      })
+    ).rejects.toThrow(/^Needs existing worker:/);
+    expect(mocks.assertNoConcurrentApplicationWorker).toHaveBeenCalledWith({
+      parentCallId: "worker-call",
+      rootSessionId: "root-session",
+      workerSessionId: "worker-session",
+    });
   });
 });
 

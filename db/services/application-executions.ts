@@ -1,10 +1,13 @@
 import {
   and,
+  asc,
   desc,
   eq,
+  gte,
   ilike,
   inArray,
   isNotNull,
+  isNull,
   lte,
   ne,
   or,
@@ -12,6 +15,8 @@ import {
 import { applicationExecutionEvents, applicationExecutions, db } from "@/db";
 import type { AccessScope } from "@/lib/access-scope";
 import {
+  APPLICATION_DISPATCH_GRACE_MS,
+  APPLICATION_DUPLICATE_WORKER_WINDOW_MS,
   APPLICATION_WORKER_ACTIVE_MS,
   APPLICATION_WATCHDOG_LEAD_MS,
   applicationExecutionLog,
@@ -19,6 +24,7 @@ import {
   isApplicationWorkerDeadlineReached,
   type ApplicationIdentity,
 } from "@/lib/application-execution";
+import { workerBlockerPrefix } from "@/lib/task-completion";
 
 type ExecutionStatus =
   | "queued"
@@ -258,6 +264,101 @@ export async function assertApplicationWorkerWithinBudget(
   ) {
     throw new Error("Application worker exceeded the 20-minute safety limit.");
   }
+}
+
+/**
+ * One worker per posting. The root is told to call `worker` once per
+ * assignment, but nothing in eve stops a second dispatch for the same apply
+ * URL, and two workers on one form double the spend and fight over the
+ * browser. Every worker tool passes through here first, so a later duplicate
+ * fails on its first call, before it can create or touch a browser.
+ */
+export async function assertNoConcurrentApplicationWorker(input: {
+  parentCallId: string;
+  rootSessionId: string;
+  workerSessionId: string;
+  now?: Date;
+}) {
+  const id = executionId(input.rootSessionId, input.parentCallId);
+  const [mine] = await db
+    .select({
+      applyUrl: applicationExecutions.applyUrl,
+      createdAt: applicationExecutions.createdAt,
+      workspaceId: applicationExecutions.workspaceId,
+    })
+    .from(applicationExecutions)
+    .where(eq(applicationExecutions.id, id))
+    .limit(1);
+  // No trace row or no identity header: nothing to compare against.
+  if (!mine || mine.applyUrl === "") return;
+  const now = (input.now ?? new Date()).getTime();
+  const since = new Date(
+    now - APPLICATION_DUPLICATE_WORKER_WINDOW_MS
+  ).toISOString();
+  const dispatchedSince = new Date(
+    now - APPLICATION_DISPATCH_GRACE_MS
+  ).toISOString();
+  const [other] = await db
+    .select({
+      createdAt: applicationExecutions.createdAt,
+      id: applicationExecutions.id,
+      workerSessionId: applicationExecutions.workerSessionId,
+    })
+    .from(applicationExecutions)
+    .where(
+      and(
+        eq(applicationExecutions.workspaceId, mine.workspaceId),
+        eq(applicationExecutions.applyUrl, mine.applyUrl),
+        ne(applicationExecutions.id, id),
+        inArray(applicationExecutions.status, ["queued", "running", "waiting"]),
+        gte(applicationExecutions.updatedAt, since),
+        or(
+          // A resumed worker gets a fresh row for the same posting while its
+          // earlier row is still `waiting`; its own rows never lock it out.
+          and(
+            isNotNull(applicationExecutions.workerSessionId),
+            ne(applicationExecutions.workerSessionId, input.workerSessionId)
+          ),
+          // A row no worker has attached to yet is only a worker on its way
+          // for a moment; after that it is a dispatch eve refused.
+          and(
+            isNull(applicationExecutions.workerSessionId),
+            gte(applicationExecutions.createdAt, dispatchedSince)
+          )
+        )
+      )
+    )
+    .orderBy(
+      asc(applicationExecutions.createdAt),
+      asc(applicationExecutions.id)
+    )
+    .limit(1);
+  if (!other) return;
+  // Both rows of one dispatch batch exist before either worker runs, so the
+  // earliest row wins deterministically without a lock.
+  const otherIsEarlier =
+    other.createdAt < mine.createdAt ||
+    (other.createdAt === mine.createdAt && other.id < id);
+  if (!otherIsEarlier) return;
+  await recordApplicationExecutionEvent({
+    eventId: `duplicate:${id}`,
+    eventType: "worker.duplicate_blocked",
+    executionId: id,
+    stage: "guard",
+    status: "failed",
+  });
+  applicationExecutionLog({
+    apply_url: mine.applyUrl,
+    event: "worker.duplicate_blocked",
+    execution_id: id,
+    existing_execution_id: other.id,
+    existing_worker_session_id: other.workerSessionId,
+    root_session_id: input.rootSessionId,
+    worker_session_id: input.workerSessionId,
+  });
+  throw new Error(
+    `${workerBlockerPrefix("existingWorker")} another worker (session ${other.workerSessionId ?? "pending"}) is already handling ${mine.applyUrl}. Do not create a browser or call any other browser tool; call final_output with status "failure" and this message verbatim.`
+  );
 }
 
 export async function listApplicationExecutionTraces(

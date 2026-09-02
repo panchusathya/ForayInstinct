@@ -141,6 +141,13 @@
       "when": 1788303600000,
       "tag": "0019_application_execution_traces",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1788390000000,
+      "tag": "0020_application_execution_duplicate_guard",
+      "breakpoints": true
     }
   ]
 }

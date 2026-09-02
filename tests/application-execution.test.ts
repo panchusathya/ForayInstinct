@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  APPLICATION_DISPATCH_GRACE_MS,
+  APPLICATION_DUPLICATE_WORKER_WINDOW_MS,
   APPLICATION_WORKER_ACTIVE_MS,
   executionId,
   isApplicationWorkerDeadlineReached,
@@ -39,6 +41,14 @@ describe("application execution tracing", () => {
       )
     ).toBe("Timeout at url");
     expect(executionId("root", "call")).toBe(executionId("root", "call"));
+  });
+
+  it("blocks a second worker on one posting for longer than a run, not for good", () => {
+    expect(APPLICATION_DUPLICATE_WORKER_WINDOW_MS).toBe(2 * 60 * 60_000);
+    expect(APPLICATION_DUPLICATE_WORKER_WINDOW_MS).toBeGreaterThan(
+      APPLICATION_WORKER_ACTIVE_MS
+    );
+    expect(APPLICATION_DISPATCH_GRACE_MS).toBe(60_000);
   });
 
   it("guards browser work at the active-worker deadline", () => {

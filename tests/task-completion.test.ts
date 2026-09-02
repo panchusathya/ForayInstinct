@@ -4,6 +4,7 @@ import {
   blockerKind,
   parseTaskCompletion,
   taskCompletionSchema,
+  workerBlockerPrefix,
 } from "../lib/task-completion";
 
 describe("task completion schema", () => {
@@ -60,6 +61,20 @@ describe("worker blockers", () => {
     expect(
       blockerKind("  needs submission approval: staff engineer at acme.")
     ).toBe("submissionApproval");
+    expect(
+      blockerKind(
+        "Needs existing worker: another worker (session w1) is already handling https://jobs.example/1."
+      )
+    ).toBe("existingWorker");
+  });
+
+  it("owns the exact prefix the guard puts on a duplicate-worker error", () => {
+    expect(workerBlockerPrefix("existingWorker")).toBe(
+      "Needs existing worker:"
+    );
+    expect(blockerKind(`${workerBlockerPrefix("emailOtp")} sent.`)).toBe(
+      "emailOtp"
+    );
   });
 
   it("reports no blocker for a failure that names none", () => {

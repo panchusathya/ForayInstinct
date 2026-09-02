@@ -66,6 +66,7 @@ export function parseTaskCompletion(
  */
 const workerBlockers = [
   ["emailOtp", "Needs email OTP:"],
+  ["existingWorker", "Needs existing worker:"],
   ["postingUnavailable", "Needs posting unavailable:"],
   ["submissionApproval", "Needs submission approval:"],
   ["userInput", "Needs user input:"],
@@ -73,6 +74,13 @@ const workerBlockers = [
 ] as const;
 
 type WorkerBlocker = (typeof workerBlockers)[number][0];
+
+/** The exact prefix a worker must put on a blocker message of this kind. */
+export function workerBlockerPrefix(kind: WorkerBlocker) {
+  const entry = workerBlockers.find(([name]) => name === kind);
+  if (!entry) throw new Error(`Unknown worker blocker: ${kind}`);
+  return entry[1];
+}
 
 /** The blocker the worker actually reported, or undefined for anything else. */
 export function blockerKind(message: string): WorkerBlocker | undefined {

@@ -2,7 +2,10 @@ import type { SessionContext } from "eve/context";
 import { ensureScope } from "@/db/services/scope";
 import { claimSession, isSessionOwned } from "@/db/services/sessions";
 import { scopeFromPrincipal } from "@/lib/access-scope";
-import { assertApplicationWorkerWithinBudget } from "@/db/services/application-executions";
+import {
+  assertApplicationWorkerWithinBudget,
+  assertNoConcurrentApplicationWorker,
+} from "@/db/services/application-executions";
 
 export async function requireWorkerScope(
   context: Pick<SessionContext, "session">
@@ -50,5 +53,10 @@ export async function requireWorkerScope(
     parent.rootSessionId,
     parent.callId
   );
+  await assertNoConcurrentApplicationWorker({
+    parentCallId: parent.callId,
+    rootSessionId: parent.rootSessionId,
+    workerSessionId: context.session.id,
+  });
   return scope;
 }

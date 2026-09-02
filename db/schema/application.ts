@@ -226,6 +226,13 @@ export const applicationExecutions = pgTable(
       table.status,
       table.activeStartedAt
     ),
+    // The duplicate-worker guard looks up unfinished executions for one
+    // posting on every worker tool call.
+    index("application_executions_workspace_apply_url_idx").on(
+      table.workspaceId,
+      table.applyUrl,
+      table.status
+    ),
   ]
 );
 

@@ -6,6 +6,11 @@ import type { PlaywrightResponse } from "@/lib/browser/contract";
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
 import { requireOwnedBrowserSession } from "@/agent/subagents/worker/lib/owned-browser";
 import { recordBrowserActionCheckpoint } from "@/agent/subagents/worker/lib/browser-run-evidence";
+import {
+  boundResultText,
+  playwrightErrorMaxChars,
+  playwrightResultMaxChars,
+} from "@/agent/subagents/worker/lib/bounded-result";
 import { listBrowserRunCheckpoints } from "@/db/services/browser-run-checkpoints";
 import {
   browserSessionEndedError,
@@ -30,7 +35,7 @@ const screenshotRecoveryInstruction =
 
 export default defineTool({
   description:
-    'Execute Playwright/TypeScript automation code against an existing browser session with a 30-second ceiling after a masked computer_action screenshot has identified the live controls. Batch related operations, use "domcontentloaded" or a precise locator with waits of at most five seconds except for one managed CAPTCHA wait of at most 20 seconds, and never wait for "networkidle" or use fixed multi-second sleeps. On failure, obey next_action: screenshot once and change tactic; do not replay the same selector or pass a Buffer to setInputFiles. Use solve_captcha for a checkbox or lookalike hCaptcha, including image grids and response-field tokens. Does not create or delete browsers.',
+    'Execute Playwright/TypeScript automation code against an existing browser session with a 30-second ceiling after a masked computer_action screenshot has identified the live controls. Batch related operations, use "domcontentloaded" or a precise locator with waits of at most five seconds except for one managed CAPTCHA wait of at most 20 seconds, and never wait for "networkidle" or use fixed multi-second sleeps. On failure, obey next_action: screenshot once and change tactic; do not replay the same selector or pass a Buffer to setInputFiles. Use solve_captcha for a checkbox or lookalike hCaptcha, including image grids and response-field tokens. Return only the compact data you need (a short object of labels, values, URLs); a result over 4,000 characters is truncated. Does not create or delete browsers.',
   inputSchema,
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
@@ -127,8 +132,18 @@ export default defineTool({
       // retrying. Say the session is unrecoverable instead.
       throw browserSessionEndedError(input.session_id);
     }
+    // Diagnostics above read the full error; only the model-facing copy is
+    // capped, because eve forwards tool results into context uncut.
     return {
-      ...response,
+      success: response.success,
+      ...(response.result === undefined
+        ? {}
+        : {
+            result: boundResultText(response.result, playwrightResultMaxChars),
+          }),
+      ...(response.error === undefined
+        ? {}
+        : { error: boundResultText(response.error, playwrightErrorMaxChars) }),
       ...(browserState === undefined ? {} : { browser_state: browserState }),
       ...(nextAction === undefined ? {} : { next_action: nextAction }),
     };

@@ -15,6 +15,15 @@ describe("database migrations", () => {
     await applyMigration(database, "0001_better-auth.sql");
     await applyMigration(database, "0002_heavy_celestials.sql");
     await applyMigration(database, "0019_application_execution_traces.sql");
+    // The duplicate-guard index is re-applicable on a database that has it.
+    await applyMigration(
+      database,
+      "0020_application_execution_duplicate_guard.sql"
+    );
+    await applyMigration(
+      database,
+      "0020_application_execution_duplicate_guard.sql"
+    );
 
     await database.exec(`
       INSERT INTO workspaces VALUES ('workspace-1', '2026-01-01');
@@ -34,6 +43,12 @@ describe("database migrations", () => {
     await expect(
       database.query("SELECT execution_id FROM application_execution_events")
     ).resolves.toMatchObject({ rows: [{ execution_id: "execution-1" }] });
+    const indexes = await database.query<{ indexname: string }>(
+      "SELECT indexname FROM pg_indexes WHERE tablename = 'application_executions'"
+    );
+    expect(indexes.rows.map((row) => row.indexname)).toContain(
+      "application_executions_workspace_apply_url_idx"
+    );
   }, 15_000);
 
   it("creates a validated schema and keeps adoption migrations idempotent", async () => {

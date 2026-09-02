@@ -34,6 +34,10 @@ describe("root and worker capability boundaries", () => {
     expect(models).toContain(`browserGatewayModel = "${browserGatewayModel}"`);
     expect(rootAgent).toContain("model: chatGatewayModel");
     expect(workerAgent).toContain("model: browserGatewayModel");
+    // The vision model's real input ceiling is 65,536 once the provider
+    // reserves its default output budget; compaction must trigger below it.
+    expect(workerAgent).toContain("modelContextWindowTokens: 60_000");
+    expect(workerAgent).toContain("thresholdPercent: 0.7");
     expect(readFileSync("lib/manager/server/store.ts", "utf8")).toContain(
       "inference: chatGatewayModel"
     );
@@ -197,6 +201,32 @@ describe("root and worker capability boundaries", () => {
     );
     expect(workerInstructions).toContain(
       "native `final_output` tool exactly once"
+    );
+  });
+
+  it("holds one worker per posting and never redispatches on AGENT_BUSY", () => {
+    const rootInstructions = readFileSync("agent/instructions.md", "utf8");
+    const workerInstructions = readFileSync(
+      `${workerRoot}/instructions.md`,
+      "utf8"
+    );
+    const browserSkill = readFileSync(
+      `${workerRoot}/skills/browser-execution/SKILL.md`,
+      "utf8"
+    );
+
+    expect(rootInstructions).toContain("AGENT_BUSY");
+    expect(rootInstructions).toContain("is busy with task");
+    expect(rootInstructions).toContain("Never start a new worker");
+    expect(rootInstructions).toContain("`Needs existing worker:`");
+    expect(rootInstructions).toContain(
+      "one posting URL has at most one worker in flight"
+    );
+    expect(workerInstructions).toContain("`Needs existing worker:`");
+    expect(browserSkill).toContain("`Needs existing worker:`");
+    // The guard runs inside the shared scope check every browser tool uses.
+    expect(readFileSync(`${workerRoot}/lib/access.ts`, "utf8")).toContain(
+      "assertNoConcurrentApplicationWorker"
     );
   });
 });
