@@ -293,7 +293,7 @@ describe("Kernel browser contract", () => {
       result.next_actions.some(
         (action) =>
           typeof action === "string" &&
-          action.includes("masked computer_action screenshot")
+          action.includes("screenshot only when visual inspection is required")
       )
     ).toBe(true);
 

@@ -153,8 +153,9 @@ export default defineTool({
 /**
  * Tool instructions alone cannot prevent a model from repeatedly submitting
  * the same missing selector. Checkpoints survive worker turns, so use them as
- * the recovery boundary: a failed execution must be followed by a screenshot,
- * and a screenshot never authorizes replaying that failed code.
+ * the recovery boundary: a failed execution must inspect state (screenshot
+ * only if the live controls are still unclear), and a screenshot never
+ * authorizes replaying that failed code.
  */
 async function requiredPlaywrightRecovery(
   scope: Awaited<ReturnType<typeof requireWorkerScope>>,
