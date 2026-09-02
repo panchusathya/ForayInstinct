@@ -1,5 +1,6 @@
 import {
   createApplicationExecution,
+  findApplicationRun,
   updateApplicationRun,
 } from "@/db/services/application-executions";
 import { claimApplicationLease } from "@/db/services/application-leases";
@@ -48,6 +49,19 @@ export async function startApplication(input: {
     return {
       applyUrl,
       existingExecutionId: claim.existingExecutionId,
+      message: alreadyInProgressMessage(applyUrl),
+      status: alreadyInProgressStatus,
+    };
+  }
+  const existing = await findApplicationRun({ applyUrl, scope: input.scope });
+  if (
+    existing?.workflowRunId !== undefined &&
+    existing.workflowRunId !== null &&
+    existing.workflowRunId !== ""
+  ) {
+    return {
+      applyUrl,
+      existingExecutionId: existing.id,
       message: alreadyInProgressMessage(applyUrl),
       status: alreadyInProgressStatus,
     };

@@ -18,6 +18,8 @@ export default defineAgent({
     maxOutputTokensPerSession: 200_000,
   },
   outputSchema: taskCompletionSchema,
+  // The parent must not pass a per-call outputSchema. The worker is retired;
+  // coordinators use start_application instead.
   // With a 2k output cap the 131,072-token window is actually usable. Compact
   // near 32k so screenshot history is stubbed before the fill loop balloons.
   modelContextWindowTokens: 80_000,

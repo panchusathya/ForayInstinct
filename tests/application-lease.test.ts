@@ -210,6 +210,7 @@ async function setup() {
   await applyMigration(client, "0005_browser_run_checkpoints.sql");
   await applyMigration(client, "0019_application_execution_traces.sql");
   await applyMigration(client, "0021_application_leases.sql");
+  await applyMigration(client, "0022_application_runner.sql");
 
   const pgliteDatabase = drizzle(client, { schema });
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
