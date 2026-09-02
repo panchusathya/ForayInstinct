@@ -95,6 +95,20 @@ export function isApplicationWorkerDeadlineReached(
   return Date.parse(startedAt) + APPLICATION_WORKER_ACTIVE_MS <= now;
 }
 
+export function applicationLeaseExpiresAt(
+  claimedAt = new Date(),
+  activeMs = APPLICATION_WORKER_ACTIVE_MS
+) {
+  return new Date(claimedAt.getTime() + activeMs).toISOString();
+}
+
+export function isApplicationLeaseExpired(
+  expiresAt: string,
+  now = Date.now()
+) {
+  return Date.parse(expiresAt) <= now;
+}
+
 function emptyIdentity(): ApplicationIdentity {
   return { applyUrl: "", company: "", role: "" };
 }

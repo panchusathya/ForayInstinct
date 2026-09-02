@@ -30,14 +30,16 @@ describe("root and worker capability boundaries", () => {
 
     expect(chatGatewayModel).toBe("alibaba/qwen3.7-flash");
     expect(browserGatewayModel).toBe("alibaba/qwen3-vl-235b-a22b-instruct");
-    expect(models).toContain(`chatGatewayModel = "${chatGatewayModel}"`);
+    expect(models).toContain("wrapLanguageModel");
+    expect(models).toContain("COORDINATOR_MAX_OUTPUT_TOKENS");
     expect(models).toContain(`browserGatewayModel = "${browserGatewayModel}"`);
-    expect(rootAgent).toContain("model: chatGatewayModel");
-    expect(workerAgent).toContain("model: browserGatewayModel");
-    // The vision model's real input ceiling is 65,536 once the provider
-    // reserves its default output budget; compaction must trigger below it.
-    expect(workerAgent).toContain("modelContextWindowTokens: 60_000");
-    expect(workerAgent).toContain("thresholdPercent: 0.7");
+    expect(rootAgent).toContain("model: chatLanguageModel");
+    expect(workerAgent).toContain("model: browserLanguageModel");
+    // Per-call maxOutputTokens is 2k, so compaction can sit under the real
+    // 131k window without the provider reserving 65,536 output tokens.
+    expect(workerAgent).toContain("modelContextWindowTokens: 80_000");
+    expect(workerAgent).toContain("thresholdPercent: 0.4");
+    expect(rootAgent).toContain("thresholdPercent: 0.5");
     expect(readFileSync("lib/manager/server/store.ts", "utf8")).toContain(
       "inference: chatGatewayModel"
     );
@@ -188,6 +190,10 @@ describe("root and worker capability boundaries", () => {
     expect(rootInstructions).toContain("submission_observed");
     expect(rootInstructions).toContain("never spawn a fresh worker");
     expect(rootInstructions).toContain("role title and `apply_url`");
+    expect(rootInstructions).toContain("status: \"working\"");
+    expect(rootInstructions).toContain("already_in_progress");
+    expect(rootInstructions).toContain("in progress, not empty");
+    expect(rootInstructions).toContain("with that posting's `apply_url`");
     expect(rootInstructions).not.toContain(
       "Every initial or resumed `worker` call must set `outputSchema`"
     );
@@ -225,6 +231,9 @@ describe("root and worker capability boundaries", () => {
     expect(workerInstructions).toContain("`Needs existing worker:`");
     expect(browserSkill).toContain("`Needs existing worker:`");
     // The guard runs inside the shared scope check every browser tool uses.
+    expect(readFileSync(`${workerRoot}/lib/access.ts`, "utf8")).toContain(
+      "assertApplicationLeaseOwner"
+    );
     expect(readFileSync(`${workerRoot}/lib/access.ts`, "utf8")).toContain(
       "assertNoConcurrentApplicationWorker"
     );

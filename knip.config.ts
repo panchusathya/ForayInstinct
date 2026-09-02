@@ -2,9 +2,11 @@ import type { KnipConfig } from "knip";
 
 export default {
   entry: [
+    "agent/agent.ts",
     "agent/channels/**/*.ts",
     "agent/hooks/**/*.ts",
     "agent/memory/**/*.ts",
+    "agent/schedules/**/*.ts",
     "agent/subagents/**/*.ts",
     "agent/tools/**/*.ts",
     "db/drizzle.config.ts",

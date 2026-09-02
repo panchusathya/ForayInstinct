@@ -1,7 +1,7 @@
 import { Client } from "eve/client";
 import { defineSchedule } from "eve/schedules";
 import { getVercelOidcToken } from "@vercel/oidc";
-import { claimOverdueApplicationExecutions } from "@/db/services/application-executions";
+import { claimOverdueApplicationLeases } from "@/db/services/application-leases";
 import { applicationExecutionLog } from "@/lib/application-execution";
 import { env } from "@/lib/env";
 
@@ -9,7 +9,7 @@ import { env } from "@/lib/env";
 export default defineSchedule({
   cron: "* * * * *",
   async run({ waitUntil }) {
-    const workers = await claimOverdueApplicationExecutions();
+    const workers = await claimOverdueApplicationLeases();
     if (!workers.length) return;
     const client = new Client({
       auth: {

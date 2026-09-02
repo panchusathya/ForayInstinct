@@ -14,6 +14,7 @@ import {
 } from "drizzle-orm";
 import { applicationExecutionEvents, applicationExecutions, db } from "@/db";
 import type { AccessScope } from "@/lib/access-scope";
+import { releaseApplicationLease } from "@/db/services/application-leases";
 import {
   APPLICATION_DISPATCH_GRACE_MS,
   APPLICATION_DUPLICATE_WORKER_WINDOW_MS,
@@ -169,6 +170,16 @@ export async function updateApplicationExecutionForWorker(input: {
       role: applicationExecutions.role,
     });
   if (!result[0]) return;
+  if (
+    status === "completed" ||
+    status === "failed" ||
+    status === "timed_out"
+  ) {
+    await releaseApplicationLease({
+      executionId: id,
+      workerSessionId: input.workerSessionId,
+    });
+  }
   await recordApplicationExecutionEvent({
     errorCode: input.errorCode,
     eventId: input.eventId,
@@ -405,14 +416,31 @@ export async function countRecentApplicationExecutionEvents(input: {
 
 export async function listApplicationExecutionTraces(
   scope: AccessScope,
-  limit = 50
+  query: {
+    applyUrl?: string;
+    executionId?: string;
+    limit?: number;
+  } = {}
 ) {
+  const applyUrl = query.applyUrl?.trim() ?? "";
+  const executionIdValue = query.executionId?.trim() ?? "";
+  if (applyUrl === "" && executionIdValue === "") return [];
+  const identity =
+    applyUrl !== "" && executionIdValue !== ""
+      ? or(
+          eq(applicationExecutions.applyUrl, applyUrl),
+          eq(applicationExecutions.id, executionIdValue)
+        )
+      : applyUrl !== ""
+        ? eq(applicationExecutions.applyUrl, applyUrl)
+        : eq(applicationExecutions.id, executionIdValue);
   return db
     .select({
       activeStartedAt: applicationExecutions.activeStartedAt,
       applyUrl: applicationExecutions.applyUrl,
       browserSessionId: applicationExecutions.browserSessionId,
       company: applicationExecutions.company,
+      id: applicationExecutions.id,
       model: applicationExecutions.model,
       role: applicationExecutions.role,
       rootSessionId: applicationExecutions.rootSessionId,
@@ -421,9 +449,11 @@ export async function listApplicationExecutionTraces(
       workerSessionId: applicationExecutions.workerSessionId,
     })
     .from(applicationExecutions)
-    .where(eq(applicationExecutions.workspaceId, scope.workspaceId))
+    .where(
+      and(eq(applicationExecutions.workspaceId, scope.workspaceId), identity)
+    )
     .orderBy(desc(applicationExecutions.updatedAt))
-    .limit(limit);
+    .limit(query.limit ?? 50);
 }
 
 export async function findRestartableApplicationExecutions(

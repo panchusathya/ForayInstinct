@@ -1,11 +1,9 @@
 import type { SessionContext } from "eve/context";
+import { assertNoConcurrentApplicationWorker } from "@/db/services/application-executions";
+import { assertApplicationLeaseOwner } from "@/db/services/application-leases";
 import { ensureScope } from "@/db/services/scope";
 import { claimSession, isSessionOwned } from "@/db/services/sessions";
 import { scopeFromPrincipal } from "@/lib/access-scope";
-import {
-  assertApplicationWorkerWithinBudget,
-  assertNoConcurrentApplicationWorker,
-} from "@/db/services/application-executions";
 
 export async function requireWorkerScope(
   context: Pick<SessionContext, "session">
@@ -49,10 +47,11 @@ export async function requireWorkerScope(
   if (!ownsWorker) {
     throw new Error("The authenticated user does not own this worker session.");
   }
-  await assertApplicationWorkerWithinBudget(
-    parent.rootSessionId,
-    parent.callId
-  );
+  await assertApplicationLeaseOwner({
+    parentCallId: parent.callId,
+    rootSessionId: parent.rootSessionId,
+    workerSessionId: context.session.id,
+  });
   await assertNoConcurrentApplicationWorker({
     parentCallId: parent.callId,
     rootSessionId: parent.rootSessionId,

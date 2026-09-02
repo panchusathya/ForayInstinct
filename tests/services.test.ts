@@ -639,11 +639,13 @@ describe("database services", () => {
     const client = new PGlite();
     databases.push(client);
     await applyInitialMigration(client);
+    await applyMigration(client, "0005_browser_run_checkpoints.sql");
     await applyMigration(client, "0019_application_execution_traces.sql");
     await applyMigration(
       client,
       "0020_application_execution_duplicate_guard.sql"
     );
+    await applyMigration(client, "0021_application_leases.sql");
 
     const pgliteDatabase = drizzle(client, { schema });
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
@@ -770,11 +772,13 @@ describe("database services", () => {
     const client = new PGlite();
     databases.push(client);
     await applyInitialMigration(client);
+    await applyMigration(client, "0005_browser_run_checkpoints.sql");
     await applyMigration(client, "0019_application_execution_traces.sql");
     await applyMigration(
       client,
       "0020_application_execution_duplicate_guard.sql"
     );
+    await applyMigration(client, "0021_application_leases.sql");
 
     const pgliteDatabase = drizzle(client, { schema });
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double

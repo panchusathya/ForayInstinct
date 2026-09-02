@@ -15,6 +15,7 @@ import {
   diagnosticErrorCode,
   handleBrowserToolFailure,
 } from "@/agent/subagents/worker/lib/challenge-diagnostics";
+import { compressScreenshotToJpeg } from "@/lib/vision-screenshot";
 import {
   inspectPostActionBrowserState,
   postActionBrowserStateInstruction,
@@ -97,10 +98,10 @@ const actionSchema = z.object({
     .optional(),
 });
 
-// Every screenshot reaches the vision model as a full PNG, and eve never trims
-// a tool result, so the batch itself bounds how much one call adds to context.
+// Every screenshot reaches the vision model, and eve never trims a tool
+// result, so the batch itself bounds how much one call adds to context.
 const maxActionsPerBatch = 12;
-const maxScreenshotsPerBatch = 2;
+const maxScreenshotsPerBatch = 1;
 
 const inputSchema = z
   .object({
@@ -112,7 +113,7 @@ const inputSchema = z
       value.actions.filter((action) => action.type === "screenshot").length <=
       maxScreenshotsPerBatch,
     {
-      message: `At most ${String(maxScreenshotsPerBatch)} screenshot actions per batch; each screenshot is sent to the vision model in full.`,
+      message: `At most ${String(maxScreenshotsPerBatch)} screenshot action per batch; send a screenshot only when visual inspection is needed.`,
       path: ["actions"],
     }
   );
@@ -121,13 +122,13 @@ const outputSchema = z.object({
   browserState: z.unknown().optional(),
   data: z.unknown().optional(),
   message: z.string(),
-  mimeType: z.literal("image/png").optional(),
+  mimeType: z.literal("image/jpeg").optional(),
   screenshotsBase64: z.array(z.string()).optional(),
 });
 
 export default defineTool({
   description:
-    "Execute a bounded batch of at most 12 computer actions on one browser session. Prefer one batch over repeated calls, keep sleep actions at or below two seconds, and include a screenshot last only when visual inspection is needed, at most two per batch; screenshots are delivered directly to the vision model.",
+    "Execute a bounded batch of at most 12 computer actions on one browser session. Prefer one batch over repeated calls, keep sleep actions at or below two seconds, and include a screenshot last only when visual inspection is genuinely needed (coordinate targeting, a captcha grid, or an ambiguous overlay), at most one per batch. Prefer Playwright or the returned post-action browser state after create, navigation, and fill. Screenshots are JPEG-compressed and delivered directly to the vision model.",
   inputSchema,
   outputSchema,
   async execute(input, context) {
@@ -178,14 +179,14 @@ export default defineTool({
         },
         context.abortSignal
       );
+      const screenshots = screenshotsBase64.map(compressScreenshotToJpeg);
       return outputSchema.parse({
         message:
           blockerInstruction ??
           `Executed ${String(input.actions.length)} computer action${input.actions.length === 1 ? "" : "s"}.`,
         browserState,
-        mimeType: screenshotsBase64.length > 0 ? "image/png" : undefined,
-        screenshotsBase64:
-          screenshotsBase64.length > 0 ? screenshotsBase64 : undefined,
+        mimeType: screenshots.length > 0 ? "image/jpeg" : undefined,
+        screenshotsBase64: screenshots.length > 0 ? screenshots : undefined,
       });
     } catch (error) {
       await recordBrowserActionCheckpoint(
@@ -217,17 +218,22 @@ export default defineTool({
         message: output.message,
       });
     }
+    const latest = output.screenshotsBase64.at(-1);
+    if (!latest) {
+      return toolOutput.json({
+        data: output.data,
+        message: output.message,
+      });
+    }
     return toolOutput.content([
       toolOutputPart.text(
         output.data === undefined
           ? output.message
           : `${output.message}\n${JSON.stringify(output.data)}`
       ),
-      ...output.screenshotsBase64.map((screenshot) =>
-        toolOutputPart.file(screenshot, {
-          mediaType: output.mimeType ?? "image/png",
-        })
-      ),
+      toolOutputPart.file(latest, {
+        mediaType: output.mimeType ?? "image/jpeg",
+      }),
     ]);
   },
 });

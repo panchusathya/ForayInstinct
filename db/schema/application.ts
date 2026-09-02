@@ -162,6 +162,7 @@ export const browserRunCheckpoints = pgTable(
     errorCode: text("error_code"),
     actions: jsonb("actions").$type<string[]>().notNull().default([]),
     trace: jsonb("trace").$type<string[]>().notNull().default([]),
+    executionId: text("execution_id"),
   },
   (table) => [
     foreignKey({
@@ -178,6 +179,10 @@ export const browserRunCheckpoints = pgTable(
     ),
     index("browser_run_checkpoints_workspace_created_idx").on(
       table.workspaceId,
+      table.createdAt.desc().nullsFirst()
+    ),
+    index("browser_run_checkpoints_execution_created_idx").on(
+      table.executionId,
       table.createdAt.desc().nullsFirst()
     ),
   ]
@@ -232,6 +237,47 @@ export const applicationExecutions = pgTable(
       table.workspaceId,
       table.applyUrl,
       table.status
+    ),
+  ]
+);
+
+/**
+ * One held row per workspace posting. Separate from execution traces so a
+ * resume (new parent call id) cannot create a second owner, and so the
+ * 20-minute deadline survives a dropped trace write.
+ */
+export const applicationLeases = pgTable(
+  "application_leases",
+  {
+    executionId: text("execution_id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    createdByUserId: text("created_by_user_id").notNull(),
+    applyUrl: text("apply_url").notNull(),
+    rootSessionId: text("root_session_id").notNull(),
+    workerSessionId: text("worker_session_id"),
+    status: text("status").notNull().default("held"),
+    claimedAt: text("claimed_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "application_leases_membership_fkey",
+      columns: [table.workspaceId, table.createdByUserId],
+      foreignColumns: [
+        workspaceMemberships.workspaceId,
+        workspaceMemberships.userId,
+      ],
+    }).onDelete("cascade"),
+    check(
+      "application_leases_status_check",
+      sql`${table.status} IN ('held', 'released')`
+    ),
+    uniqueIndex("application_leases_held_workspace_apply_url_idx")
+      .on(table.workspaceId, table.applyUrl)
+      .where(sql`${table.status} = 'held' AND ${table.applyUrl} <> ''`),
+    index("application_leases_held_expires_idx").on(
+      table.status,
+      table.expiresAt
     ),
   ]
 );
