@@ -412,18 +412,14 @@ export async function assertNoConcurrentApplicationWorker(input: {
 }
 
 /** Whether a worker of this root session is still running or parked on the candidate. */
-export async function hasUnfinishedApplicationExecution(
-  rootSessionId: string,
-  since: Date
-) {
+export async function hasUnfinishedApplicationExecution(rootSessionId: string) {
   const [row] = await db
     .select({ id: applicationExecutions.id })
     .from(applicationExecutions)
     .where(
       and(
         eq(applicationExecutions.rootSessionId, rootSessionId),
-        inArray(applicationExecutions.status, ["queued", "running", "waiting"]),
-        gte(applicationExecutions.updatedAt, since.toISOString())
+        inArray(applicationExecutions.status, ["queued", "running", "waiting"])
       )
     )
     .limit(1);

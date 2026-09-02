@@ -141,9 +141,37 @@ describe("application runner fill", () => {
     const prompt = mocks.generateText.mock.calls[0]?.[0]?.prompt ?? "";
     expect(prompt).toContain("Favorite color");
     expect(prompt).not.toContain("screenshot");
-    const codes = mocks.executePlaywright.mock.calls.map((call) => call[1].code);
+    const codes = mocks.executePlaywright.mock.calls.map(
+      (call) => call[1].code
+    );
     expect(codes.some((code) => code.includes("#email"))).toBe(true);
     expect(codes.some((code) => code.includes("#color"))).toBe(true);
     expect(codes.join("\n")).not.toContain("computer_action");
+  });
+
+  it("returns a structured email_otp pause from the DOM probe", async () => {
+    mocks.inspect.mockResolvedValue({
+      emailOtp: true,
+      otpHint: "Greenhouse",
+    });
+    const result = await fillVisibleForm({
+      applyUrl: "https://jobs.example/role/1",
+      browserSessionId: "browser-1",
+      company: "Example",
+      executionId: "exec-1",
+      role: "Analyst",
+      rootSessionId: "root-1",
+      scope: { userId: "alice", workspaceId: "workspace:alice" },
+    });
+    expect(result).toMatchObject({
+      applyUrl: "https://jobs.example/role/1",
+      pause: "email_otp",
+    });
+    expect(result).toEqual(
+      expect.objectContaining({
+        message: expect.stringMatching(/^Needs email OTP:/u),
+      })
+    );
+    expect(mocks.generateText).not.toHaveBeenCalled();
   });
 });

@@ -9,7 +9,7 @@ const inputSchema = z.object({
 
 export default defineTool({
   description:
-    "Wait for a recent email one-time code in the connected Gmail inbox after a runner `Needs email OTP:` blocker. Pass any sender or subject hint from the fill run. Returns only a structured code plus From/Subject/Date, never the message body. If Gmail is disconnected or no code arrives, ask the candidate for the code and call continue_application with it. Do not print the code to the user. Do not use this for SMS OTP or 3-D Secure.",
+    'Wait for a recent email one-time code in the connected Gmail inbox after a runner { pause: "email_otp" } result. Pass any sender or subject hint from the fill run. Returns only a structured code plus From/Subject/Date, never the message body. If Gmail is disconnected or no code arrives, ask the candidate for the code and call continue_application with it. Do not print the code to the user. Do not use this for SMS OTP or 3-D Secure.',
   inputSchema,
   async execute(input, ctx) {
     return waitForEmailOtp(ctx, input);

@@ -81,6 +81,7 @@ export async function startApplication(input: {
     workflowRunId,
   });
   return {
+    applyUrl,
     executionId: id,
     expiresAt: claim.expiresAt,
     message: `Application for ${input.role} is running.`,

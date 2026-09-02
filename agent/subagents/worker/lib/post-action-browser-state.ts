@@ -15,10 +15,11 @@ export type PostActionBrowserState = z.infer<
 
 /**
  * Browser actions can leave an ATS on a different tab or inside an iframe.
- * Inspecting only the page a locator just touched is how an emailed Greenhouse
- * OTP gets mistaken for a recoverable form error and the worker starts over.
- * This probe intentionally returns only state labels and a safe site hint, not
- * form values, page text, or any code that might be on screen.
+ * Page copy is not a sensor: "Enter your zip code" is not an OTP, a reCAPTCHA
+ * footer is not a challenge, and "we received your application" on a posting
+ * is not a confirmation. OTP requires `autocomplete=one-time-code`, a bot
+ * wall requires a visible CAPTCHA iframe, and submit requires a confirmation
+ * URL. This probe returns only those labels and a safe site hint.
  */
 export const postActionBrowserStateProbeCode = `
 const inspect = () => {
@@ -34,38 +35,37 @@ const inspect = () => {
     const box = node.getBoundingClientRect();
     return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
   };
-  const text = String(document.body?.innerText || "").replace(/\\s+/g, " ").slice(0, 30000);
-  const lower = text.toLowerCase();
-  const controls = [...document.querySelectorAll("input, textarea, [contenteditable='true']")]
-    .filter(visible);
-  const otp = controls.some((node) => {
-    const value = [
+  const otpInputs = [...document.querySelectorAll("input, textarea")]
+    .filter(visible)
+    .filter((node) => (node.getAttribute("autocomplete") || "").toLowerCase().includes("one-time-code"));
+  if (otpInputs.length > 0) {
+    const around = otpInputs.map((node) => [
       node.getAttribute("autocomplete"),
       node.getAttribute("name"),
       node.getAttribute("id"),
       node.getAttribute("placeholder"),
       node.getAttribute("aria-label"),
       node.getAttribute("type"),
-    ].filter(Boolean).join(" ").toLowerCase();
-    return value.includes("one-time-code") || /(?:otp|verification|security|passcode|one.?time)/.test(value);
-  });
-  const otpPrompt = /(?:enter|type|provide|confirm).{0,80}(?:otp|verification|security|passcode|one.?time|code)/.test(lower)
-    || /(?:otp|verification|security|passcode|one.?time).{0,80}(?:code|sent|enter|type)/.test(lower);
-  if (otp || otpPrompt) {
-    const email = /(?:email|inbox|e-mail).{0,90}(?:code|verification|otp)|(?:code|verification|otp).{0,90}(?:email|inbox|e-mail)/.test(lower);
-    const sms = /(?:sms|text message|mobile number|phone).{0,90}(?:code|verification|otp)|(?:code|verification|otp).{0,90}(?:sms|text message|mobile number|phone)/.test(lower);
-    if (email || !sms) state.emailOtp = true;
+    ].filter(Boolean).join(" ")).join(" ").toLowerCase();
+    const email = /email|e-mail|inbox/.test(around);
+    const sms = /sms|phone|mobile|tel/.test(around);
     if (sms && !email) state.smsOtp = true;
+    else state.emailOtp = true;
     const source = /greenhouse/iu.test(location.hostname) ? "Greenhouse" : location.hostname;
     state.otpHint ??= source;
   }
-  if (/application.{0,80}(?:successfully )?(?:submitted|received)|(?:successfully )?(?:submitted|received).{0,80}application/.test(lower)
-      || /applicationSubmitted|\\/confirmation(?:\\/|$)/i.test(location.href)) {
+  if (/applicationSubmitted|\\/confirmation(?:\\/|$)/i.test(location.href)) {
     state.submitted = true;
   }
-  if (/(?:captcha|i.?m not a robot|verify (?:you are )?human|unusual activity|automated (?:traffic|behavior)|bot (?:detection|error)|access denied)/.test(lower)) {
-    state.botOrChallenge = true;
-  }
+  const captchaSrc = (value) => /recaptcha|hcaptcha|turnstile|challenges\\.cloudflare/.test(String(value || "").toLowerCase());
+  const challengeFrame = captchaSrc(location.href) && /bframe|challenge|captcha/i.test(location.href);
+  const captchaIframe = [...document.querySelectorAll("iframe")].some((node) => {
+    if (!visible(node)) return false;
+    if (!captchaSrc(node.getAttribute("src") || node.src)) return false;
+    const box = node.getBoundingClientRect();
+    return box.height >= 80 && box.width >= 80;
+  });
+  if (challengeFrame || captchaIframe) state.botOrChallenge = true;
   return state;
 };
 const state = {

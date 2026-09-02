@@ -17,6 +17,7 @@ vi.mock("@/db/services/sessions", () => ({
 }));
 
 import eveChannel from "../agent/channels/eve";
+import { readFileSync } from "node:fs";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -30,6 +31,13 @@ afterEach(() => {
 });
 
 describe("Eve channel authentication", () => {
+  it("lets vercelOidc run when there is no cookie instead of throwing", () => {
+    const channel = readFileSync("agent/channels/eve.ts", "utf8");
+    expect(channel).toContain("vercelOidc()");
+    expect(channel).not.toContain("UnauthenticatedError");
+    expect(channel).not.toContain("authentication_required");
+  });
+
   it("checks decoded session route ids against workspace ownership", async () => {
     const route = eveChannel.routes.find(
       (candidate) =>

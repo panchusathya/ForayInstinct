@@ -21,7 +21,7 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain(
       "call `continue_application` with that `apply_url` and their answers"
     );
-    expect(instructions).toContain("returns a `Needs user input:` blocker");
+    expect(instructions).toContain('pause: "user_input"');
     expect(browserSkill).toContain("native `final_output` with `failure`");
     expect(browserSkill).toContain("End the turn immediately");
   });
@@ -37,23 +37,23 @@ describe("worker input bubbling", () => {
       "utf8"
     );
 
-    expect(instructions).toContain("returns a `Needs vault setup:` blocker");
+    expect(instructions).toContain('pause: "vault_setup"');
     expect(instructions).toContain("request_vault_setup");
     expect(instructions).toContain("never ask for the password in chat");
     expect(instructions).toContain("never put an identifier");
     expect(instructions).toContain("raw HTTPS setup URL on its own line");
     expect(instructions).toContain(
-      "`Needs submission approval:`, `Needs user input:`, `Needs vault setup:`, or `Needs email OTP:` failure"
+      "`pause` of `approval`, `user_input`, `vault_setup`, or `email_otp`"
     );
     // A dead posting had no category of its own, so a failed apply against a
     // taken-down role was reported to the candidate as an OTP problem.
     expect(workerInstructions).toContain("Needs posting unavailable:");
     expect(browserSkill).toContain("Needs posting unavailable:");
     expect(instructions).toContain(
-      "When the runner returns a `Needs posting unavailable:` blocker"
+      'When the runner returns `{ pause: "posting_unavailable" }`'
     );
     expect(instructions).toContain(
-      "Report only the blocker the runner actually reported"
+      "Report only the `pause` the runner actually returned"
     );
     expect(workerInstructions).toContain("Needs vault setup:");
     expect(workerInstructions).toContain(
@@ -73,9 +73,7 @@ describe("worker input bubbling", () => {
 
     // The candidate reviews every application before it goes out, so all three
     // layers have to agree that the final submit waits for their reply.
-    expect(instructions).toContain(
-      "returns a `Needs submission approval:` blocker"
-    );
+    expect(instructions).toContain('pause: "approval"');
     expect(instructions).toContain("never approve on");
     expect(workerInstructions).toContain(
       "Never submit a job application on the first pass"
@@ -98,7 +96,7 @@ describe("worker input bubbling", () => {
     );
     const otpTool = readFileSync("agent/tools/wait_for_email_otp.ts", "utf8");
 
-    expect(instructions).toContain("returns a `Needs email OTP:` blocker");
+    expect(instructions).toContain('pause: "email_otp"');
     expect(instructions).toContain("call `wait_for_email_otp`");
     expect(instructions).toContain("do not print the code to the user");
     expect(instructions).toContain("Never print an email OTP to the user");

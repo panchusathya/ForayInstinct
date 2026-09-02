@@ -299,6 +299,106 @@ describe("database services", () => {
     );
   }, 15_000);
 
+  it("looks up Better Auth contact identity by phone scope", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0001_better-auth.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, candidateProfile, access] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/candidate-profile"),
+      import("@/lib/access-scope"),
+    ]);
+    const phone = "+12125550123";
+    const phoneScope = access.accessScopeForPhone(phone);
+    await scope.ensureScope(phoneScope);
+    await client.exec(`
+      INSERT INTO "user" (
+        id, name, email, "emailVerified", "phoneNumber", "phoneNumberVerified"
+      ) VALUES (
+        'auth-ada', 'Ada Lovelace', 'ada@example.com', true,
+        '${phone}', true
+      );
+    `);
+
+    await expect(
+      candidateProfile.readCandidateContactIdentity(phoneScope)
+    ).resolves.toEqual({
+      email: "ada@example.com",
+      name: "Ada Lovelace",
+      phone,
+    });
+    await expect(
+      candidateProfile.readCandidateContactIdentity({
+        userId: "phone:missing",
+        workspaceId: phoneScope.workspaceId,
+      })
+    ).resolves.toEqual({ name: "" });
+  }, 15_000);
+
+  it("rebinds adopted vault ciphertext to the target workspace AAD", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, secrets, store] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/secrets"),
+      import("@/lib/manager/server/secret-store"),
+    ]);
+    const legacy = { userId: "legacy", workspaceId: "workspace:legacy" };
+    const target = { userId: "phone", workspaceId: "workspace:phone" };
+    await scope.ensureScope(legacy);
+    await scope.ensureScope(target);
+    await store.writeSecret({
+      id: "login-1",
+      namespace: "vault",
+      scope: legacy,
+      value: "hunter2",
+    });
+    const ciphertext = await secrets.readEncryptedSecret(
+      legacy,
+      "vault",
+      "login-1"
+    );
+    expect(typeof ciphertext).toBe("string");
+    if (typeof ciphertext !== "string") return;
+    await secrets.writeEncryptedSecret(target, "vault", "copied", ciphertext);
+    await expect(
+      store.readSecret({
+        id: "copied",
+        namespace: "vault",
+        scope: target,
+      })
+    ).rejects.toThrow(/authenticate|unsupported/iu);
+    const rebound = store.reencryptSecretForWorkspace({
+      ciphertext,
+      from: legacy,
+      id: "login-1",
+      namespace: "vault",
+      to: target,
+    });
+    await secrets.writeEncryptedSecret(target, "vault", "login-1", rebound);
+    await expect(
+      store.readSecret({
+        id: "login-1",
+        namespace: "vault",
+        scope: target,
+      })
+    ).resolves.toBe("hunter2");
+  }, 15_000);
+
   it("stores a resume in the workspace and recalls it as the default", async () => {
     const client = new PGlite();
     databases.push(client);
@@ -487,10 +587,10 @@ describe("database services", () => {
       png: Buffer.from("other-workspace"),
     });
 
-    // The most recently captured application must arrive first. A scroll-
-    // stitched review still arrives whole and top-first, and a second
-    // application must NOT be numbered into the same run — one "yes" cannot
-    // mean two different jobs.
+    // The most recently captured application must arrive first, grouped by
+    // apply URL rather than browser session. A scroll-stitched review still
+    // arrives whole and top-first, and a second application must NOT be
+    // numbered into the same run — one "yes" cannot mean two different jobs.
     const first =
       await screenshots.claimPendingApplicationSubmissionScreenshots(alice);
     expect(
@@ -537,6 +637,60 @@ describe("database services", () => {
     await expect(
       screenshots.claimPendingApplicationSubmissionScreenshots(alice)
     ).resolves.toEqual([]);
+  }, 20_000);
+
+  it("claims screenshots by apply URL when two applications share a browser session", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0010_application_submission_screenshots.sql");
+    await applyMigration(client, "0015_submission_review_screenshots.sql");
+    await applyMigration(client, "0017_submission_screenshot_attribution.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, screenshots] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/application-submission-screenshots"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    await screenshots.saveApplicationSubmissionScreenshot(
+      alice,
+      "shared-browser",
+      {
+        applyUrl: "https://example.com/apply/one",
+        kind: "review",
+        png: Buffer.from("first-job"),
+        role: "Staff Engineer",
+      }
+    );
+    await screenshots.saveApplicationSubmissionScreenshot(
+      alice,
+      "shared-browser",
+      {
+        applyUrl: "https://example.com/apply/two",
+        kind: "review",
+        png: Buffer.from("second-job"),
+        role: "Product Manager",
+      }
+    );
+
+    const newest =
+      await screenshots.claimPendingApplicationSubmissionScreenshots(alice);
+    expect(newest.map((row) => [row.role, row.png.toString()])).toEqual([
+      ["Product Manager", "second-job"],
+    ]);
+
+    const named =
+      await screenshots.claimPendingApplicationSubmissionScreenshots(alice, {
+        applyUrl: "https://example.com/apply/one",
+      });
+    expect(named.map((row) => row.png.toString())).toEqual(["first-job"]);
   }, 20_000);
 
   it("drains a full-length review and its submitted proof in one claim", async () => {

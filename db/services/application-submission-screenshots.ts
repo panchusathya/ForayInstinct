@@ -1,7 +1,11 @@
 import { and, asc, desc, eq, inArray, isNull, lt } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
 import { maxClaimedSubmissionScreenshots } from "@/lib/browser-submission";
-import { applicationSubmissionScreenshots, db } from "@/db";
+import {
+  applicationExecutions,
+  applicationSubmissionScreenshots,
+  db,
+} from "@/db";
 
 const pngMimeType = "image/png";
 
@@ -44,14 +48,19 @@ export async function saveApplicationSubmissionScreenshot(
   });
 }
 
+export interface ClaimSubmissionScreenshotsFilter {
+  applyUrl?: string;
+  executionId?: string;
+}
+
 /**
  * Claims one application's pending screenshots for delivery.
  *
- * Scoped to a single browser session, newest first: a scroll-stitched review is
- * several rows and the candidate has to read down the page, but two
- * applications in flight must not be posted as one numbered run under a caption
- * that names neither. Selecting the newest session ensures a just-captured
- * review is never displaced by a stale delivery retry from an earlier form.
+ * Batched by apply URL (or execution id, which resolves to that URL), not by
+ * the workspace's newest browser session: two applications in flight must not
+ * be posted as one numbered run, and a just-captured review must not suppress
+ * the other posting's approval ask. Rows written before attribution have an
+ * empty apply URL and still group by session.
  *
  * Bounded by `maxClaimedSubmissionScreenshots` because every row carries its PNG
  * as base64 text: selecting every pending row in the workspace pulled all of
@@ -65,6 +74,7 @@ export async function saveApplicationSubmissionScreenshot(
  */
 export async function claimPendingApplicationSubmissionScreenshots(
   scope: AccessScope,
+  filter: ClaimSubmissionScreenshotsFilter = {},
   limit = maxClaimedSubmissionScreenshots
 ) {
   return db.transaction(async (transaction) => {
@@ -87,22 +97,43 @@ export async function claimPendingApplicationSubmissionScreenshots(
         )
       );
 
-    const [newest] = await transaction
-      .select({ sessionId: applicationSubmissionScreenshots.sessionId })
-      .from(applicationSubmissionScreenshots)
-      .where(
-        and(
-          eq(applicationSubmissionScreenshots.workspaceId, scope.workspaceId),
-          isNull(applicationSubmissionScreenshots.deliveredAt)
-        )
-      )
-      .orderBy(
-        desc(applicationSubmissionScreenshots.createdAt),
-        desc(applicationSubmissionScreenshots.id)
-      )
-      .limit(1);
-    if (!newest) return [];
+    let applyUrl = filter.applyUrl?.trim() ?? "";
+    if (applyUrl === "" && filter.executionId) {
+      const [execution] = await transaction
+        .select({ applyUrl: applicationExecutions.applyUrl })
+        .from(applicationExecutions)
+        .where(eq(applicationExecutions.id, filter.executionId))
+        .limit(1);
+      applyUrl = execution?.applyUrl ?? "";
+    }
 
+    const [newest] =
+      applyUrl === ""
+        ? await transaction
+            .select({
+              applyUrl: applicationSubmissionScreenshots.applyUrl,
+              sessionId: applicationSubmissionScreenshots.sessionId,
+            })
+            .from(applicationSubmissionScreenshots)
+            .where(
+              and(
+                eq(
+                  applicationSubmissionScreenshots.workspaceId,
+                  scope.workspaceId
+                ),
+                isNull(applicationSubmissionScreenshots.deliveredAt)
+              )
+            )
+            .orderBy(
+              desc(applicationSubmissionScreenshots.createdAt),
+              desc(applicationSubmissionScreenshots.id)
+            )
+            .limit(1)
+        : [];
+    if (applyUrl === "" && !newest) return [];
+
+    const batchApplyUrl = applyUrl === "" ? (newest?.applyUrl ?? "") : applyUrl;
+    const batchSessionId = newest?.sessionId;
     const rows = await transaction
       .select({
         applyUrl: applicationSubmissionScreenshots.applyUrl,
@@ -117,8 +148,13 @@ export async function claimPendingApplicationSubmissionScreenshots(
       .where(
         and(
           eq(applicationSubmissionScreenshots.workspaceId, scope.workspaceId),
-          eq(applicationSubmissionScreenshots.sessionId, newest.sessionId),
-          isNull(applicationSubmissionScreenshots.deliveredAt)
+          isNull(applicationSubmissionScreenshots.deliveredAt),
+          batchApplyUrl !== ""
+            ? eq(applicationSubmissionScreenshots.applyUrl, batchApplyUrl)
+            : eq(
+                applicationSubmissionScreenshots.sessionId,
+                batchSessionId ?? ""
+              )
         )
       )
       .orderBy(

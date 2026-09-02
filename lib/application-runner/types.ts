@@ -6,15 +6,7 @@ import {
 
 export const applicationRunnerModel = "application-runner";
 
-const applicationPauseReasons = [
-  "approval",
-  "email_otp",
-  "user_input",
-  "vault_setup",
-  "posting_unavailable",
-] as const;
-
-export type ApplicationPauseReason = (typeof applicationPauseReasons)[number];
+export type { ApplicationPauseReason } from "@/lib/task-completion";
 
 export interface ApplicationRunInput {
   applyUrl: string;
@@ -28,6 +20,7 @@ export interface ApplicationRunInput {
 
 export type ApplicationRunResult =
   | {
+      applyUrl: string;
       executionId: string;
       expiresAt: string;
       message: string;

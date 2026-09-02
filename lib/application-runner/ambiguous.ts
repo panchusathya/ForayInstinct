@@ -27,7 +27,7 @@ export async function suggestUnmappedFills(input: {
     prompt: [
       "Map leftover ATS form fields to values from the candidate profile.",
       "Return JSON { fills: [{ selector, value }], blocker?: string }.",
-      "If a required field cannot be answered, set blocker to a short Needs user input: message.",
+      "If a required field cannot be answered, set blocker to the question text only, with no Needs prefix.",
       "Never invent a password, SSN, or date of birth.",
       `Profile: ${input.profileSummary}`,
       input.answers ? `Candidate answers: ${input.answers}` : "",

@@ -1,9 +1,5 @@
 import { eveChannel } from "eve/channels/eve";
-import {
-  ForbiddenError,
-  UnauthenticatedError,
-  vercelOidc,
-} from "eve/channels/auth";
+import { ForbiddenError, vercelOidc } from "eve/channels/auth";
 import { isSessionOwned } from "@/db/services/sessions";
 import {
   accessScopeForPhone,
@@ -19,10 +15,10 @@ export default eveChannel({
     async (request) => {
       const scope = await requestScopeFromRequest(request);
       if (!scope) {
-        throw new UnauthenticatedError({
-          code: "authentication_required",
-          message: "Sign in to continue.",
-        });
+        // Skip to `vercelOidc()` instead of throwing. Turn-budget cancel,
+        // rollover, restart, and leftover worker `session.cancel()` are
+        // in-project Vercel workloads that present an OIDC token, not a cookie.
+        return;
       }
 
       const sessionId = sessionIdFromPath(new URL(request.url).pathname);

@@ -16,12 +16,13 @@ export const maxClaimedSubmissionScreenshots = maxApplicationReviewCaptures + 1;
  * Conservative evidence that an ATS already accepted an application. The
  * worker's Playwright return value is not a source of truth: it is often
  * `{ success: true }` with no page text, and a turn can end before
- * `final_output`. Classify from the live page instead, and never persist the
- * body snippet.
+ * `final_output`. Classify from the confirmation URL only — posting-page copy
+ * such as "we received your application" is not proof. The unused body
+ * argument is kept so existing callers do not have to change.
  */
 export function observedSubmission(
   url: string,
-  body: string
+  _body?: string
 ): string | undefined {
   const location = browserPageLocation(url) ?? url;
   if (
@@ -29,24 +30,6 @@ export function observedSubmission(
     /\/confirmation(?:\/|$)/i.test(location)
   ) {
     return "application submitted";
-  }
-
-  const text = body.replace(/\s+/g, " ");
-  if (
-    /application[\s\S]{0,80}successfully submitted/i.test(text) ||
-    /successfully submitted[\s\S]{0,80}application/i.test(text)
-  ) {
-    return "successfully submitted";
-  }
-  if (
-    /application[\s\S]{0,80}(?:successfully )?(?:received|submitted)/i.test(
-      text
-    ) ||
-    /(?:successfully )?(?:received|submitted)[\s\S]{0,80}application/i.test(
-      text
-    )
-  ) {
-    return "application received";
   }
   return undefined;
 }

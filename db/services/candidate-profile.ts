@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
+import { accessScopeForPhone } from "@/lib/access-scope";
 import { candidateProfiles, db, user } from "@/db";
 import {
   candidateProfilePatchSchema,
@@ -75,18 +76,9 @@ export async function saveCandidateProfile(
 export async function readCandidateContactIdentity(
   scope: AccessScope
 ): Promise<CandidateContactIdentity> {
-  const rows = await db
-    .select({
-      email: user.email,
-      emailVerified: user.emailVerified,
-      name: user.name,
-      phoneNumber: user.phoneNumber,
-      phoneNumberVerified: user.phoneNumberVerified,
-    })
-    .from(user)
-    .where(eq(user.id, authUserId(scope.userId)))
-    .limit(1);
-  const row = rows[0];
+  const row =
+    (await lookupAuthUserById(authUserId(scope.userId))) ??
+    (await lookupAuthUserByPhoneScope(scope.userId));
   if (row === undefined) return { name: "" };
   return {
     name: row.name.trim(),
@@ -124,6 +116,53 @@ function parseStoredProfile(row: typeof candidateProfiles.$inferSelect) {
     workHistory: row.workHistory,
     yearsExperience: row.yearsExperience,
   });
+}
+
+async function lookupAuthUserById(id: string) {
+  if (id.startsWith("phone:")) return undefined;
+  const rows = await db
+    .select({
+      email: user.email,
+      emailVerified: user.emailVerified,
+      name: user.name,
+      phoneNumber: user.phoneNumber,
+      phoneNumberVerified: user.phoneNumberVerified,
+    })
+    .from(user)
+    .where(eq(user.id, id))
+    .limit(1);
+  return rows[0];
+}
+
+/**
+ * iMessage scopes are `phone:<hash>`, which is not a Better Auth user id.
+ * Match the verified phone number whose digest produced this scope.
+ */
+async function lookupAuthUserByPhoneScope(userId: string) {
+  if (!userId.startsWith("phone:")) return undefined;
+  const rows = await db
+    .select({
+      email: user.email,
+      emailVerified: user.emailVerified,
+      name: user.name,
+      phoneNumber: user.phoneNumber,
+      phoneNumberVerified: user.phoneNumberVerified,
+    })
+    .from(user)
+    .where(eq(user.phoneNumberVerified, true));
+  return rows.find((row) => matchesPhoneScope(userId, row));
+}
+
+function matchesPhoneScope(
+  userId: string,
+  row: NonNullable<Awaited<ReturnType<typeof lookupAuthUserById>>>
+) {
+  if (!row.phoneNumber) return false;
+  try {
+    return accessScopeForPhone(row.phoneNumber).userId === userId;
+  } catch {
+    return false;
+  }
 }
 
 function authUserId(userId: string) {

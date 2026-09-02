@@ -57,36 +57,104 @@ export function parseTaskCompletion(
 }
 
 /**
- * The worker's blocker vocabulary, owned here rather than restated in five
- * prompts. Only `Needs submission approval:` was ever matched in code; every
- * other blocker lived in the instructions alone, so nothing verified that the
- * worker had actually reported one before the coordinator acted on it. An
- * unavailable posting had no category at all, and a failed apply against a
- * taken-down role was narrated to a candidate as an email OTP problem.
- *
- * `already_in_progress` is the structured duplicate-dispatch status. The
- * worker-facing error still starts with `Needs existing worker:` so existing
- * instructions keep matching.
+ * Runner pause reasons. Coordinator tools return `{ pause }` from this enum;
+ * candidate-facing `Needs …:` copy is generated from it rather than parsed.
+ */
+const applicationPauseReasons = [
+  "approval",
+  "email_otp",
+  "user_input",
+  "vault_setup",
+  "posting_unavailable",
+] as const;
+
+export type ApplicationPauseReason = (typeof applicationPauseReasons)[number];
+
+const pauseCopy = {
+  approval: {
+    blocker: "submissionApproval",
+    prefix: "Needs submission approval:",
+  },
+  email_otp: { blocker: "emailOtp", prefix: "Needs email OTP:" },
+  posting_unavailable: {
+    blocker: "postingUnavailable",
+    prefix: "Needs posting unavailable:",
+  },
+  user_input: { blocker: "userInput", prefix: "Needs user input:" },
+  vault_setup: { blocker: "vaultSetup", prefix: "Needs vault setup:" },
+} as const satisfies Record<
+  ApplicationPauseReason,
+  { blocker: string; prefix: string }
+>;
+
+/**
+ * Duplicate-dispatch status. The worker-facing error still starts with
+ * `Needs existing worker:` so leftover worker instructions keep matching.
  */
 export const alreadyInProgressStatus = "already_in_progress";
 
-const workerBlockers = [
-  ["alreadyInProgress", "already_in_progress:"],
-  ["emailOtp", "Needs email OTP:"],
-  ["existingWorker", "Needs existing worker:"],
-  ["postingUnavailable", "Needs posting unavailable:"],
-  ["submissionApproval", "Needs submission approval:"],
-  ["userInput", "Needs user input:"],
-  ["vaultSetup", "Needs vault setup:"],
-] as const;
+const extraBlockers = {
+  alreadyInProgress: "already_in_progress:",
+  existingWorker: "Needs existing worker:",
+} as const;
 
-type WorkerBlocker = (typeof workerBlockers)[number][0];
+type WorkerBlocker =
+  | (typeof pauseCopy)[ApplicationPauseReason]["blocker"]
+  | keyof typeof extraBlockers;
 
-/** The exact prefix a worker must put on a blocker message of this kind. */
+const workerBlockers: readonly (readonly [WorkerBlocker, string])[] = [
+  ...applicationPauseReasons.map(
+    (reason) =>
+      [
+        pauseCopy[reason].blocker,
+        pauseCopy[reason].prefix,
+      ] as const satisfies readonly [WorkerBlocker, string]
+  ),
+  ["alreadyInProgress", extraBlockers.alreadyInProgress],
+  ["existingWorker", extraBlockers.existingWorker],
+];
+
+/** The exact prefix generated for a pause reason or leftover worker blocker. */
 export function workerBlockerPrefix(kind: WorkerBlocker) {
   const entry = workerBlockers.find(([name]) => name === kind);
   if (!entry) throw new Error(`Unknown worker blocker: ${kind}`);
   return entry[1];
+}
+
+export function applicationPausePrefix(reason: ApplicationPauseReason) {
+  return pauseCopy[reason].prefix;
+}
+
+/** Candidate-facing copy generated from the pause enum, never parsed back. */
+export function applicationPauseMessage(
+  reason: ApplicationPauseReason,
+  detail = ""
+) {
+  const extra = detail.trim();
+  return extra
+    ? `${applicationPausePrefix(reason)} ${extra}`
+    : applicationPausePrefix(reason);
+}
+
+const pauseReasonNames: ReadonlySet<string> = new Set(applicationPauseReasons);
+
+function isApplicationPauseReason(
+  value: string
+): value is ApplicationPauseReason {
+  return pauseReasonNames.has(value);
+}
+
+export function pauseKindFromOutput(output: {
+  message?: string;
+  pause?: string;
+}): ApplicationPauseReason | undefined {
+  if (output.pause !== undefined && isApplicationPauseReason(output.pause)) {
+    return output.pause;
+  }
+  const blocker = output.message ? blockerKind(output.message) : undefined;
+  return applicationPauseReasons.find(
+    (reason) => pauseCopy[reason].blocker === blocker
+  );
 }
 
 /** The blocker the worker actually reported, or undefined for anything else. */

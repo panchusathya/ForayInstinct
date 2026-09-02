@@ -25,12 +25,12 @@ import type {
   ApplicationPauseReason,
   ApplicationRunInput,
 } from "@/lib/application-runner/types";
-import { workerBlockerPrefix } from "@/lib/task-completion";
+import { applicationPauseMessage } from "@/lib/task-completion";
 import { z } from "zod";
 
 export type FillStepResult =
-  | { pause: ApplicationPauseReason; message: string }
-  | { done: true; message: string }
+  | { applyUrl: string; pause: ApplicationPauseReason; message: string }
+  | { applyUrl: string; done: true; message: string }
   | { continue: true };
 
 const visibleFieldSchema = z.object({
@@ -57,7 +57,11 @@ export async function fillVisibleForm(
     }).catch(() => ({ filled: false, origin: input.applyUrl }));
     if (!vault.filled) {
       return {
-        message: `${workerBlockerPrefix("vaultSetup")} sign-in is required for ${input.applyUrl}.`,
+        applyUrl: input.applyUrl,
+        message: applicationPauseMessage(
+          "vault_setup",
+          `sign-in is required for ${input.applyUrl}.`
+        ),
         pause: "vault_setup",
       };
     }
@@ -67,13 +71,21 @@ export async function fillVisibleForm(
   ).catch(() => undefined);
   if (probe?.emailOtp) {
     return {
-      message: `${workerBlockerPrefix("emailOtp")} ${probe.otpHint ?? input.applyUrl}`,
+      applyUrl: input.applyUrl,
+      message: applicationPauseMessage(
+        "email_otp",
+        probe.otpHint ?? input.applyUrl
+      ),
       pause: "email_otp",
     };
   }
   if (probe?.smsOtp) {
     return {
-      message: `${workerBlockerPrefix("userInput")} SMS verification is required.`,
+      applyUrl: input.applyUrl,
+      message: applicationPauseMessage(
+        "user_input",
+        "SMS verification is required."
+      ),
       pause: "user_input",
     };
   }
@@ -127,7 +139,14 @@ export async function fillVisibleForm(
       });
     }
     if (helper.blocker) {
-      return { message: helper.blocker, pause: "user_input" };
+      return {
+        applyUrl: input.applyUrl,
+        message: applicationPauseMessage(
+          "user_input",
+          helper.blocker.replace(/^Needs user input:\s*/iu, "")
+        ),
+        pause: "user_input",
+      };
     }
   }
   await recordBrowserRunCheckpoint(input.scope, input.browserSessionId, {
@@ -153,7 +172,11 @@ export async function captureApproval(
     status: "waiting",
   });
   return {
-    message: `${workerBlockerPrefix("submissionApproval")} ${input.role} ${input.applyUrl}`,
+    applyUrl: input.applyUrl,
+    message: applicationPauseMessage(
+      "approval",
+      `${input.role} ${input.applyUrl}`
+    ),
     pause: "approval",
   };
 }
@@ -180,6 +203,7 @@ export async function submitApplication(
     status: "completed",
   });
   return {
+    applyUrl: input.applyUrl,
     done: true,
     message: probe?.submitted
       ? `Submitted ${input.role} at ${input.applyUrl}.`

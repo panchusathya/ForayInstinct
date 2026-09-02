@@ -5,7 +5,7 @@ import { scopeFromPrincipal } from "@/lib/access-scope";
 
 export default defineTool({
   description:
-    "Resume a paused application run after candidate approval, an OTP, vault setup, or answers to leftover fields. Pass the same apply_url. Set approved true only after the candidate explicitly confirms the review screenshots. Never approve on their behalf.",
+    "Resume a paused application run after candidate approval, an OTP, vault setup, or answers to leftover fields. Pass the same apply_url. Set approved true only after the candidate explicitly confirms the review screenshots. Never approve on their behalf. Returns { pause } from the same enum as start_application.",
   inputSchema: z.object({
     answers: z.string().max(4_000).optional(),
     apply_url: z.url(),

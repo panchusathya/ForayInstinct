@@ -10,8 +10,6 @@ import type { LinqJobCardThread } from "@/lib/goforay/linq-job-card-state";
  * a fresh session instead; workspace memory carries the stable facts across.
  */
 export const LINQ_SESSION_IDLE_MS = 6 * 60 * 60_000;
-/** A worker parked on the candidate's answer keeps its session this long. */
-const LINQ_SESSION_UNFINISHED_LOOKBACK_MS = 24 * 60 * 60_000;
 
 const LINQ_SESSION_ACTIVITY_KEY = "linqSessionActivity";
 
@@ -85,8 +83,7 @@ export async function rollOverIdleLinqSession(
   if (!isLinqSessionIdle(activity, now)) return "kept";
   try {
     const unfinished = await hasUnfinishedApplicationExecution(
-      activity.sessionId,
-      new Date(now.getTime() - LINQ_SESSION_UNFINISHED_LOOKBACK_MS)
+      activity.sessionId
     );
     if (unfinished) return "kept";
     const result = await eveSessionClient()
