@@ -199,6 +199,66 @@ describe("application leases", () => {
       }),
     ]);
   });
+  it("lets the same session retry a posting whose lease was released", async () => {
+    // The lease row is keyed by execution id and a retry from the same session
+    // reuses that id, so a released row used to stand as a tombstone: the
+    // posting could never be started again and the tool threw outright.
+    const leases = await setup();
+    const tracing = await import("@/lib/application-execution");
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    const applyUrl = "https://jobs.example/step/1";
+    const executionId = tracing.executionId("root-1", "call-1");
+
+    const first = await leases.claimApplicationLease({
+      applyUrl,
+      executionId,
+      rootSessionId: "root-1",
+      scope: alice,
+    });
+    expect(first.status).toBe("acquired");
+    await leases.releaseApplicationLease({ executionId });
+
+    const retry = await leases.claimApplicationLease({
+      applyUrl,
+      executionId,
+      rootSessionId: "root-1",
+      scope: alice,
+    });
+
+    expect(retry).toMatchObject({ executionId, status: "acquired" });
+  });
+
+  it("still blocks a retry while another execution holds the posting", async () => {
+    const leases = await setup();
+    const tracing = await import("@/lib/application-execution");
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    const applyUrl = "https://jobs.example/step/1";
+    const mine = tracing.executionId("root-1", "call-1");
+    const theirs = tracing.executionId("root-1", "call-2");
+
+    await leases.claimApplicationLease({
+      applyUrl,
+      executionId: mine,
+      rootSessionId: "root-1",
+      scope: alice,
+    });
+    await leases.releaseApplicationLease({ executionId: mine });
+    await leases.claimApplicationLease({
+      applyUrl,
+      executionId: theirs,
+      rootSessionId: "root-1",
+      scope: alice,
+    });
+
+    const retry = await leases.claimApplicationLease({
+      applyUrl,
+      executionId: mine,
+      rootSessionId: "root-1",
+      scope: alice,
+    });
+
+    expect(retry).toMatchObject({ status: "already_in_progress" });
+  });
 });
 
 async function setup() {

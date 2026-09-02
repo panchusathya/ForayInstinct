@@ -36,6 +36,9 @@ export async function runApplicationUntilPause(input: ApplicationRunInput) {
     });
     applicationExecutionLog({
       apply_url: input.applyUrl,
+      // Every gate pauses with the same reason, so the message is the only way
+      // to tell an unanswered question from a blocked submit when reading back.
+      detail: filled.message.slice(0, 300),
       event: "runner.paused",
       execution_id: input.executionId,
       pause_reason: filled.pause,

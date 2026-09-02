@@ -107,6 +107,40 @@ export async function claimApplicationLease(input: {
       )
     )
     .limit(1);
+  // Nobody holds the posting and this execution's own lease has been released.
+  // The row is keyed by execution id, and a retry from the same session reuses
+  // that id, so the released row would otherwise stand as a tombstone that
+  // refuses the posting forever. Take it back with a fresh window.
+  if (!held && mine) {
+    const [reclaimed] = await db
+      .update(applicationLeases)
+      .set({ claimedAt, expiresAt, status: "held", workerSessionId: null })
+      .where(
+        and(
+          eq(applicationLeases.executionId, input.executionId),
+          eq(applicationLeases.status, "released")
+        )
+      )
+      .returning({
+        executionId: applicationLeases.executionId,
+        expiresAt: applicationLeases.expiresAt,
+      });
+    if (reclaimed) {
+      applicationExecutionLog({
+        apply_url: input.applyUrl,
+        event: "lease.reclaimed",
+        execution_id: reclaimed.executionId,
+        expires_at: reclaimed.expiresAt,
+        root_session_id: input.rootSessionId,
+        status: "held",
+      });
+      return {
+        executionId: reclaimed.executionId,
+        expiresAt: reclaimed.expiresAt,
+        status: "acquired",
+      };
+    }
+  }
   if (!held) {
     throw new Error("Application worker requires an application lease.");
   }

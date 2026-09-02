@@ -16,25 +16,33 @@ const domHelpers = `
     if (name) return node.tagName.toLowerCase() + "[name=" + JSON.stringify(name) + "]";
     return "(" + node.tagName.toLowerCase() + ")[" + String(index) + "]";
   };
-  const labelFor = (node) => {
-    const labelled = node.getAttribute("aria-label")
-      || node.getAttribute("placeholder")
-      || node.getAttribute("name")
-      || "";
+  /**
+   * The control's own label only. An ancestor lookup would happily return a
+   * neighbouring field's text, which then travels into every downstream
+   * decision as if the page had said it.
+   */
+  const ownLabel = (node) => {
     if (node.id) {
       const byFor = document.querySelector("label[for=" + JSON.stringify(node.id) + "]");
-      if (byFor) return (byFor.innerText || labelled).trim();
+      if (byFor && byFor.innerText) return byFor.innerText.trim();
     }
     const parentLabel = node.closest("label");
-    if (parentLabel) return (parentLabel.innerText || labelled).trim();
-    const group = node.closest("fieldset, [role=group], [role=radiogroup], div");
-    const legend = group && group.querySelector("legend, label, .label");
-    if (legend && legend.innerText) return legend.innerText.trim();
-    return labelled.trim();
+    if (parentLabel && parentLabel.innerText) return parentLabel.innerText.trim();
+    return "";
   };
+  const labelFor = (node) => ownLabel(node)
+    || (node.getAttribute("aria-label")
+      || node.getAttribute("placeholder")
+      || node.getAttribute("name")
+      || "").trim();
+  /**
+   * An asterisk counts only inside the control's own label. Read from an
+   * ancestor it matches the page's "* indicates a required field" note and
+   * marks the whole form required.
+   */
   const isRequired = (node) => node.required === true
     || node.getAttribute("aria-required") === "true"
-    || /\\*/.test(labelFor(node).slice(0, 200));
+    || /\\*/.test(ownLabel(node).slice(0, 200));
 `;
 
 /**
@@ -251,8 +259,10 @@ ${domHelpers}
       } else if (type === "checkbox") {
         blank = node.checked !== true;
       } else if (role === "combobox" || role === "listbox") {
-        blank = (node.value || node.innerText || "").trim() === ""
-          || node.getAttribute("aria-expanded") === null && (node.textContent || "").trim() === "";
+        // Whatever the widget shows once a choice is made. Reading it loosely
+        // risks calling a filled control blank, which would stall the run on a
+        // question the candidate has already answered.
+        blank = (node.value || node.innerText || node.textContent || "").trim() === "";
       } else {
         blank = String(node.value || "").trim() === "";
       }
