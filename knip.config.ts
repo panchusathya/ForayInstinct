@@ -2,7 +2,6 @@ import type { KnipConfig } from "knip";
 
 export default {
   entry: [
-    "agent/agent.ts",
     "agent/channels/**/*.ts",
     "agent/hooks/**/*.ts",
     "agent/memory/**/*.ts",

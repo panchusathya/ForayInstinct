@@ -4,13 +4,13 @@ import { decode as decodeJpeg, encode as encodeJpeg } from "jpeg-js";
 /** Longest edge kept for fill-loop vision frames. */
 export const VISION_SCREENSHOT_MAX_WIDTH = 768;
 /** JPEG quality for those frames. Review/approval captures stay PNG. */
-export const VISION_JPEG_QUALITY = 45;
+const VISION_JPEG_QUALITY = 45;
 
-type RgbaImage = {
+interface RgbaImage {
   data: Uint8Array;
   height: number;
   width: number;
-};
+}
 
 /**
  * Downscale a PNG or JPEG screenshot and re-encode as JPEG so each computer
@@ -54,12 +54,14 @@ function decodeToRgba(bytes: Buffer): RgbaImage {
 }
 
 function toRgba(
-  data: Uint8Array,
+  data: ArrayLike<number>,
   width: number,
   height: number,
   channels: number
 ) {
-  if (channels === 4) return data;
+  if (channels === 4) {
+    return data instanceof Uint8Array ? data : Uint8Array.from(data);
+  }
   const rgba = new Uint8Array(width * height * 4);
   for (let index = 0; index < width * height; index += 1) {
     const source = index * channels;
@@ -75,7 +77,10 @@ function toRgba(
 function scaleToMaxWidth(image: RgbaImage, maxWidth: number): RgbaImage {
   if (image.width <= maxWidth) return image;
   const width = maxWidth;
-  const height = Math.max(1, Math.round((image.height * maxWidth) / image.width));
+  const height = Math.max(
+    1,
+    Math.round((image.height * maxWidth) / image.width)
+  );
   const data = new Uint8Array(width * height * 4);
   for (let y = 0; y < height; y += 1) {
     const sourceY = Math.min(

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { decode } from "jpeg-js";
 import { encode } from "fast-png";
 import {
   VISION_SCREENSHOT_MAX_WIDTH,
@@ -21,8 +22,10 @@ describe("vision screenshot compression", () => {
       compressScreenshotToJpeg(Buffer.from(png).toString("base64")),
       "base64"
     );
+    const decoded = decode(jpeg, { useTArray: true });
     expect(jpeg.subarray(0, 2).equals(Buffer.from([0xff, 0xd8]))).toBe(true);
-    expect(jpeg.byteLength).toBeLessThan(png.byteLength / 4);
-    expect(VISION_SCREENSHOT_MAX_WIDTH).toBe(768);
+    expect(decoded.width).toBe(VISION_SCREENSHOT_MAX_WIDTH);
+    expect(decoded.height).toBe(432);
+    expect(jpeg.byteLength).toBeLessThan((width * height * 4) / 20);
   });
 });

@@ -6,11 +6,6 @@ import {
   keepLastPromptImageMiddleware,
 } from "@/lib/model-request";
 
-export {
-  COORDINATOR_MAX_OUTPUT_TOKENS,
-  WORKER_MAX_OUTPUT_TOKENS,
-} from "@/lib/model-request";
-
 // Keep routine chat inexpensive while giving browser work a vision-capable
 // model that can read the screenshots returned by browser tools. Production
 // still requires AI_GATEWAY_API_KEY so Vercel does not route onto the free

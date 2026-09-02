@@ -1,4 +1,4 @@
-CREATE TABLE "application_leases" (
+CREATE TABLE IF NOT EXISTS "application_leases" (
   "execution_id" text PRIMARY KEY NOT NULL,
   "workspace_id" text NOT NULL,
   "created_by_user_id" text NOT NULL,
@@ -12,10 +12,10 @@ CREATE TABLE "application_leases" (
   CONSTRAINT "application_leases_status_check" CHECK ("status" IN ('held', 'released'))
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX "application_leases_held_workspace_apply_url_idx" ON "application_leases" USING btree ("workspace_id","apply_url") WHERE "status" = 'held' AND "apply_url" <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS "application_leases_held_workspace_apply_url_idx" ON "application_leases" USING btree ("workspace_id","apply_url") WHERE "status" = 'held' AND "apply_url" <> '';
 --> statement-breakpoint
-CREATE INDEX "application_leases_held_expires_idx" ON "application_leases" USING btree ("status","expires_at");
+CREATE INDEX IF NOT EXISTS "application_leases_held_expires_idx" ON "application_leases" USING btree ("status","expires_at");
 --> statement-breakpoint
-ALTER TABLE "browser_run_checkpoints" ADD COLUMN IF NOT EXISTS "execution_id" text;
+ALTER TABLE IF EXISTS "browser_run_checkpoints" ADD COLUMN IF NOT EXISTS "execution_id" text;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "browser_run_checkpoints_execution_created_idx" ON "browser_run_checkpoints" USING btree ("execution_id","created_at" DESC NULLS FIRST);

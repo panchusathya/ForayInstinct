@@ -22,7 +22,7 @@ export type ApplicationLeaseClaim =
       workerSessionId: string | null;
     };
 
-export function alreadyInProgressError(input: {
+function alreadyInProgressError(input: {
   applyUrl: string;
   workerSessionId?: string | null;
 }) {
@@ -197,8 +197,7 @@ export async function assertApplicationLeaseOwner(input: {
     throw new Error("Application worker exceeded the 20-minute safety limit.");
   }
   const owns =
-    lease.executionId === id ||
-    lease.workerSessionId === input.workerSessionId;
+    lease.executionId === id || lease.workerSessionId === input.workerSessionId;
   if (!owns) {
     throw alreadyInProgressError({
       applyUrl: lease.applyUrl,

@@ -190,7 +190,7 @@ describe("root and worker capability boundaries", () => {
     expect(rootInstructions).toContain("submission_observed");
     expect(rootInstructions).toContain("never spawn a fresh worker");
     expect(rootInstructions).toContain("role title and `apply_url`");
-    expect(rootInstructions).toContain("status: \"working\"");
+    expect(rootInstructions).toContain('status: "working"');
     expect(rootInstructions).toContain("already_in_progress");
     expect(rootInstructions).toContain("in progress, not empty");
     expect(rootInstructions).toContain("with that posting's `apply_url`");

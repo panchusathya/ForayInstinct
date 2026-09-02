@@ -22,14 +22,12 @@ describe("per-call generation caps", () => {
 
     const coordinator = forceMaxOutputTokensMiddleware(1_000);
     const worker = forceMaxOutputTokensMiddleware(2_000);
-    const omitted = await coordinator.transformParams?.({
-      params: {},
-      type: "generate",
-    });
-    const oversized = await worker.transformParams?.({
-      params: { maxOutputTokens: 65_536 },
-      type: "generate",
-    });
+    const omitted = await coordinator.transformParams?.(
+      callOptions({ prompt: [] })
+    );
+    const oversized = await worker.transformParams?.(
+      callOptions({ maxOutputTokens: 65_536, prompt: [] })
+    );
     expect(omitted?.maxOutputTokens).toBe(1_000);
     expect(oversized?.maxOutputTokens).toBe(2_000);
   });
@@ -57,13 +55,21 @@ describe("per-call generation caps", () => {
     expect(JSON.stringify(prompt)).toContain("one");
 
     const middleware = keepLastPromptImageMiddleware();
-    const throughMiddleware = await middleware.transformParams?.({
-      params: { prompt },
-      type: "generate",
-    });
+    const throughMiddleware = await middleware.transformParams?.(
+      callOptions({ prompt })
+    );
     const middlewareFiles =
       JSON.stringify(throughMiddleware?.prompt).match(/"(one|two|three)"/g) ??
       [];
     expect(middlewareFiles).toEqual(['"three"']);
   });
 });
+
+function callOptions(params: { maxOutputTokens?: number; prompt: unknown }) {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- middleware unit test supplies a partial LanguageModelV4 call
+  return {
+    model: { specificationVersion: "v4" },
+    params,
+    type: "generate",
+  } as never;
+}

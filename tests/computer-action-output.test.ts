@@ -38,10 +38,7 @@ describe("computer_action model output", () => {
     const sleep = { sleep: { duration_ms: 100 }, type: "sleep" };
 
     expect(
-      accepts([
-        ...Array.from({ length: 11 }, () => sleep),
-        screenshot,
-      ])
+      accepts([...Array.from({ length: 11 }, () => sleep), screenshot])
     ).toBe(true);
     expect(accepts([screenshot, screenshot])).toBe(false);
     expect(accepts(Array.from({ length: 13 }, () => sleep))).toBe(false);

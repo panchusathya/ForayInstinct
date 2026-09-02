@@ -4,8 +4,9 @@ import { accessScopeForUser, type AccessScope } from "@/lib/access-scope";
 const mocks = vi.hoisted(() => ({
   assertApplicationLeaseOwner: vi.fn<() => Promise<void>>(),
   assertNoConcurrentApplicationWorker: vi.fn<() => Promise<void>>(),
-  claimSession: vi.fn(),
-  ensureScope: vi.fn(),
+  claimSession:
+    vi.fn<(_scope: AccessScope, _sessionId: string) => Promise<void>>(),
+  ensureScope: vi.fn<(_scope: AccessScope) => Promise<void>>(),
   isSessionOwned:
     vi.fn<(_scope: AccessScope, _sessionId: string) => Promise<boolean>>(),
 }));

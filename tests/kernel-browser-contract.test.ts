@@ -55,6 +55,12 @@ vi.mock("@/agent/subagents/worker/lib/access", () => ({
   requireWorkerScope: mocks.requireWorkerScope,
 }));
 
+vi.mock("@/db/services/application-executions", () => ({
+  attachBrowserToApplicationExecution: vi.fn<() => Promise<void>>(
+    async () => undefined
+  ),
+}));
+
 vi.mock("@/db/services/browsers", () => ({
   createBrowserSession: mocks.createBrowserSession,
   deleteBrowserSession: vi.fn<() => Promise<boolean>>(),
@@ -126,7 +132,7 @@ beforeEach(() => {
 // The Eve tool context is external runtime state; create only reads abortSignal
 // after the mocked authorization boundary.
 // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- see above.
-const toolContext = {} as never;
+const toolContext = { session: { id: "worker-session" } } as never;
 
 const jobUrl = "https://tenant.myworkdayjobs.com/en-US/job/example";
 
@@ -264,7 +270,7 @@ describe("Kernel browser contract", () => {
     const execute = manageBrowsers.execute;
 
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; create only reads abortSignal after the mocked authorization boundary.
-    const result = await execute({ action: "create" }, {} as never);
+    const result = await execute({ action: "create" }, toolContext);
     expect(result).toMatchObject({
       browser: {
         browser_live_view_url: "https://live.kernel.test/browser-1",
@@ -309,7 +315,7 @@ describe("Kernel browser contract", () => {
     const execute = manageBrowsers.execute;
 
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; create only reads abortSignal after the mocked authorization boundary.
-    await execute({ action: "create" }, {} as never);
+    await execute({ action: "create" }, toolContext);
 
     expect(mocks.createBrowser).toHaveBeenCalledExactlyOnceWith(
       {
@@ -392,7 +398,7 @@ describe("Kernel browser contract", () => {
       start_url: "https://tenant.myworkdayjobs.com/en-US/job/example",
     };
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the tool context is external Eve runtime state; create only reads abortSignal after the mocked authorization boundary.
-    const result = await execute(input, {} as never);
+    const result = await execute(input, toolContext);
 
     expect(mocks.createBrowser).toHaveBeenCalledWith(
       expect.objectContaining({ start_url: undefined, stealth: true }),
@@ -456,7 +462,7 @@ describe("Kernel browser contract", () => {
         action: "create",
         start_url: "https://tenant.myworkdayjobs.com/en-US/job/example",
       },
-      {} as never
+      toolContext
     );
 
     expect(mocks.executePlaywright).toHaveBeenCalledTimes(4);

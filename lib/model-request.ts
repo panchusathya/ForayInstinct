@@ -18,7 +18,7 @@ export function capMaxOutputTokens<T extends { maxOutputTokens?: number }>(
   };
 }
 
-export function isPromptImagePart(part: unknown) {
+function isPromptImagePart(part: unknown) {
   if (!part || typeof part !== "object") return false;
   const type = "type" in part ? part.type : undefined;
   if (type === "image") return true;
@@ -34,7 +34,7 @@ export function keepLastPromptImage<T>(prompt: T): T {
   const clone = structuredClone(prompt);
   const images: { index: number; parent: unknown[] }[] = [];
   collectPromptImages(clone, images);
-  for (const found of [...images.slice(0, -1)].reverse()) {
+  for (const found of images.slice(0, -1).toReversed()) {
     found.parent.splice(found.index, 1);
   }
   return clone;
@@ -75,10 +75,7 @@ export function keepLastPromptImageMiddleware(): LanguageModelMiddleware {
     specificationVersion: "v4",
     transformParams: async ({ params }) => ({
       ...params,
-      prompt:
-        params.prompt === undefined
-          ? params.prompt
-          : keepLastPromptImage(params.prompt),
+      prompt: keepLastPromptImage(params.prompt),
     }),
   };
 }

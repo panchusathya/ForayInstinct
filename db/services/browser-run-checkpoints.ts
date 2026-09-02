@@ -1,13 +1,9 @@
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
-import {
-  applicationExecutions,
-  browserRunCheckpoints,
-  db,
-} from "@/db";
+import { applicationExecutions, browserRunCheckpoints, db } from "@/db";
 import { listApplicationExecutionTraces } from "@/db/services/application-executions";
 
-export type BrowserRunCheckpointInput = {
+export interface BrowserRunCheckpointInput {
   action?: string;
   actions?: string[];
   attempt?: number;
@@ -17,7 +13,7 @@ export type BrowserRunCheckpointInput = {
   phase: string;
   state?: string;
   trace?: string[];
-};
+}
 
 export async function recordBrowserRunCheckpoint(
   scope: AccessScope,

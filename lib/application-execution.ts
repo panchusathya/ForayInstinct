@@ -58,7 +58,7 @@ export function safeApplyUrl(value: string) {
   }
 }
 
-export function safeLabel(value: string) {
+function safeLabel(value: string) {
   return value
     .replace(/[\r\n\t]+/gu, " ")
     .replace(/\s+/gu, " ")
@@ -102,10 +102,7 @@ export function applicationLeaseExpiresAt(
   return new Date(claimedAt.getTime() + activeMs).toISOString();
 }
 
-export function isApplicationLeaseExpired(
-  expiresAt: string,
-  now = Date.now()
-) {
+export function isApplicationLeaseExpired(expiresAt: string, now = Date.now()) {
   return Date.parse(expiresAt) <= now;
 }
 
