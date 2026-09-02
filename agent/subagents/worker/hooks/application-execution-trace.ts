@@ -1,10 +1,6 @@
 import { defineHook, type HookContext } from "eve/hooks";
 import { updateApplicationExecutionForWorker } from "@/db/services/application-executions";
-import {
-  assertApplicationLeaseOwner,
-  attachApplicationLeaseWorker,
-} from "@/db/services/application-leases";
-import { executionId, safeErrorCode } from "@/lib/application-execution";
+import { safeErrorCode } from "@/lib/application-execution";
 
 type WorkerUpdate = Omit<
   Parameters<typeof updateApplicationExecutionForWorker>[0],
@@ -43,24 +39,10 @@ async function update(
 
 export default defineHook({
   events: {
-    async "session.started"(event, ctx) {
-      const parent = parentCoordinates(ctx);
-      if (parent) {
-        await assertApplicationLeaseOwner({
-          parentCallId: parent.parentCallId,
-          rootSessionId: parent.rootSessionId,
-          workerSessionId: ctx.session.id,
-        });
-        await attachApplicationLeaseWorker({
-          executionId: executionId(parent.rootSessionId, parent.parentCallId),
-          workerSessionId: ctx.session.id,
-        });
-      }
-      try {
-        await update(event, ctx, { stage: "worker", status: "waiting" });
-      } catch (error) {
-        logTraceFailure("session.started", error);
-      }
+    async "session.started"() {
+      throw new Error(
+        "The worker subagent is retired. Use start_application for job filling."
+      );
     },
     async "turn.started"(event, ctx) {
       try {

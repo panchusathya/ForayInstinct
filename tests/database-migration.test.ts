@@ -23,6 +23,8 @@ describe("database migrations", () => {
     );
     await applyMigration(database, "0021_application_leases.sql");
     await applyMigration(database, "0021_application_leases.sql");
+    await applyMigration(database, "0022_application_runner.sql");
+    await applyMigration(database, "0022_application_runner.sql");
 
     await database.exec(`
       INSERT INTO workspaces VALUES ('workspace-1', '2026-01-01');
@@ -53,6 +55,12 @@ describe("database migrations", () => {
     );
     expect(leaseIndexes.rows.map((row) => row.indexname)).toContain(
       "application_leases_held_workspace_apply_url_idx"
+    );
+    const runnerIndexes = await database.query<{ indexname: string }>(
+      "SELECT indexname FROM pg_indexes WHERE tablename = 'application_executions'"
+    );
+    expect(runnerIndexes.rows.map((row) => row.indexname)).toContain(
+      "application_executions_workflow_run_idx"
     );
   }, 15_000);
 

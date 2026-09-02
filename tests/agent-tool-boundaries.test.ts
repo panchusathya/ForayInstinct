@@ -64,13 +64,16 @@ describe("root and worker capability boundaries", () => {
       "agent.ts",
       "ask_question.ts",
       "browser_run_checkpoints.ts",
+      "cancel_application.ts",
       "candidate_documents.ts",
       "candidate_profile.ts",
+      "continue_application.ts",
       "goforay-applications.ts",
       "google_workspace_read.ts",
       "google_workspace_write.ts",
       "request_vault_setup.ts",
       "self_identification.ts",
+      "start_application.ts",
       "wait_for_email_otp.ts",
       "web_search.ts",
     ]);
@@ -182,9 +185,7 @@ describe("root and worker capability boundaries", () => {
       "utf8"
     );
 
-    expect(rootInstructions).toContain(
-      "Do not pass `outputSchema` on `worker` calls"
-    );
+    expect(rootInstructions).toContain("Never spawn the `worker` subagent");
     expect(rootInstructions).toContain("do not retry the same handoff");
     expect(rootInstructions).toContain("list_browser_run_checkpoints");
     expect(rootInstructions).toContain("submission_observed");
@@ -194,8 +195,13 @@ describe("root and worker capability boundaries", () => {
     expect(rootInstructions).toContain("already_in_progress");
     expect(rootInstructions).toContain("in progress, not empty");
     expect(rootInstructions).toContain("with that posting's `apply_url`");
+    expect(rootInstructions).toContain("start_application");
+    expect(rootInstructions).toContain("continue_application");
     expect(rootInstructions).not.toContain(
       "Every initial or resumed `worker` call must set `outputSchema`"
+    );
+    expect(rootInstructions).not.toContain(
+      "Do not pass `outputSchema` on `worker` calls"
     );
     expect(rootInstructions).not.toContain('"additionalProperties": false');
     expect(workerConfig).toContain("outputSchema: taskCompletionSchema");
@@ -210,7 +216,7 @@ describe("root and worker capability boundaries", () => {
     );
   });
 
-  it("holds one worker per posting and never redispatches on AGENT_BUSY", () => {
+  it("holds one application run per posting and never redispatches a held URL", () => {
     const rootInstructions = readFileSync("agent/instructions.md", "utf8");
     const workerInstructions = readFileSync(
       `${workerRoot}/instructions.md`,
@@ -221,12 +227,11 @@ describe("root and worker capability boundaries", () => {
       "utf8"
     );
 
-    expect(rootInstructions).toContain("AGENT_BUSY");
-    expect(rootInstructions).toContain("is busy with task");
+    expect(rootInstructions).toContain("start_application");
     expect(rootInstructions).toContain("Never start a new worker");
     expect(rootInstructions).toContain("`Needs existing worker:`");
     expect(rootInstructions).toContain(
-      "one posting URL has at most one worker in flight"
+      "one posting URL has at most one application run in flight"
     );
     expect(workerInstructions).toContain("`Needs existing worker:`");
     expect(browserSkill).toContain("`Needs existing worker:`");

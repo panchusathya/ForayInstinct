@@ -101,10 +101,10 @@ describe("web search routing", () => {
     );
   });
 
-  it("treats any chosen apply URL as a worker assignment", () => {
+  it("treats any chosen apply URL as a start_application call", () => {
     const instructions = readFileSync("agent/instructions.md", "utf8");
 
-    expect(instructions).toContain("send the `worker` straight at that URL");
+    expect(instructions).toContain("call `start_application` with that URL");
     expect(instructions).toMatch(/no\s+GoForay application task/);
     expect(instructions).toContain(
       "Never tell the candidate you cannot click through"

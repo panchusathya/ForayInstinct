@@ -16,12 +16,15 @@ const browserSkill = readFileSync(
 );
 
 describe("application fill handoff", () => {
-  it("sends the worker at the apply URL without a JuiceBox task wrapper", () => {
+  it("starts the Playwright runner at the apply URL without a JuiceBox task wrapper", () => {
     expect(rootInstructions).toContain(
+      "call `start_application` with that URL"
+    );
+    expect(rootInstructions).not.toContain(
       "send the `worker` straight at that URL"
     );
     expect(rootInstructions).toMatch(/no\s+GoForay application task/);
-    expect(rootInstructions).toContain("stage_default_goforay_resume");
+    expect(rootInstructions).toContain("Never spawn the `worker` subagent");
     expect(rootInstructions).not.toContain("start_goforay_application");
     expect(rootInstructions).not.toContain("report_goforay_application_result");
     expect(rootInstructions).not.toContain("package_pending");

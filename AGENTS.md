@@ -57,9 +57,9 @@ Run the validation the task requests. When it does not establish the behavior yo
 ## Repository contract
 
 - The repository root owns the single Next.js application, Eve agent, and shared UI contract.
-- The workspace manager lives on `/` and the agent chat on `/chat`; browser execution belongs only to the declared worker's flat tool surface under `agent/subagents/worker/tools`.
-- Keep each worker browser tool's schema and implementation together. Reach the browser only through the shared provider in `lib/browser` (selected by `BROWSER_PROVIDER`: the Kernel SDK behind `lib/kernel.ts`, or the Brightdata browser gateway under `services/browser-gateway`), and keep only cross-tool ownership guards under `agent/subagents/worker/lib`; do not add a provider extension or root browser connection.
-- Validate runtime environment variables through `lib/env.ts`. The worker browser tools require `KERNEL_API_KEY` when `BROWSER_PROVIDER=kernel`, or `BROWSER_GATEWAY_URL` + `BROWSER_GATEWAY_SECRET` when `BROWSER_PROVIDER=gateway`.
+- The workspace manager lives on `/` and the agent chat on `/chat`; browser execution belongs to `lib/application-runner` via `lib/browser`, not a live Eve `worker` fill loop. Coordinator tools are `start_application`, `continue_application`, and `cancel_application`.
+- Reach the browser only through the shared provider in `lib/browser` (selected by `BROWSER_PROVIDER`: the Kernel SDK behind `lib/kernel.ts`, or the Brightdata browser gateway under `services/browser-gateway`). Keep leftover worker-tree helpers only until the runner covers the happy path, approval, and OTP resume; do not add a provider extension or root browser connection.
+- Validate runtime environment variables through `lib/env.ts`. Application filling requires `KERNEL_API_KEY` when `BROWSER_PROVIDER=kernel`, or `BROWSER_GATEWAY_URL` + `BROWSER_GATEWAY_SECRET` when `BROWSER_PROVIDER=gateway`.
 - Run `pnpm check` and `pnpm build` before handing off changes.
 
 ## Design system

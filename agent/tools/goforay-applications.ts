@@ -17,13 +17,14 @@ const roleSearchInputSchema = z.object({
 });
 
 /**
- * Coordinator tools for roles. Applying is a worker assignment against the
- * card's URL, not a JuiceBox application-task wrapper.
+ * Coordinator tools for roles. Applying is `start_application` against the
+ * card's URL, not a JuiceBox application-task wrapper and not the worker
+ * subagent.
  *
  * Typical call order after "find me jobs":
  * 1. `find_goforay_roles` → curated JuiceBox roles or public Exa discovery
  * 2. Candidate picks a role (`apply 2` or a pasted URL)
- * 3. `worker` against that apply URL with the default resume
+ * 3. `start_application` against that apply URL
  * 4. `find_next_goforay_roles` in the same turn
  *
  * Both tools exclude roles the workspace has already been shown, and both drop

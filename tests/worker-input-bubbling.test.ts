@@ -18,7 +18,9 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain(
       "Ask the user directly in ordinary assistant text"
     );
-    expect(instructions).toContain("continue that worker with its `agentId`");
+    expect(instructions).toContain(
+      "call `continue_application` with that `apply_url` and their answers"
+    );
     expect(instructions).toContain("returns a `Needs user input:` blocker");
     expect(browserSkill).toContain("native `final_output` with `failure`");
     expect(browserSkill).toContain("End the turn immediately");
@@ -41,17 +43,17 @@ describe("worker input bubbling", () => {
     expect(instructions).toContain("never put an identifier");
     expect(instructions).toContain("raw HTTPS setup URL on its own line");
     expect(instructions).toContain(
-      "structured `Needs submission approval:`, `Needs user input:`, `Needs vault setup:`, or `Needs email OTP:` failure"
+      "`Needs submission approval:`, `Needs user input:`, `Needs vault setup:`, or `Needs email OTP:` failure"
     );
     // A dead posting had no category of its own, so a failed apply against a
     // taken-down role was reported to the candidate as an OTP problem.
     expect(workerInstructions).toContain("Needs posting unavailable:");
     expect(browserSkill).toContain("Needs posting unavailable:");
     expect(instructions).toContain(
-      "When a worker returns a `Needs posting unavailable:` blocker"
+      "When the runner returns a `Needs posting unavailable:` blocker"
     );
     expect(instructions).toContain(
-      "Report only the blocker the worker actually reported"
+      "Report only the blocker the runner actually reported"
     );
     expect(workerInstructions).toContain("Needs vault setup:");
     expect(workerInstructions).toContain(

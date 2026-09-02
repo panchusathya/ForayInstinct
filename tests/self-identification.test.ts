@@ -123,7 +123,7 @@ describe("voluntary self-identification", () => {
     expect(instructions).toContain("required with no decline option");
     expect(instructions).toContain("`self_identification` `save`");
     expect(instructions).toContain(
-      "resume that worker with its `agentId` to finish the"
+      "call `continue_application` with their answer to finish the"
     );
     expect(instructions).toContain("Never turn that question into a takeover");
     // The disability form's signature block needs a name and a date the

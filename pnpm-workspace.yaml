@@ -19,6 +19,7 @@ minimumReleaseAgeExclude:
   - picomatch
   - systeminformation
 allowBuilds:
+  "@swc/core": false
   cbor-extract: false
   esbuild: true
   sharp: true

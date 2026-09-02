@@ -155,6 +155,13 @@
       "when": 1788476400000,
       "tag": "0021_application_leases",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1788476500000,
+      "tag": "0022_application_runner",
+      "breakpoints": true
     }
   ]
 }
