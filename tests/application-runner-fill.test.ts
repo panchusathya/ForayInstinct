@@ -65,7 +65,10 @@ vi.mock("@/db/services/application-executions", () => ({
   updateApplicationRun: mocks.updateApplicationRun,
 }));
 
-import { fillVisibleForm } from "@/lib/application-runner/fill";
+import {
+  fillVisibleForm,
+  submitApplication,
+} from "@/lib/application-runner/fill";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -91,7 +94,10 @@ beforeEach(() => {
     if (request.code.includes("loginWall")) {
       return { success: true, result: { loginWall: false } };
     }
-    if (request.code.includes("input, textarea, select")) {
+    if (request.code.includes("const empty = await")) {
+      return { result: { empty: [] }, success: true };
+    }
+    if (request.code.includes("const fields = await")) {
       return {
         result: {
           fields: [
@@ -116,7 +122,7 @@ beforeEach(() => {
         success: true,
       };
     }
-    return { result: { filled: ["#email"] }, success: true };
+    return { result: { filled: ["#email"], skipped: [] }, success: true };
   });
   mocks.generateText.mockResolvedValue({
     text: JSON.stringify({
@@ -173,5 +179,106 @@ describe("application runner fill", () => {
       })
     );
     expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+});
+
+describe("incomplete forms never reach approval", () => {
+  const run = () =>
+    fillVisibleForm({
+      applyUrl: "https://jobs.example/role/1",
+      browserSessionId: "browser-1",
+      company: "Example",
+      executionId: "exec-1",
+      role: "Analyst",
+      rootSessionId: "root-1",
+      scope: { userId: "alice", workspaceId: "workspace:alice" },
+    });
+
+  it("pauses naming a required question the page still shows blank", async () => {
+    // The Hightouch failure: a control the mapper never saw stayed empty, and
+    // the run offered the form for approval anyway.
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { result: { loginWall: false }, success: true };
+      }
+      if (request.code.includes("const empty = await")) {
+        return {
+          result: {
+            empty: [
+              {
+                label: "Are you authorized to work for any employer in the US?",
+                selector: "#work-auth",
+              },
+            ],
+          },
+          success: true,
+        };
+      }
+      if (request.code.includes("const fields = await")) {
+        return { result: { fields: [] }, success: true };
+      }
+      return { result: { filled: [], skipped: [] }, success: true };
+    });
+
+    const result = await run();
+
+    expect(result).toMatchObject({ pause: "user_input" });
+    expect("message" in result ? result.message : "").toContain(
+      "authorized to work"
+    );
+  });
+
+  it("keeps going when the page reports nothing blank", async () => {
+    await expect(run()).resolves.toEqual({ continue: true });
+  });
+});
+
+describe("submitApplication", () => {
+  const submit = () =>
+    submitApplication({
+      applyUrl: "https://jobs.example/role/1",
+      browserSessionId: "browser-1",
+      company: "Example",
+      executionId: "exec-1",
+      role: "Analyst",
+      rootSessionId: "root-1",
+      scope: { userId: "alice", workspaceId: "workspace:alice" },
+    });
+
+  it("does not report a submission the posting never confirmed", async () => {
+    mocks.executePlaywright.mockResolvedValue({
+      result: {
+        clicked: true,
+        errors: ["This field is required."],
+        navigated: false,
+      },
+      success: true,
+    });
+    mocks.inspect.mockResolvedValue({ submitted: false });
+
+    const result = await submit();
+
+    expect(result).not.toHaveProperty("done");
+    expect(result).toMatchObject({ pause: "user_input" });
+    expect("message" in result ? result.message : "").toContain(
+      "This field is required."
+    );
+    // The run stays open for the candidate rather than being closed as sent.
+    expect(mocks.updateApplicationRun).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "waiting" })
+    );
+  });
+
+  it("reports done once the posting confirms it", async () => {
+    mocks.executePlaywright.mockResolvedValue({
+      result: { clicked: true, errors: [], navigated: true },
+      success: true,
+    });
+    mocks.inspect.mockResolvedValue({ submitted: true });
+
+    await expect(submit()).resolves.toMatchObject({ done: true });
+    expect(mocks.updateApplicationRun).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed" })
+    );
   });
 });

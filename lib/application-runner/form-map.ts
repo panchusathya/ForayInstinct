@@ -6,6 +6,8 @@ import type {
 export interface VisibleFormField {
   label: string;
   name: string;
+  /** Choices for a select, radio group, or combobox; empty for free text. */
+  options?: string[];
   required: boolean;
   selector: string;
   tag: string;
@@ -48,8 +50,12 @@ export function mapProfileToFormFields(input: {
       continue;
     }
     const value = valueForField(field, input.profile, input.identity);
-    if (value !== undefined && value !== "") {
-      fills.push({ selector: field.selector, value });
+    const resolved =
+      value === undefined || value === ""
+        ? undefined
+        : resolveAgainstOptions(field, value);
+    if (resolved !== undefined) {
+      fills.push({ selector: field.selector, value: resolved });
     } else if (field.required) {
       unmapped.push(field);
     }
@@ -109,6 +115,52 @@ function valueForField(
     return String(profile.salaryMin);
   }
   if (/headline|title/u.test(key) && profile.headline) return profile.headline;
+  return undefined;
+}
+
+/**
+ * Bends a profile answer onto the choices a control actually offers.
+ *
+ * The profile speaks in its own vocabulary ("Authorized to work, no
+ * sponsorship needed") while an ATS usually asks the same thing as Yes/No.
+ * Without this the value matches no option, the control stays empty, and the
+ * question that blocks the submission looks answered. Returning undefined
+ * sends the field to the unmapped list, where a required one becomes a pause
+ * instead of a silent gap.
+ */
+function resolveAgainstOptions(field: VisibleFormField, value: string) {
+  const options = field.options ?? [];
+  if (options.length === 0) return value;
+  const wanted = value.trim().toLowerCase();
+  const exact = options.find(
+    (option) => option.trim().toLowerCase() === wanted
+  );
+  if (exact) return exact;
+  const partial = options.find((option) => {
+    const text = option.trim().toLowerCase();
+    return text.startsWith(wanted) || wanted.startsWith(text);
+  });
+  if (partial) return partial;
+  const affirmative = affirmativeAnswer(value);
+  if (affirmative === undefined) return undefined;
+  return options.find((option) =>
+    affirmative
+      ? /^\s*(yes|y|true)\b/iu.test(option)
+      : /^\s*(no|n|false)\b/iu.test(option)
+  );
+}
+
+/** Whether a profile answer reads as yes, for a control that only offers both. */
+function affirmativeAnswer(value: string) {
+  const text = value.trim().toLowerCase();
+  if (/^(yes|true)$/u.test(text)) return true;
+  if (/^(no|false)$/u.test(text)) return false;
+  if (/require[sd]?\s+sponsorship/u.test(text)) return false;
+  if (
+    /citizen|permanent resident|authorized to work|no sponsorship/u.test(text)
+  ) {
+    return true;
+  }
   return undefined;
 }
 

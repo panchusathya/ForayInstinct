@@ -11,11 +11,13 @@ import { browserProvider } from "@/lib/browser";
 import { suggestUnmappedFills } from "@/lib/application-runner/ambiguous";
 import {
   mapProfileToFormFields,
+  type MappedFill,
   type VisibleFormField,
 } from "@/lib/application-runner/form-map";
 import {
   applyFillsCode,
   clickSubmitCode,
+  collectEmptyRequiredFieldsCode,
   collectVisibleFieldsCode,
   detectLoginWallCode,
   setFileInputCode,
@@ -36,11 +38,36 @@ export type FillStepResult =
 const visibleFieldSchema = z.object({
   label: z.string(),
   name: z.string(),
+  options: z.array(z.string()).optional(),
   required: z.boolean(),
   selector: z.string(),
   tag: z.string(),
   type: z.string(),
 });
+
+const emptyRequiredSchema = z.object({
+  empty: z.array(z.object({ label: z.string(), selector: z.string() })),
+});
+
+/**
+ * Applies fills and returns the selectors the page refused.
+ *
+ * The script's report used to be discarded, which is how a form could be
+ * offered for approval with a required question still blank: nothing ever
+ * compared what was asked for against what took.
+ */
+async function applyFills(sessionId: string, fills: MappedFill[]) {
+  if (fills.length === 0) return [];
+  const applied = await parseResult(
+    sessionId,
+    applyFillsCode(fills),
+    z.object({
+      filled: z.array(z.string()),
+      skipped: z.array(z.object({ reason: z.string(), selector: z.string() })),
+    })
+  );
+  return applied?.skipped ?? [];
+}
 
 export async function fillVisibleForm(
   input: ApplicationRunInput & { browserSessionId: string; answers?: string }
@@ -106,13 +133,10 @@ export async function fillVisibleForm(
     profile,
     resumePath: resume?.path,
   });
-  if (mapped.fills.length > 0) {
-    await browserProvider.executePlaywright(input.browserSessionId, {
-      code: applyFillsCode(
-        mapped.fills.filter((fill) => !fill.value.startsWith("/tmp/"))
-      ),
-    });
-  }
+  await applyFills(
+    input.browserSessionId,
+    mapped.fills.filter((fill) => !fill.value.startsWith("/tmp/"))
+  );
   for (const fill of mapped.fills.filter((row) =>
     row.value.startsWith("/tmp/")
   )) {
@@ -134,9 +158,7 @@ export async function fillVisibleForm(
         .join(" "),
     });
     if (helper.fills.length > 0) {
-      await browserProvider.executePlaywright(input.browserSessionId, {
-        code: applyFillsCode(helper.fills),
-      });
+      await applyFills(input.browserSessionId, helper.fills);
     }
     if (helper.blocker) {
       return {
@@ -148,6 +170,36 @@ export async function fillVisibleForm(
         pause: "user_input",
       };
     }
+  }
+  // Ask the page itself what is still blank. A control the mapper never saw,
+  // or a value it would not accept, is invisible upstream — this is the only
+  // check that stands between an incomplete form and an approval prompt.
+  const remaining = await parseResult(
+    input.browserSessionId,
+    collectEmptyRequiredFieldsCode,
+    emptyRequiredSchema
+  );
+  const stillEmpty = remaining?.empty ?? [];
+  if (stillEmpty.length > 0) {
+    const asked = stillEmpty
+      .map((field) => field.label.replace(/\s+/gu, " ").trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    await updateApplicationRun({
+      executionId: input.executionId,
+      pauseReason: "user_input",
+      status: "waiting",
+    });
+    return {
+      applyUrl: input.applyUrl,
+      message: applicationPauseMessage(
+        "user_input",
+        asked.length > 0
+          ? `these required questions are still blank: ${asked.join("; ")}.`
+          : `${String(stillEmpty.length)} required questions are still blank.`
+      ),
+      pause: "user_input",
+    };
   }
   await recordBrowserRunCheckpoint(input.scope, input.browserSessionId, {
     action: "fill",
@@ -181,33 +233,69 @@ export async function captureApproval(
   };
 }
 
+/**
+ * Clicks submit and only calls it done when the page agrees.
+ *
+ * An ATS refuses an incomplete form in place: the click lands, the URL never
+ * changes, and nothing was sent. Marking that run completed told the candidate
+ * their application was in when it was not, so an unconfirmed click now stays a
+ * pause and carries the page's own complaint back.
+ */
 export async function submitApplication(
   input: ApplicationRunInput & { browserSessionId: string }
 ): Promise<FillStepResult> {
-  await browserProvider.executePlaywright(input.browserSessionId, {
-    code: clickSubmitCode,
-  });
+  const click = await parseResult(
+    input.browserSessionId,
+    clickSubmitCode,
+    z.object({
+      clicked: z.boolean(),
+      errors: z.array(z.string()).default([]),
+      navigated: z.boolean().default(false),
+    })
+  );
   const probe = await inspectPostActionBrowserState(
     input.browserSessionId
   ).catch(() => undefined);
+  const submitted = probe?.submitted === true;
   await recordBrowserRunCheckpoint(input.scope, input.browserSessionId, {
     action: "submit",
     executionId: input.executionId,
     page: input.applyUrl,
     phase: "submit",
-    state: probe?.submitted ? "submission_observed" : "completed",
+    state: submitted ? "submission_observed" : "blocked",
   }).catch(() => undefined);
+  if (submitted) {
+    await updateApplicationRun({
+      executionId: input.executionId,
+      pauseReason: null,
+      status: "completed",
+    });
+    return {
+      applyUrl: input.applyUrl,
+      done: true,
+      message: `Submitted ${input.role} at ${input.applyUrl}.`,
+    };
+  }
   await updateApplicationRun({
     executionId: input.executionId,
-    pauseReason: null,
-    status: "completed",
+    pauseReason: "user_input",
+    status: "waiting",
   });
+  const complaint = (click?.errors ?? [])
+    .map((error) => error.replace(/\s+/gu, " ").trim())
+    .filter(Boolean)
+    .slice(0, 3);
   return {
     applyUrl: input.applyUrl,
-    done: true,
-    message: probe?.submitted
-      ? `Submitted ${input.role} at ${input.applyUrl}.`
-      : `Submit control clicked for ${input.role}.`,
+    message: applicationPauseMessage(
+      "user_input",
+      click?.clicked === false
+        ? `no submit control was found on ${input.applyUrl}.`
+        : complaint.length > 0
+          ? `the submission was refused: ${complaint.join("; ")}.`
+          : `the submit was clicked but ${input.applyUrl} never confirmed it. The application is not in.`
+    ),
+    pause: "user_input",
   };
 }
 

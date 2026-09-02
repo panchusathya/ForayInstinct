@@ -355,7 +355,15 @@ another fill: call `list_application_execution_traces` and
 `list_browser_run_checkpoints` with that posting's `apply_url` and read the
 trail before saying anything to the candidate. If a checkpoint state is
 `submission_observed`, report the application as submitted and never spawn a
-fresh worker for that posting on the strength of an empty result alone. If the
+fresh worker for that posting on the strength of an empty result alone.
+
+Never tell the candidate an application was submitted on any other evidence.
+Only `continue_application` returning `{ done: true }`, or a checkpoint state of
+`submission_observed`, means the posting confirmed it. A `pause` back from an
+approval — including one saying the submit was clicked but not confirmed — means
+it is **not** in: say exactly that, name what the posting is still asking for,
+and wait. A clicked button is not a submission, and claiming one that did not
+happen costs the candidate the role. If the
 latest state is `awaiting_approval`, the application is filled and waiting on
 the candidate's review, so ask them to confirm rather than reporting it
 submitted or restarting it. Otherwise tell the user the last verified state

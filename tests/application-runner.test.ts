@@ -5,7 +5,10 @@ import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import type { db } from "@/db";
 import * as schema from "../db/schema";
-import { emptyCandidateProfile } from "@/lib/candidate-profile";
+import {
+  type CandidateProfile,
+  emptyCandidateProfile,
+} from "@/lib/candidate-profile";
 import {
   mapProfileToFormFields,
   type VisibleFormField,
@@ -190,3 +193,72 @@ async function applyMigration(database: PGlite, name: string) {
     if (statement.trim()) await database.exec(statement);
   }
 }
+
+describe("option-based questions", () => {
+  const ask = (
+    label: string,
+    options: string[],
+    workAuthorization: CandidateProfile["workAuthorization"],
+    requiresSponsorshipNow: CandidateProfile["requiresSponsorshipNow"] = "no"
+  ) =>
+    mapProfileToFormFields({
+      fields: [
+        {
+          label,
+          name: "q",
+          options,
+          required: true,
+          selector: "#q",
+          tag: "select",
+          type: "select",
+        },
+      ],
+      identity: { email: "ada@example.com", name: "Ada", phone: "" },
+      profile: {
+        ...emptyCandidateProfile,
+        requiresSponsorshipNow,
+        workAuthorization,
+      },
+    });
+
+  it("answers a Yes/No work authorization question", () => {
+    // The profile says "Authorized to work, no sponsorship needed" while the
+    // posting only offers Yes/No, so the value used to match nothing and the
+    // required question silently stayed blank.
+    const mapped = ask(
+      "Are you authorized to work for any employer in the US?",
+      ["Yes", "No"],
+      "us_visa_no_sponsorship"
+    );
+    expect(mapped.fills).toEqual([{ selector: "#q", value: "Yes" }]);
+    expect(mapped.unmapped).toEqual([]);
+  });
+
+  it("answers No when the candidate needs sponsorship", () => {
+    const mapped = ask(
+      "Are you authorized to work for any employer in the US?",
+      ["Yes", "No"],
+      "requires_sponsorship"
+    );
+    expect(mapped.fills).toEqual([{ selector: "#q", value: "No" }]);
+  });
+
+  it("still matches an option stated in the profile's own words", () => {
+    const mapped = ask(
+      "Work authorization",
+      ["U.S. Citizen", "Permanent Resident", "Requires sponsorship"],
+      "us_citizen"
+    );
+    expect(mapped.fills).toEqual([{ selector: "#q", value: "U.S. Citizen" }]);
+  });
+
+  it("leaves a question it cannot answer for the candidate", () => {
+    const mapped = ask(
+      "Are you authorized to work for any employer in the US?",
+      ["Green card", "TN visa", "H-1B"],
+      "other"
+    );
+    expect(mapped.fills).toEqual([]);
+    expect(mapped.unmapped).toHaveLength(1);
+  });
+});
