@@ -1,6 +1,10 @@
 import { defineHook, type HookContext } from "eve/hooks";
 import { updateApplicationExecutionForWorker } from "@/db/services/application-executions";
-import { safeErrorCode } from "@/lib/application-execution";
+import {
+  assertApplicationLeaseOwner,
+  attachApplicationLeaseWorker,
+} from "@/db/services/application-leases";
+import { executionId, safeErrorCode } from "@/lib/application-execution";
 
 type WorkerUpdate = Omit<
   Parameters<typeof updateApplicationExecutionForWorker>[0],
@@ -12,6 +16,13 @@ function parentCoordinates(ctx: HookContext) {
   return parent
     ? { parentCallId: parent.callId, rootSessionId: parent.rootSessionId }
     : undefined;
+}
+
+function logTraceFailure(stage: string, error: unknown) {
+  console.error("[application-execution] worker trace failed", {
+    error: error instanceof Error ? error.message : "unknown",
+    stage,
+  });
 }
 
 async function update(
@@ -33,10 +44,22 @@ async function update(
 export default defineHook({
   events: {
     async "session.started"(event, ctx) {
+      const parent = parentCoordinates(ctx);
+      if (parent) {
+        await assertApplicationLeaseOwner({
+          parentCallId: parent.parentCallId,
+          rootSessionId: parent.rootSessionId,
+          workerSessionId: ctx.session.id,
+        });
+        await attachApplicationLeaseWorker({
+          executionId: executionId(parent.rootSessionId, parent.parentCallId),
+          workerSessionId: ctx.session.id,
+        });
+      }
       try {
         await update(event, ctx, { stage: "worker", status: "waiting" });
-      } catch {
-        /* traces never fail work */
+      } catch (error) {
+        logTraceFailure("session.started", error);
       }
     },
     async "turn.started"(event, ctx) {
@@ -47,8 +70,8 @@ export default defineHook({
           status: "running",
           turnId: event.data.turnId,
         });
-      } catch {
-        /* traces never fail work */
+      } catch (error) {
+        logTraceFailure("turn.started", error);
       }
     },
     async "actions.requested"(event, ctx) {
@@ -70,8 +93,8 @@ export default defineHook({
             }
           );
         }
-      } catch {
-        /* traces never fail work */
+      } catch (error) {
+        logTraceFailure("actions.requested", error);
       }
     },
     async "action.result"(event, ctx) {
@@ -84,29 +107,29 @@ export default defineHook({
           stage: "tool.result",
           status: "running",
         });
-      } catch {
-        /* traces never fail work */
+      } catch (error) {
+        logTraceFailure("action.result", error);
       }
     },
     async "input.requested"(event, ctx) {
       try {
         await update(event, ctx, { stage: "blocker", status: "waiting" });
-      } catch {
-        /* traces never fail work */
+      } catch (error) {
+        logTraceFailure("input.requested", error);
       }
     },
     async "result.completed"(event, ctx) {
       try {
         await update(event, ctx, { stage: "result", status: "completed" });
-      } catch {
-        /* traces never fail work */
+      } catch (error) {
+        logTraceFailure("result.completed", error);
       }
     },
     async "session.waiting"(event, ctx) {
       try {
         await update(event, ctx, { stage: "waiting", status: "waiting" });
-      } catch {
-        /* traces never fail work */
+      } catch (error) {
+        logTraceFailure("session.waiting", error);
       }
     },
     async "turn.cancelled"(event, ctx) {
@@ -116,8 +139,8 @@ export default defineHook({
           status: "failed",
           errorCode: "cancelled",
         });
-      } catch {
-        /* traces never fail work */
+      } catch (error) {
+        logTraceFailure("turn.cancelled", error);
       }
     },
     async "turn.failed"(event, ctx) {
@@ -127,8 +150,8 @@ export default defineHook({
           status: "failed",
           errorCode: safeErrorCode(event.data),
         });
-      } catch {
-        /* traces never fail work */
+      } catch (error) {
+        logTraceFailure("turn.failed", error);
       }
     },
   },

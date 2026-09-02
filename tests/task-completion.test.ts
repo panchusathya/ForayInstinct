@@ -66,11 +66,17 @@ describe("worker blockers", () => {
         "Needs existing worker: another worker (session w1) is already handling https://jobs.example/1."
       )
     ).toBe("existingWorker");
+    expect(
+      blockerKind("already_in_progress: another worker is already handling it.")
+    ).toBe("alreadyInProgress");
   });
 
   it("owns the exact prefix the guard puts on a duplicate-worker error", () => {
     expect(workerBlockerPrefix("existingWorker")).toBe(
       "Needs existing worker:"
+    );
+    expect(workerBlockerPrefix("alreadyInProgress")).toBe(
+      "already_in_progress:"
     );
     expect(blockerKind(`${workerBlockerPrefix("emailOtp")} sent.`)).toBe(
       "emailOtp"

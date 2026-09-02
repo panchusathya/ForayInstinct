@@ -3,7 +3,9 @@ import {
   APPLICATION_DISPATCH_GRACE_MS,
   APPLICATION_DUPLICATE_WORKER_WINDOW_MS,
   APPLICATION_WORKER_ACTIVE_MS,
+  applicationLeaseExpiresAt,
   executionId,
+  isApplicationLeaseExpired,
   isApplicationWorkerDeadlineReached,
   parseApplicationIdentity,
   safeApplyUrl,
@@ -49,6 +51,17 @@ describe("application execution tracing", () => {
       APPLICATION_WORKER_ACTIVE_MS
     );
     expect(APPLICATION_DISPATCH_GRACE_MS).toBe(60_000);
+  });
+
+  it("expires an application lease at the 20-minute wall from claim time", () => {
+    const claimedAt = new Date(0);
+    const expiresAt = applicationLeaseExpiresAt(claimedAt);
+    expect(
+      isApplicationLeaseExpired(expiresAt, APPLICATION_WORKER_ACTIVE_MS - 1)
+    ).toBe(false);
+    expect(
+      isApplicationLeaseExpired(expiresAt, APPLICATION_WORKER_ACTIVE_MS)
+    ).toBe(true);
   });
 
   it("guards browser work at the active-worker deadline", () => {

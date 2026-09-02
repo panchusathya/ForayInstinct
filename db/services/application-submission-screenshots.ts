@@ -96,7 +96,10 @@ export async function claimPendingApplicationSubmissionScreenshots(
           isNull(applicationSubmissionScreenshots.deliveredAt)
         )
       )
-      .orderBy(desc(applicationSubmissionScreenshots.createdAt))
+      .orderBy(
+        desc(applicationSubmissionScreenshots.createdAt),
+        desc(applicationSubmissionScreenshots.id)
+      )
       .limit(1);
     if (!newest) return [];
 
@@ -118,7 +121,10 @@ export async function claimPendingApplicationSubmissionScreenshots(
           isNull(applicationSubmissionScreenshots.deliveredAt)
         )
       )
-      .orderBy(asc(applicationSubmissionScreenshots.createdAt))
+      .orderBy(
+        asc(applicationSubmissionScreenshots.createdAt),
+        asc(applicationSubmissionScreenshots.id)
+      )
       .limit(limit);
     if (rows.length === 0) return [];
 

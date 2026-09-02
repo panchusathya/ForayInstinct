@@ -28,6 +28,7 @@
     "drizzle-orm": "^0.45.2",
     "eve": "^0.46.1",
     "fast-png": "^8.0.0",
+    "jpeg-js": "^0.4.4",
     "lucide-react": "1.34.0",
     "motion": "13.1.1",
     "nanoid": "6.0.1",
@@ -101,8 +102,7 @@
     "types:check:app": "tsc --noEmit -p tsconfig.json",
     "build:eve": "eve build",
     "dev:eve": "eve dev",
-    "start:eve": "eve start",
-    "linq:reactions": "node --experimental-strip-types scripts/linq-reaction-subscription.ts"
+    "start:eve": "eve start"
   },
   "version": "0.0.0",
   "type": "module"

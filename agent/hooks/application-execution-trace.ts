@@ -4,7 +4,14 @@ import {
   attachApplicationWorker,
   createApplicationExecution,
 } from "@/db/services/application-executions";
-import { parseApplicationIdentity } from "@/lib/application-execution";
+import {
+  attachApplicationLeaseWorker,
+  claimApplicationLease,
+} from "@/db/services/application-leases";
+import {
+  executionId,
+  parseApplicationIdentity,
+} from "@/lib/application-execution";
 import { scopeFromPrincipal } from "@/lib/access-scope";
 
 export default defineHook({
@@ -20,13 +27,33 @@ export default defineHook({
             typeof action.input.message === "string"
               ? action.input.message
               : "";
+          const identity = parseApplicationIdentity(message);
+          const scope = scopeFromPrincipal(caller);
           await createApplicationExecution({
             callId: action.callId,
-            identity: parseApplicationIdentity(message),
+            identity,
             model: browserGatewayModel,
             rootSessionId: ctx.session.id,
-            scope: scopeFromPrincipal(caller),
+            scope,
           });
+          const agentId =
+            typeof action.input.agentId === "string"
+              ? action.input.agentId.trim()
+              : "";
+          if (agentId !== "") continue;
+          const claim = await claimApplicationLease({
+            applyUrl: identity.applyUrl,
+            executionId: executionId(ctx.session.id, action.callId),
+            rootSessionId: ctx.session.id,
+            scope,
+          });
+          if (claim.status === "already_in_progress") {
+            console.info("[application-execution] duplicate dispatch blocked", {
+              apply_url: claim.applyUrl,
+              existing_execution_id: claim.existingExecutionId,
+              parent_call_id: action.callId,
+            });
+          }
         }
       } catch (error) {
         console.error("[application-execution] dispatch trace failed", {
@@ -40,6 +67,10 @@ export default defineHook({
         await attachApplicationWorker({
           callId: event.data.callId,
           rootSessionId: ctx.session.id,
+          workerSessionId: event.data.childSessionId,
+        });
+        await attachApplicationLeaseWorker({
+          executionId: executionId(ctx.session.id, event.data.callId),
           workerSessionId: event.data.childSessionId,
         });
       } catch (error) {

@@ -8,20 +8,17 @@ import {
   inArray,
   isNotNull,
   isNull,
-  lte,
   ne,
   or,
 } from "drizzle-orm";
 import { applicationExecutionEvents, applicationExecutions, db } from "@/db";
 import type { AccessScope } from "@/lib/access-scope";
+import { releaseApplicationLease } from "@/db/services/application-leases";
 import {
   APPLICATION_DISPATCH_GRACE_MS,
   APPLICATION_DUPLICATE_WORKER_WINDOW_MS,
-  APPLICATION_WORKER_ACTIVE_MS,
-  APPLICATION_WATCHDOG_LEAD_MS,
   applicationExecutionLog,
   executionId,
-  isApplicationWorkerDeadlineReached,
   type ApplicationIdentity,
 } from "@/lib/application-execution";
 import { workerBlockerPrefix } from "@/lib/task-completion";
@@ -169,6 +166,12 @@ export async function updateApplicationExecutionForWorker(input: {
       role: applicationExecutions.role,
     });
   if (!result[0]) return;
+  if (status === "completed" || status === "failed" || status === "timed_out") {
+    await releaseApplicationLease({
+      executionId: id,
+      workerSessionId: input.workerSessionId,
+    });
+  }
   await recordApplicationExecutionEvent({
     errorCode: input.errorCode,
     eventId: input.eventId,
@@ -238,32 +241,6 @@ export async function attachBrowserToApplicationExecution(
     status: "running",
     worker_session_id: workerSessionId,
   });
-}
-
-export async function assertApplicationWorkerWithinBudget(
-  rootSessionId: string,
-  parentCallId: string
-) {
-  const id = executionId(rootSessionId, parentCallId);
-  const [execution] = await db
-    .select({
-      activeStartedAt: applicationExecutions.activeStartedAt,
-      status: applicationExecutions.status,
-    })
-    .from(applicationExecutions)
-    .where(eq(applicationExecutions.id, id))
-    .limit(1);
-  if (!execution) return;
-  if (execution.status === "timed_out") {
-    throw new Error("Application worker exceeded the 20-minute safety limit.");
-  }
-  if (
-    execution.status === "running" &&
-    execution.activeStartedAt &&
-    isApplicationWorkerDeadlineReached(execution.activeStartedAt)
-  ) {
-    throw new Error("Application worker exceeded the 20-minute safety limit.");
-  }
 }
 
 /**
@@ -405,14 +382,31 @@ export async function countRecentApplicationExecutionEvents(input: {
 
 export async function listApplicationExecutionTraces(
   scope: AccessScope,
-  limit = 50
+  query: {
+    applyUrl?: string;
+    executionId?: string;
+    limit?: number;
+  } = {}
 ) {
+  const applyUrl = query.applyUrl?.trim() ?? "";
+  const executionIdValue = query.executionId?.trim() ?? "";
+  if (applyUrl === "" && executionIdValue === "") return [];
+  const identity =
+    applyUrl !== "" && executionIdValue !== ""
+      ? or(
+          eq(applicationExecutions.applyUrl, applyUrl),
+          eq(applicationExecutions.id, executionIdValue)
+        )
+      : applyUrl !== ""
+        ? eq(applicationExecutions.applyUrl, applyUrl)
+        : eq(applicationExecutions.id, executionIdValue);
   return db
     .select({
       activeStartedAt: applicationExecutions.activeStartedAt,
       applyUrl: applicationExecutions.applyUrl,
       browserSessionId: applicationExecutions.browserSessionId,
       company: applicationExecutions.company,
+      id: applicationExecutions.id,
       model: applicationExecutions.model,
       role: applicationExecutions.role,
       rootSessionId: applicationExecutions.rootSessionId,
@@ -421,9 +415,11 @@ export async function listApplicationExecutionTraces(
       workerSessionId: applicationExecutions.workerSessionId,
     })
     .from(applicationExecutions)
-    .where(eq(applicationExecutions.workspaceId, scope.workspaceId))
+    .where(
+      and(eq(applicationExecutions.workspaceId, scope.workspaceId), identity)
+    )
     .orderBy(desc(applicationExecutions.updatedAt))
-    .limit(limit);
+    .limit(query.limit ?? 50);
 }
 
 export async function findRestartableApplicationExecutions(
@@ -453,77 +449,6 @@ export async function findRestartableApplicationExecutions(
     )
     .orderBy(desc(applicationExecutions.updatedAt))
     .limit(3);
-}
-
-export async function claimOverdueApplicationExecutions(now = new Date()) {
-  const deadline = new Date(
-    now.getTime() -
-      (APPLICATION_WORKER_ACTIVE_MS - APPLICATION_WATCHDOG_LEAD_MS)
-  ).toISOString();
-  const rows = await db
-    .select({
-      activeStartedAt: applicationExecutions.activeStartedAt,
-      applyUrl: applicationExecutions.applyUrl,
-      company: applicationExecutions.company,
-      executionId: applicationExecutions.id,
-      model: applicationExecutions.model,
-      parentCallId: applicationExecutions.parentCallId,
-      role: applicationExecutions.role,
-      rootSessionId: applicationExecutions.rootSessionId,
-      workerSessionId: applicationExecutions.workerSessionId,
-    })
-    .from(applicationExecutions)
-    .where(
-      and(
-        inArray(applicationExecutions.status, ["queued", "running"]),
-        isNotNull(applicationExecutions.workerSessionId),
-        lte(applicationExecutions.activeStartedAt, deadline)
-      )
-    );
-  const claimed: typeof rows = [];
-  for (const row of rows) {
-    const updated = await db
-      .update(applicationExecutions)
-      .set({
-        status: "timed_out",
-        updatedAt: new Date().toISOString(),
-        finishedAt: new Date().toISOString(),
-      })
-      .where(
-        and(
-          eq(applicationExecutions.id, row.executionId),
-          inArray(applicationExecutions.status, ["queued", "running"])
-        )
-      )
-      .returning({ id: applicationExecutions.id });
-    if (updated.length) {
-      await recordApplicationExecutionEvent({
-        executionId: row.executionId,
-        eventId: `timeout:${row.executionId}`,
-        eventType: "worker.timed_out",
-        stage: "watchdog",
-        status: "timed_out",
-      });
-      applicationExecutionLog({
-        active_elapsed_ms: row.activeStartedAt
-          ? Math.max(0, now.getTime() - Date.parse(row.activeStartedAt))
-          : 0,
-        apply_url: row.applyUrl,
-        company: row.company,
-        event: "worker.timeout.claimed",
-        execution_id: row.executionId,
-        model: row.model,
-        parent_call_id: row.parentCallId,
-        reason: "active_time_limit",
-        role: row.role,
-        root_session_id: row.rootSessionId,
-        status: "timed_out",
-        worker_session_id: row.workerSessionId,
-      });
-      claimed.push(row);
-    }
-  }
-  return claimed;
 }
 
 async function recordApplicationExecutionEvent(input: {

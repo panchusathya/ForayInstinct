@@ -7,27 +7,28 @@ describe("computer_action model output", () => {
     const output = computerAction.toModelOutput?.({
       data: [{ type: "read_clipboard", text: "pasted-id" }],
       message: "Executed 2 computer actions.",
-      mimeType: "image/png",
+      mimeType: "image/jpeg",
       screenshotsBase64: ["aaaa"],
     });
 
     expect(JSON.stringify(output)).toContain("pasted-id");
-    expect(JSON.stringify(output)).toContain("image/png");
+    expect(JSON.stringify(output)).toContain("image/jpeg");
   });
 
-  it("emits one file part per screenshot in a batch", () => {
+  it("emits only the latest screenshot file part", () => {
     const output = computerAction.toModelOutput?.({
       message: "Executed 3 computer actions.",
-      mimeType: "image/png",
+      mimeType: "image/jpeg",
       screenshotsBase64: ["aaaa", "bbbb"],
     });
 
     const serialized = JSON.stringify(output);
-    expect(serialized).toContain("aaaa");
+    expect(serialized).not.toContain("aaaa");
     expect(serialized).toContain("bbbb");
+    expect(serialized).toContain("image/jpeg");
   });
 
-  it("caps a batch at twelve actions and two screenshots", () => {
+  it("caps a batch at twelve actions and one screenshot", () => {
     const schema = computerAction.inputSchema;
     if (!(schema instanceof z.ZodType))
       throw new Error("expected a zod schema");
@@ -37,13 +38,9 @@ describe("computer_action model output", () => {
     const sleep = { sleep: { duration_ms: 100 }, type: "sleep" };
 
     expect(
-      accepts([
-        ...Array.from({ length: 10 }, () => sleep),
-        screenshot,
-        screenshot,
-      ])
+      accepts([...Array.from({ length: 11 }, () => sleep), screenshot])
     ).toBe(true);
-    expect(accepts([screenshot, screenshot, screenshot])).toBe(false);
+    expect(accepts([screenshot, screenshot])).toBe(false);
     expect(accepts(Array.from({ length: 13 }, () => sleep))).toBe(false);
   });
 
@@ -53,6 +50,7 @@ describe("computer_action model output", () => {
       message: "Executed 1 computer action.",
     });
 
+    expect(JSON.stringify(output)).not.toContain("image/jpeg");
     expect(JSON.stringify(output)).not.toContain("image/png");
   });
 });

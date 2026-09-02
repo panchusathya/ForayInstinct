@@ -7,6 +7,7 @@ import {
   agentSessions,
   applicationExecutionEvents,
   applicationExecutions,
+  applicationLeases,
   applicationSubmissionScreenshots,
   browserRunCheckpoints,
   browserSessions,
@@ -45,6 +46,7 @@ describe("database schema", () => {
         browserSessions,
         browserRunCheckpoints,
         applicationExecutions,
+        applicationLeases,
         applicationExecutionEvents,
         applicationSubmissionScreenshots,
         chats,
@@ -66,6 +68,7 @@ describe("database schema", () => {
       "browser_sessions",
       "browser_run_checkpoints",
       "application_executions",
+      "application_leases",
       "application_execution_events",
       "application_submission_screenshots",
       "chats",
@@ -127,6 +130,7 @@ describe("database schema", () => {
       browserSessions,
       browserRunCheckpoints,
       applicationExecutions,
+      applicationLeases,
       applicationSubmissionScreenshots,
     ]) {
       const foreignKeys = getTableConfig(table).foreignKeys;

@@ -63,8 +63,15 @@ export function parseTaskCompletion(
  * worker had actually reported one before the coordinator acted on it. An
  * unavailable posting had no category at all, and a failed apply against a
  * taken-down role was narrated to a candidate as an email OTP problem.
+ *
+ * `already_in_progress` is the structured duplicate-dispatch status. The
+ * worker-facing error still starts with `Needs existing worker:` so existing
+ * instructions keep matching.
  */
+export const alreadyInProgressStatus = "already_in_progress";
+
 const workerBlockers = [
+  ["alreadyInProgress", "already_in_progress:"],
   ["emailOtp", "Needs email OTP:"],
   ["existingWorker", "Needs existing worker:"],
   ["postingUnavailable", "Needs posting unavailable:"],

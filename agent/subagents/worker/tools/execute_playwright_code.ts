@@ -31,11 +31,11 @@ const inputSchema = z.object({
 });
 
 const screenshotRecoveryInstruction =
-  "Recovery gate: call computer_action with a masked screenshot now. Identify the visible controls and use one different Playwright tactic; the failed code cannot be replayed.";
+  "Recovery gate: inspect the error and post-action state; call computer_action with a screenshot only if the live controls are still unclear. Use one different Playwright tactic; the failed code cannot be replayed.";
 
 export default defineTool({
   description:
-    'Execute Playwright/TypeScript automation code against an existing browser session with a 30-second ceiling after a masked computer_action screenshot has identified the live controls. Batch related operations, use "domcontentloaded" or a precise locator with waits of at most five seconds except for one managed CAPTCHA wait of at most 20 seconds, and never wait for "networkidle" or use fixed multi-second sleeps. On failure, obey next_action: screenshot once and change tactic; do not replay the same selector or pass a Buffer to setInputFiles. Use solve_captcha for a checkbox or lookalike hCaptcha, including image grids and response-field tokens. Return only the compact data you need (a short object of labels, values, URLs); a result over 4,000 characters is truncated. Does not create or delete browsers.',
+    'Execute Playwright/TypeScript automation code against an existing browser session with a 30-second ceiling after the live controls are identified (screenshot only when visual inspection is needed). Batch related operations, use "domcontentloaded" or a precise locator with waits of at most five seconds except for one managed CAPTCHA wait of at most 20 seconds, and never wait for "networkidle" or use fixed multi-second sleeps. On failure, obey next_action: inspect first, screenshot only if the controls are still unclear, and change tactic; do not replay the same selector or pass a Buffer to setInputFiles. Use solve_captcha for a checkbox or lookalike hCaptcha, including image grids and response-field tokens. Return only the compact data you need (a short object of labels, values, URLs); a result over 4,000 characters is truncated. Does not create or delete browsers.',
   inputSchema,
   async execute(input, context) {
     const scope = await requireWorkerScope(context);
@@ -153,8 +153,9 @@ export default defineTool({
 /**
  * Tool instructions alone cannot prevent a model from repeatedly submitting
  * the same missing selector. Checkpoints survive worker turns, so use them as
- * the recovery boundary: a failed execution must be followed by a screenshot,
- * and a screenshot never authorizes replaying that failed code.
+ * the recovery boundary: a failed execution must inspect state (screenshot
+ * only if the live controls are still unclear), and a screenshot never
+ * authorizes replaying that failed code.
  */
 async function requiredPlaywrightRecovery(
   scope: Awaited<ReturnType<typeof requireWorkerScope>>,

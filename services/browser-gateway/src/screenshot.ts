@@ -269,7 +269,11 @@ export async function captureScreenshots(
     request.mask_style_id,
     async () => {
       if (request.mode === "viewport") {
-        return [(await page.screenshot()).toString("base64")];
+        return [
+          (await page.screenshot({ quality: 45, type: "jpeg" })).toString(
+            "base64"
+          ),
+        ];
       }
       if (request.mode === "full_page") {
         const scrollHeight = await page

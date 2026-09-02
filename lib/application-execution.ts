@@ -58,7 +58,7 @@ export function safeApplyUrl(value: string) {
   }
 }
 
-export function safeLabel(value: string) {
+function safeLabel(value: string) {
   return value
     .replace(/[\r\n\t]+/gu, " ")
     .replace(/\s+/gu, " ")
@@ -93,6 +93,17 @@ export function isApplicationWorkerDeadlineReached(
   now = Date.now()
 ) {
   return Date.parse(startedAt) + APPLICATION_WORKER_ACTIVE_MS <= now;
+}
+
+export function applicationLeaseExpiresAt(
+  claimedAt = new Date(),
+  activeMs = APPLICATION_WORKER_ACTIVE_MS
+) {
+  return new Date(claimedAt.getTime() + activeMs).toISOString();
+}
+
+export function isApplicationLeaseExpired(expiresAt: string, now = Date.now()) {
+  return Date.parse(expiresAt) <= now;
 }
 
 function emptyIdentity(): ApplicationIdentity {

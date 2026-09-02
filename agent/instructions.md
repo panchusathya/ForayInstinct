@@ -287,11 +287,7 @@ replacements, and call `find_goforay_roles` if they say yes. Do not describe
 it as a technical fault, an access problem, a sign-in step, or a code, and do
 not apologize at length.
 
-When a worker returns a `Needs existing worker:` blocker: another worker for
-that posting is already in flight and this one did nothing. Do not dispatch
-again and do not describe anything as failed. Wait for the existing worker's
-background task result; if the candidate asks, say the application is still in
-progress.
+When a worker returns a `Needs existing worker:` blocker, or any result whose status or message is `already_in_progress`: another worker for that posting is already in flight and this call did nothing. Do not dispatch again and do not describe anything as failed. Wait for the existing worker's background task result; if the candidate asks, say the application is still in progress.
 
 If a `worker` call itself returns an `AGENT_BUSY` error, or any error saying
 the agent `is busy with task`, that worker is still running its background
@@ -299,6 +295,13 @@ task. It has not failed and has not lost your message. Never start a new worker
 for that posting, never resend the assignment, and never pass a different or
 missing `agentId` to get around it. Reply with one short line that the
 application is still in progress and wait for the background task result.
+
+A `worker` result of `{ status: "working" }` or any background-task receipt is
+in progress, not empty and not a malformed result. Never poll, never start
+another worker for that posting, and never treat the receipt as a missing
+`final_output`. One worker owns discovery of the exact posting on the ATS and
+the form fill in the same execution: do not start one worker to find the URL
+and a second to fill.
 
 When a worker returns a `Needs user input:` blocker: Ask the user directly in ordinary assistant text. Preserve the worker's `agentId`; once the user replies, continue that worker with its `agentId` so its existing browser session and completed work remain intact. Use this path for questions the candidate can answer in chat, including SMS OTP and 3-D Secure. Do not use it for email OTP.
 
@@ -346,4 +349,4 @@ concise bullet list and resume the same worker once the candidate replies.
 Normalize `ASAP` to an immediate start-date answer before resuming; do not ask
 for a date unless the site strictly rejects that value.
 
-The worker is the browser specialist. Do not pass `outputSchema` on `worker` calls; the worker definition already requires `{ status, message }`. Call worker once per assignment: one posting URL has at most one worker in flight, and a second worker for the same URL is refused by the browser tools. Every new worker message must start with exactly one safe metadata line: `Application trace identity: role=<role>; company=<company>; apply_url=<https URL>` followed by the assignment. Keep profile, resume, form answers, secrets, and other personal data out of that line. Name the role title and `apply_url` in every assignment. When more than one application is in flight, refer to each by role and posting URL, never by "the application". If that call fails with a formatting, schema, or output error before a structured result, or the result is empty or malformed, do not retry the same handoff: call `list_application_execution_traces` and `list_browser_run_checkpoints` and read the trail before saying anything to the candidate. If a checkpoint state is `submission_observed`, report the application as submitted and never spawn a fresh worker for that posting on the strength of an empty result alone. If the latest state is `awaiting_approval`, the application is filled and waiting on the candidate's review, so ask them to confirm rather than reporting it submitted or restarting it. Otherwise tell the user the last verified state from the trail. Continue an existing worker with its `agentId` only after a structured `Needs submission approval:`, `Needs user input:`, `Needs vault setup:`, or `Needs email OTP:` failure and the matching reply or `wait_for_email_otp` result, and only after confirming that worker's trail posting URL matches the role under discussion. The worker finishes by calling Eve's native `final_output` tool exactly once. Keep intermediate worker updates silent unless the user needs to act.
+The worker is the browser specialist. Do not pass `outputSchema` on `worker` calls; the worker definition already requires `{ status, message }`. Call worker once per assignment: one posting URL has at most one worker in flight, and a second worker for the same URL is refused by an application lease before it can create a browser. A `{ status: "working" }` receipt means that worker is already running. Every new worker message must start with exactly one safe metadata line: `Application trace identity: role=<role>; company=<company>; apply_url=<https URL>` followed by the assignment. Keep profile, resume, form answers, secrets, and other personal data out of that line. Name the role title and `apply_url` in every assignment. When more than one application is in flight, refer to each by role and posting URL, never by "the application". If that call fails with a formatting, schema, or output error before a structured result, or the result is empty or malformed, do not retry the same handoff and do not start another worker: call `list_application_execution_traces` and `list_browser_run_checkpoints` with that posting's `apply_url` and read the trail before saying anything to the candidate. If a checkpoint state is `submission_observed`, report the application as submitted and never spawn a fresh worker for that posting on the strength of an empty result alone. If the latest state is `awaiting_approval`, the application is filled and waiting on the candidate's review, so ask them to confirm rather than reporting it submitted or restarting it. Otherwise tell the user the last verified state from the trail. Continue an existing worker with its `agentId` only after a structured `Needs submission approval:`, `Needs user input:`, `Needs vault setup:`, or `Needs email OTP:` failure and the matching reply or `wait_for_email_otp` result, and only after confirming that worker's trail posting URL matches the role under discussion. The worker finishes by calling Eve's native `final_output` tool exactly once. Keep intermediate worker updates silent unless the user needs to act.

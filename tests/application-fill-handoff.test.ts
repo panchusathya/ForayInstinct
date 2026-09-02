@@ -45,13 +45,15 @@ describe("application fill handoff", () => {
     expect(workerInstructions).toContain("Never pass a Buffer");
     expect(workerInstructions).toContain("Obey a tool `next_action`");
     expect(browserSkill).toContain(
-      "take one masked `computer_action` screenshot next"
+      "take one masked `computer_action` screenshot only when visual inspection is required"
     );
     expect(browserSkill).toContain(
       "Do not assume Greenhouse, an embedded iframe, or `#resume`"
     );
     expect(browserSkill).toContain("never pass a Buffer");
-    expect(browserSkill).toContain("it is not the first perception step");
+    expect(browserSkill).toContain(
+      "inspect the returned URL and post-action browser state first"
+    );
     expect(browserSkill).not.toContain(
       "Prefer Playwright for navigation, inspection, extraction"
     );

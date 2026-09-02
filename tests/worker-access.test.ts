@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { accessScopeForUser, type AccessScope } from "@/lib/access-scope";
 
 const mocks = vi.hoisted(() => ({
-  assertApplicationWorkerWithinBudget: vi.fn<() => Promise<void>>(),
+  assertApplicationLeaseOwner: vi.fn<() => Promise<void>>(),
   assertNoConcurrentApplicationWorker: vi.fn<() => Promise<void>>(),
-  claimSession: vi.fn(),
-  ensureScope: vi.fn(),
+  claimSession:
+    vi.fn<(_scope: AccessScope, _sessionId: string) => Promise<void>>(),
+  ensureScope: vi.fn<(_scope: AccessScope) => Promise<void>>(),
   isSessionOwned:
     vi.fn<(_scope: AccessScope, _sessionId: string) => Promise<boolean>>(),
 }));
@@ -16,10 +17,11 @@ vi.mock("@/db/services/sessions", () => ({
 }));
 vi.mock("@/db/services/scope", () => ({ ensureScope: mocks.ensureScope }));
 vi.mock("@/db/services/application-executions", () => ({
-  assertApplicationWorkerWithinBudget:
-    mocks.assertApplicationWorkerWithinBudget,
   assertNoConcurrentApplicationWorker:
     mocks.assertNoConcurrentApplicationWorker,
+}));
+vi.mock("@/db/services/application-leases", () => ({
+  assertApplicationLeaseOwner: mocks.assertApplicationLeaseOwner,
 }));
 
 import { requireWorkerScope } from "@/agent/subagents/worker/lib/access";
@@ -100,11 +102,38 @@ describe("worker access", () => {
         session: workerSession({ current: null, initiator: principal }),
       })
     ).rejects.toThrow(/^Needs existing worker:/);
+    expect(mocks.assertApplicationLeaseOwner).toHaveBeenCalledWith({
+      parentCallId: "worker-call",
+      rootSessionId: "root-session",
+      workerSessionId: "worker-session",
+    });
     expect(mocks.assertNoConcurrentApplicationWorker).toHaveBeenCalledWith({
       parentCallId: "worker-call",
       rootSessionId: "root-session",
       workerSessionId: "worker-session",
     });
+  });
+
+  it("blocks an overdue or unleased worker before any browser work", async () => {
+    const principal = principalFor("better-auth:alice");
+    mocks.assertApplicationLeaseOwner.mockRejectedValueOnce(
+      new Error("Application worker exceeded the 20-minute safety limit.")
+    );
+    await expect(
+      requireWorkerScope({
+        session: workerSession({ current: null, initiator: principal }),
+      })
+    ).rejects.toThrow("20-minute safety limit");
+    expect(mocks.assertNoConcurrentApplicationWorker).not.toHaveBeenCalled();
+
+    mocks.assertApplicationLeaseOwner.mockRejectedValueOnce(
+      new Error("Application worker requires an application lease.")
+    );
+    await expect(
+      requireWorkerScope({
+        session: workerSession({ current: null, initiator: principal }),
+      })
+    ).rejects.toThrow("requires an application lease");
   });
 });
 

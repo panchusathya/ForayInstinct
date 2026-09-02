@@ -15,15 +15,14 @@ describe("database migrations", () => {
     await applyMigration(database, "0001_better-auth.sql");
     await applyMigration(database, "0002_heavy_celestials.sql");
     await applyMigration(database, "0019_application_execution_traces.sql");
+    await applyMigration(database, "0005_browser_run_checkpoints.sql");
     // The duplicate-guard index is re-applicable on a database that has it.
     await applyMigration(
       database,
       "0020_application_execution_duplicate_guard.sql"
     );
-    await applyMigration(
-      database,
-      "0020_application_execution_duplicate_guard.sql"
-    );
+    await applyMigration(database, "0021_application_leases.sql");
+    await applyMigration(database, "0021_application_leases.sql");
 
     await database.exec(`
       INSERT INTO workspaces VALUES ('workspace-1', '2026-01-01');
@@ -48,6 +47,12 @@ describe("database migrations", () => {
     );
     expect(indexes.rows.map((row) => row.indexname)).toContain(
       "application_executions_workspace_apply_url_idx"
+    );
+    const leaseIndexes = await database.query<{ indexname: string }>(
+      "SELECT indexname FROM pg_indexes WHERE tablename = 'application_leases'"
+    );
+    expect(leaseIndexes.rows.map((row) => row.indexname)).toContain(
+      "application_leases_held_workspace_apply_url_idx"
     );
   }, 15_000);
 
