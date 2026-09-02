@@ -98,6 +98,27 @@ function encryptSecret(
   ].join(".");
 }
 
+/**
+ * Rebinds ciphertext to a new workspace AAD. Adopted vault rows used to copy
+ * the bytes verbatim, so logins bound to the legacy workspace could not
+ * decrypt after the move.
+ */
+export function reencryptSecretForWorkspace(input: {
+  ciphertext: string;
+  from: AccessScope;
+  id: string;
+  namespace: SecretNamespace;
+  to: AccessScope;
+}) {
+  const plaintext = decryptSecret(
+    input.from,
+    input.namespace,
+    input.id,
+    input.ciphertext
+  );
+  return encryptSecret(input.to, input.namespace, input.id, plaintext);
+}
+
 function decryptSecret(
   scope: AccessScope,
   namespace: SecretNamespace,

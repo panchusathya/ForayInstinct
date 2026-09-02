@@ -92,7 +92,7 @@ vi.mock("@/lib/manager/server/kernel-native-autofill", () => ({
 }));
 
 describe("browser submission evidence", () => {
-  it("classifies confirmation URLs and conservative body phrases", () => {
+  it("classifies confirmation URLs and ignores posting-page copy", () => {
     expect(
       observedSubmission(
         "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/applicationSubmitted",
@@ -109,9 +109,6 @@ describe("browser submission evidence", () => {
       observedSubmission("https://tenant.example/apply", "Thank you")
     ).toBeUndefined();
     expect(
-      observedSubmission("https://tenant.example/apply", "Thank you")
-    ).toBeUndefined();
-    expect(
       observedSubmission(
         "https://tenant.example/apply",
         "We have received your materials."
@@ -122,13 +119,13 @@ describe("browser submission evidence", () => {
         "https://tenant.example/apply",
         "Your application has been submitted."
       )
-    ).toBe("application received");
+    ).toBeUndefined();
     expect(
       observedSubmission(
         "https://tenant.example/apply",
         "You have successfully submitted your application."
       )
-    ).toBe("successfully submitted");
+    ).toBeUndefined();
     expect(
       observedSubmission(
         "https://tenant.example/job/role",
@@ -307,15 +304,14 @@ describe("playwright checkpoints observe a submission without final_output", () 
       { userId: "user-1", workspaceId: "workspace-1" },
       "browser-1",
       expect.objectContaining({
-        // oxlint-disable-next-line typescript/no-unsafe-assignment -- Vitest's asymmetric matcher is untyped.
-        actions: expect.arrayContaining([
-          "submission evidence: application received",
-        ]),
         errorCode: "playwright_execution",
         phase: "playwright",
         state: "failed",
       })
     );
+    expect(
+      JSON.stringify(mocks.recordBrowserRunCheckpoint.mock.calls[0]?.[2])
+    ).not.toContain("submission evidence");
     expect(mocks.captureScreenshot).not.toHaveBeenCalled();
     expect(mocks.saveApplicationSubmissionScreenshot).not.toHaveBeenCalled();
   });

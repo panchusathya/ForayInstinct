@@ -52,7 +52,10 @@ export function safeApplyUrl(value: string) {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" && url.protocol !== "http:") return "";
-    return `${url.origin}${url.pathname}`.slice(0, 1_000);
+    // Keep the query string: Greenhouse and similar ATS hosts put the job id
+    // there (`gh_jid`), so origin+pathname alone collides two postings. Drop
+    // the fragment, which is never part of the lease key.
+    return `${url.origin}${url.pathname}${url.search}`.slice(0, 1_000);
   } catch {
     return "";
   }

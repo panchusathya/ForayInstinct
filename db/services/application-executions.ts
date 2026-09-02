@@ -115,6 +115,74 @@ export async function attachApplicationWorker(input: {
   return id;
 }
 
+export async function updateApplicationRun(input: {
+  browserSessionId?: string;
+  executionId: string;
+  pauseReason?: string | null;
+  status?: ExecutionStatus;
+  workflowRunId?: string;
+}) {
+  const now = new Date().toISOString();
+  const status = input.status;
+  await db
+    .update(applicationExecutions)
+    .set({
+      ...(input.browserSessionId !== undefined
+        ? { browserSessionId: input.browserSessionId }
+        : {}),
+      ...(input.pauseReason !== undefined
+        ? { pauseReason: input.pauseReason }
+        : {}),
+      ...(input.workflowRunId !== undefined
+        ? { workflowRunId: input.workflowRunId }
+        : {}),
+      ...(status !== undefined
+        ? {
+            finishedAt:
+              status === "completed" ||
+              status === "failed" ||
+              status === "timed_out"
+                ? now
+                : null,
+            status,
+          }
+        : {}),
+      updatedAt: now,
+    })
+    .where(eq(applicationExecutions.id, input.executionId));
+  if (status === "completed" || status === "failed" || status === "timed_out") {
+    await releaseApplicationLease({ executionId: input.executionId });
+  }
+}
+
+export async function findApplicationRun(input: {
+  applyUrl: string;
+  scope: AccessScope;
+}) {
+  const [row] = await db
+    .select({
+      applyUrl: applicationExecutions.applyUrl,
+      browserSessionId: applicationExecutions.browserSessionId,
+      company: applicationExecutions.company,
+      id: applicationExecutions.id,
+      pauseReason: applicationExecutions.pauseReason,
+      role: applicationExecutions.role,
+      rootSessionId: applicationExecutions.rootSessionId,
+      status: applicationExecutions.status,
+      workflowRunId: applicationExecutions.workflowRunId,
+    })
+    .from(applicationExecutions)
+    .where(
+      and(
+        eq(applicationExecutions.workspaceId, input.scope.workspaceId),
+        eq(applicationExecutions.applyUrl, input.applyUrl)
+      )
+    )
+    .orderBy(desc(applicationExecutions.updatedAt))
+    .limit(1);
+  return row;
+}
+
 export async function updateApplicationExecutionForWorker(input: {
   eventId: string;
   eventType: string;
@@ -202,16 +270,21 @@ export async function updateApplicationExecutionForWorker(input: {
 export async function attachBrowserToApplicationExecution(
   scope: AccessScope,
   browserSessionId: string,
-  workerSessionId: string
+  workerSessionId?: string,
+  executionIdValue?: string
 ) {
+  const identity =
+    executionIdValue !== undefined
+      ? eq(applicationExecutions.id, executionIdValue)
+      : workerSessionId !== undefined
+        ? eq(applicationExecutions.workerSessionId, workerSessionId)
+        : undefined;
+  if (!identity) return;
   const [execution] = await db
     .update(applicationExecutions)
     .set({ browserSessionId, updatedAt: new Date().toISOString() })
     .where(
-      and(
-        eq(applicationExecutions.workspaceId, scope.workspaceId),
-        eq(applicationExecutions.workerSessionId, workerSessionId)
-      )
+      and(eq(applicationExecutions.workspaceId, scope.workspaceId), identity)
     )
     .returning({
       applyUrl: applicationExecutions.applyUrl,
@@ -339,18 +412,14 @@ export async function assertNoConcurrentApplicationWorker(input: {
 }
 
 /** Whether a worker of this root session is still running or parked on the candidate. */
-export async function hasUnfinishedApplicationExecution(
-  rootSessionId: string,
-  since: Date
-) {
+export async function hasUnfinishedApplicationExecution(rootSessionId: string) {
   const [row] = await db
     .select({ id: applicationExecutions.id })
     .from(applicationExecutions)
     .where(
       and(
         eq(applicationExecutions.rootSessionId, rootSessionId),
-        inArray(applicationExecutions.status, ["queued", "running", "waiting"]),
-        gte(applicationExecutions.updatedAt, since.toISOString())
+        inArray(applicationExecutions.status, ["queued", "running", "waiting"])
       )
     )
     .limit(1);

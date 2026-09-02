@@ -237,12 +237,20 @@ export async function claimOverdueApplicationLeases(now = new Date()) {
   const rows = await db
     .select({
       applyUrl: applicationLeases.applyUrl,
+      browserSessionId: applicationExecutions.browserSessionId,
+      createdByUserId: applicationLeases.createdByUserId,
       executionId: applicationLeases.executionId,
       expiresAt: applicationLeases.expiresAt,
       rootSessionId: applicationLeases.rootSessionId,
       workerSessionId: applicationLeases.workerSessionId,
+      workflowRunId: applicationExecutions.workflowRunId,
+      workspaceId: applicationLeases.workspaceId,
     })
     .from(applicationLeases)
+    .leftJoin(
+      applicationExecutions,
+      eq(applicationLeases.executionId, applicationExecutions.id)
+    )
     .where(
       and(
         eq(applicationLeases.status, "held"),

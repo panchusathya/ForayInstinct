@@ -24,6 +24,8 @@ import {
   listCandidateDocuments,
   saveCandidateDocument,
 } from "./candidate-documents";
+import { reencryptSecretForWorkspace } from "@/lib/manager/server/secret-store";
+import type { SecretNamespace } from "@/db/services/secrets";
 
 /**
  * Moves data from the provider-specific workspaces created before phone
@@ -146,9 +148,33 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
         )
         .limit(1);
       if (!existing[0] || secret.updatedAt > existing[0].updatedAt) {
+        let encryptedValue = secret.encryptedValue;
+        if (isSecretNamespace(secret.namespace)) {
+          try {
+            encryptedValue = reencryptSecretForWorkspace({
+              ciphertext: secret.encryptedValue,
+              from: legacy,
+              id: secret.id,
+              namespace: secret.namespace,
+              to: target,
+            });
+          } catch (error) {
+            console.error(
+              "[adopt-legacy-workspace] could not re-encrypt secret",
+              {
+                error: error instanceof Error ? error.message : String(error),
+                namespace: secret.namespace,
+              }
+            );
+          }
+        }
         await transaction
           .insert(encryptedSecrets)
-          .values({ ...secret, workspaceId: target.workspaceId })
+          .values({
+            ...secret,
+            encryptedValue,
+            workspaceId: target.workspaceId,
+          })
           .onConflictDoUpdate({
             target: [
               encryptedSecrets.workspaceId,
@@ -156,7 +182,7 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
               encryptedSecrets.id,
             ],
             set: {
-              encryptedValue: secret.encryptedValue,
+              encryptedValue,
               updatedAt: secret.updatedAt,
             },
           });
@@ -263,4 +289,8 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
         )
       );
   }
+}
+
+function isSecretNamespace(value: string): value is SecretNamespace {
+  return value === "vault" || value === "browser-state";
 }

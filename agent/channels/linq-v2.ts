@@ -48,7 +48,10 @@ import {
   listPendingApplicationSubmissionScreenshotScopes,
   releaseApplicationSubmissionScreenshots,
 } from "@/db/services/application-submission-screenshots";
-import { blockerKind, normalizeTaskStatus } from "@/lib/task-completion";
+import {
+  pauseKindFromOutput,
+  normalizeTaskStatus,
+} from "@/lib/task-completion";
 import { linkCandidate, recordConversationMessage } from "@/lib/goforay/bridge";
 import { saveCandidateDocument } from "@/db/services/candidate-documents";
 import { inferCandidateDocumentKind } from "@/lib/candidate-documents";
@@ -91,11 +94,13 @@ const workerResultSchema = z.object({
   kind: z.literal("tool-result"),
   output: z
     .object({
+      applyUrl: z.string().optional(),
       message: z.string().optional(),
-      status: z.string(),
+      pause: z.string().optional(),
+      status: z.string().optional(),
     })
     .loose(),
-  toolName: z.literal("worker"),
+  toolName: z.enum(["continue_application", "start_application", "worker"]),
 });
 
 const jobCardResultSchema = z.object({
@@ -140,8 +145,10 @@ recruiting focus. Respond to the user's request now; never defer ordinary work
 or promise roles, messages, or results tomorrow unless a real scheduled task is
 configured. When a user asks for roles, immediately call find_goforay_roles.
 That tool uses the candidate's stated details and workspace profile, and never
-requires a JuiceBox candidate link. Applying is a worker assignment against
-the apply URL; there is no GoForay application task. If Google is connected,
+requires a JuiceBox candidate link. Applying is start_application against
+the apply URL; there is no GoForay application task. Runner pauses return a
+structured { pause } of approval, email_otp, user_input, vault_setup, or
+posting_unavailable — do not parse Needs prefixes. If Google is connected,
 read existing resume/CV or job-search context in the same turn but never wait
 for it before starting the role search or delivering its cards. If it is not
 connected, a resume upload or LinkedIn URL is optional context, not a search
@@ -260,32 +267,31 @@ const { bot, channel, send } = chatSdkChannel({
       const sourceMessageId = context.thread?.toJSON().currentMessage?.id;
       const workerResult = workerResultSchema.safeParse(event.result);
       if (workerResult.success) {
+        const output = workerResult.data.output;
         const submitted =
-          normalizeTaskStatus(workerResult.data.output.status) === "success";
-        // The worker pauses with this blocker once an application is filled
-        // and only the submit control is left. That pause carries a `failure`
-        // status, so screenshot delivery cannot be armed off a successful
-        // result alone. Every blocker prefix is owned by `blockerKind`.
-        const awaitingApproval =
-          blockerKind(workerResult.data.output.message ?? "") ===
-          "submissionApproval";
+          workerResult.data.toolName === "worker" &&
+          normalizeTaskStatus(output.status ?? "") === "success";
+        // Classify by the structured pause enum. Leftover worker messages
+        // still generate Needs prefixes from that enum, so prefix parsing is
+        // only a fallback via pauseKindFromOutput.
+        const pause = pauseKindFromOutput(output);
+        const awaitingApproval = pause === "approval";
+        const shouldDeliver =
+          workerResult.data.toolName === "worker" || awaitingApproval;
         const caller =
           session.session.auth?.current ?? session.session.auth?.initiator;
-        // The worker may capture review images correctly but produce a final
-        // message that omits the approval prefix. Claim on every completed
-        // browser worker instead of letting free-form model prose decide
-        // whether the candidate sees the queued review.
         const scope = caller ? scopeFromPrincipal(caller) : undefined;
         const thread = scope
           ? await submissionDeliveryThread(context.thread, scope)
           : undefined;
         const delivery: SubmissionScreenshotDelivery =
-          scope && thread
+          scope && thread && shouldDeliver
             ? await deliverSubmissionScreenshot(
                 thread,
                 scope,
                 event.turnId,
-                context.state
+                context.state,
+                output.applyUrl
               )
             : { reviewPages: 0, status: "blocked" };
         // Only retain a retry marker for outcomes known to have an expected
@@ -1095,7 +1101,8 @@ async function deliverSubmissionScreenshot(
   },
   scope: ReturnType<typeof scopeFromPrincipal>,
   turnId: string,
-  state: Record<string, unknown>
+  state: Record<string, unknown>,
+  applyUrl?: string
 ): Promise<SubmissionScreenshotDelivery> {
   // Linq does not always include a transport label in the completion turn.
   // Try the attachment unless the transport is explicitly SMS: an unknown
@@ -1113,8 +1120,10 @@ async function deliverSubmissionScreenshot(
   // to approve a form they cannot see is the worst failure this channel has, so
   // it must never have to be inferred from an absence of logs. `warn`, not
   // `info`: the log search does not index info lines.
-  const screenshots = await claimPendingApplicationSubmissionScreenshots(
-    scope
+  const screenshots = await (
+    applyUrl
+      ? claimPendingApplicationSubmissionScreenshots(scope, { applyUrl })
+      : claimPendingApplicationSubmissionScreenshots(scope)
   ).catch((error: unknown) => {
     console.error("[submission-screenshot] could not claim a batch", {
       message: error instanceof Error ? error.message : String(error),

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  applicationPauseMessage,
+  applicationPausePrefix,
   blockerKind,
   parseTaskCompletion,
+  pauseKindFromOutput,
   taskCompletionSchema,
   workerBlockerPrefix,
 } from "../lib/task-completion";
@@ -81,6 +84,25 @@ describe("worker blockers", () => {
     expect(blockerKind(`${workerBlockerPrefix("emailOtp")} sent.`)).toBe(
       "emailOtp"
     );
+  });
+
+  it("generates Needs copy from the pause enum instead of parsing it", () => {
+    expect(applicationPausePrefix("email_otp")).toBe("Needs email OTP:");
+    expect(
+      applicationPauseMessage(
+        "approval",
+        "Staff Engineer https://jobs.example/1"
+      )
+    ).toBe("Needs submission approval: Staff Engineer https://jobs.example/1");
+    expect(pauseKindFromOutput({ pause: "email_otp" })).toBe("email_otp");
+    expect(
+      pauseKindFromOutput({
+        message: "Needs submission approval: Staff Engineer at acme.",
+      })
+    ).toBe("approval");
+    expect(
+      pauseKindFromOutput({ message: "something failed" })
+    ).toBeUndefined();
   });
 
   it("reports no blocker for a failure that names none", () => {

@@ -13,16 +13,16 @@ import {
 } from "@/lib/application-execution";
 
 describe("application execution tracing", () => {
-  it("retains only the explicit identity header and strips URL secrets", () => {
+  it("retains only the explicit identity header and keeps the posting query", () => {
     expect(
       parseApplicationIdentity(
         [
-          "Application trace identity: role=Research Scientist; company=Neuralink; apply_url=https://jobs.example/apply/42?token=secret#resume",
+          "Application trace identity: role=Research Scientist; company=Neuralink; apply_url=https://jobs.example/apply/42?gh_jid=99#resume",
           "Candidate profile: private data must not be read by tracing.",
         ].join("\n")
       )
     ).toEqual({
-      applyUrl: "https://jobs.example/apply/42",
+      applyUrl: "https://jobs.example/apply/42?gh_jid=99",
       company: "Neuralink",
       role: "Research Scientist",
     });
@@ -32,9 +32,14 @@ describe("application execution tracing", () => {
   });
 
   it("normalizes safe identifiers and errors deterministically", () => {
+    expect(safeApplyUrl("https://careers.example/jobs/1?gh_jid=42#top")).toBe(
+      "https://careers.example/jobs/1?gh_jid=42"
+    );
     expect(
-      safeApplyUrl("https://careers.example/jobs/1?resume=private#top")
-    ).toBe("https://careers.example/jobs/1");
+      safeApplyUrl("https://boards.greenhouse.io/acme/jobs/1?gh_jid=aaa")
+    ).not.toBe(
+      safeApplyUrl("https://boards.greenhouse.io/acme/jobs/1?gh_jid=bbb")
+    );
     expect(
       safeErrorCode(
         new Error(

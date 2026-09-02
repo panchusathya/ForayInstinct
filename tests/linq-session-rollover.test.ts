@@ -88,7 +88,8 @@ describe("Linq idle session rollover", () => {
     expect(await rollOverIdleLinqSession(recent, now)).toBe("kept");
 
     // A worker waiting on this candidate's approval must still be reachable
-    // when they finally reply, however long that takes.
+    // when they finally reply, however long that takes — unfinished
+    // queued|running|waiting executions skip rollover regardless of age.
     mocks.hasUnfinishedApplicationExecution.mockResolvedValueOnce(true);
     const parked = fakeThread();
     await rememberLinqSessionActivity(parked, { id: "session-1" }, longAgo);

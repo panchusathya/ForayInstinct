@@ -4,7 +4,7 @@ import { browserLanguageModel } from "@/lib/model-config";
 
 export default defineAgent({
   description:
-    'Execute one bounded browser assignment for the root coordinator: find the exact posting on the given ATS URL if needed, then fill the form in the same execution. Includes secure vault autofill, transaction preparation, human-takeover handoff, cleanup, and a concise verified result. A `{ status: "working" }` receipt means this worker is already running — the parent must not start another. Finish every turn with Eve\'s native final_output matching the agent outputSchema. The parent must not pass a per-call outputSchema.',
+    "Retired. Job filling uses start_application / continue_application / cancel_application. Do not spawn this subagent.",
   // Browser work reads screenshots, so it uses the dedicated vision model.
   model: browserLanguageModel,
   // The Qwen VL instruct variant is optimized for direct responses rather
@@ -18,6 +18,8 @@ export default defineAgent({
     maxOutputTokensPerSession: 200_000,
   },
   outputSchema: taskCompletionSchema,
+  // The parent must not pass a per-call outputSchema. The worker is retired;
+  // coordinators use start_application instead.
   // With a 2k output cap the 131,072-token window is actually usable. Compact
   // near 32k so screenshot history is stubbed before the fill loop balloons.
   modelContextWindowTokens: 80_000,

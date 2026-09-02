@@ -199,6 +199,8 @@ export const applicationExecutions = pgTable(
     parentCallId: text("parent_call_id").notNull(),
     workerSessionId: text("worker_session_id"),
     browserSessionId: text("browser_session_id"),
+    workflowRunId: text("workflow_run_id"),
+    pauseReason: text("pause_reason"),
     role: text("role").notNull().default(""),
     company: text("company").notNull().default(""),
     applyUrl: text("apply_url").notNull().default(""),

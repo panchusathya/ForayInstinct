@@ -24,6 +24,10 @@ import type {
 } from "../../../lib/browser/contract.ts";
 import { performActions } from "./actions.ts";
 import { asRawCdpSession, CdpRefCache } from "./cdp.ts";
+import {
+  captchaDisableAutoSubmitMethod,
+  captchaDisableAutoSubmitParams,
+} from "./captcha.ts";
 import { urlRegistrableDomain } from "./domains.ts";
 import { gatewayError, sessionGone, sessionNotFound } from "./errors.ts";
 import { runPlaywrightCode } from "./eval.ts";
@@ -270,6 +274,14 @@ export class SessionRegistry implements GatewaySessions {
       });
     } catch {
       // The event may not exist on this zone; captcha detection stays off.
+    }
+    try {
+      await raw.send(
+        captchaDisableAutoSubmitMethod,
+        captchaDisableAutoSubmitParams
+      );
+    } catch {
+      // Zone may not expose Captcha.setAutoSolve; never fail session create.
     }
   }
 

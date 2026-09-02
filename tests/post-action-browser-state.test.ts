@@ -7,7 +7,7 @@ import {
 } from "@/agent/subagents/worker/lib/post-action-browser-state";
 
 describe("post-action browser inspection", () => {
-  it("finds a Greenhouse email OTP in an iframe, not only the active page", async () => {
+  it("finds a Greenhouse email OTP from autocomplete=one-time-code in an iframe", async () => {
     const result = await runProbe([
       frame({ text: "Application submitted. Continue." }),
       frame({
@@ -21,22 +21,78 @@ describe("post-action browser inspection", () => {
       emailOtp: true,
       otpHint: "Greenhouse",
       smsOtp: false,
-      submitted: true,
+      submitted: false,
     });
     expect(postActionBrowserStateInstruction(result)).toContain(
       "Needs email OTP:"
     );
   });
 
-  it("marks a bot error as a blocker rather than a retry signal", async () => {
+  it("does not treat a zip-code field or OTP-ish page copy as an OTP", async () => {
     const result = await runProbe([
-      frame({ text: "Bot detection error. Verify you are human to continue." }),
+      frame({
+        controls: [
+          control({
+            autocomplete: "postal-code",
+            name: "zip",
+            placeholder: "Enter your zip code",
+          }),
+        ],
+        text: "Enter your zip code. We sent a verification code to continue.",
+      }),
     ]);
 
-    expect(result).toMatchObject({ botOrChallenge: true });
-    expect(postActionBrowserStateInstruction(result)).toContain(
+    expect(result).toMatchObject({
+      emailOtp: false,
+      smsOtp: false,
+      submitted: false,
+    });
+  });
+
+  it("requires a visible CAPTCHA iframe, not recaptcha footer copy", async () => {
+    const footer = await runProbe([
+      frame({
+        text: "This site is protected by reCAPTCHA and the Google Privacy Policy.",
+      }),
+    ]);
+    expect(footer).toMatchObject({ botOrChallenge: false });
+    expect(postActionBrowserStateInstruction(footer)).toBeUndefined();
+
+    const challenge = await runProbe([
+      frame({
+        iframes: [
+          iframeControl({
+            height: 420,
+            src: "https://www.google.com/recaptcha/api2/bframe?k=site",
+            width: 360,
+          }),
+        ],
+      }),
+    ]);
+    expect(challenge).toMatchObject({ botOrChallenge: true });
+    expect(postActionBrowserStateInstruction(challenge)).toContain(
       "do not refill or retry"
     );
+  });
+
+  it("does not mark submitted from posting-page copy", async () => {
+    const result = await runProbe([
+      frame({
+        href: "https://boards.greenhouse.io/acme/jobs/1/apply",
+        text: "Thank you. We have received your application.",
+      }),
+    ]);
+    expect(result).toMatchObject({ submitted: false });
+  });
+
+  it("marks submitted from a confirmation URL", async () => {
+    const result = await runProbe([
+      frame({
+        href: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/applicationSubmitted",
+        text: "",
+      }),
+    ]);
+    expect(result).toMatchObject({ submitted: true });
   });
 
   it("keeps the worker rules explicit about never resubmitting after OTP", async () => {
@@ -62,6 +118,7 @@ async function runProbe(frames: ReturnType<typeof frame>[]) {
       },
     ],
   };
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- vm.Script returns the in-page probe object.
   return new Script(
     `(async () => {${postActionBrowserStateProbeCode}})()`
   ).runInNewContext({ browser }) as Promise<PostActionBrowserState>;
@@ -69,32 +126,66 @@ async function runProbe(frames: ReturnType<typeof frame>[]) {
 
 function frame({
   controls = [],
+  href,
   hostname = "example.com",
+  iframes = [],
   text = "",
 }: {
-  controls?: ReturnType<typeof otpControl>[];
+  controls?: ReturnType<typeof control>[];
+  href?: string;
   hostname?: string;
+  iframes?: ReturnType<typeof iframeControl>[];
   text?: string;
 }) {
+  const locationHref = href ?? `https://${hostname}/apply`;
   return {
     async evaluate(fn: () => unknown) {
+      // oxlint-disable-next-line typescript/no-unsafe-return -- vm.Script evaluates the in-page probe against this mock DOM.
       return new Script(`(${fn.toString()})()`).runInNewContext({
         document: {
           body: { innerText: text },
-          querySelectorAll: () => controls,
+          querySelectorAll: (selector: string) => {
+            if (selector.includes("iframe")) return iframes;
+            return controls;
+          },
         },
         getComputedStyle: () => ({ display: "block", visibility: "visible" }),
-        location: { href: `https://${hostname}/apply`, hostname },
+        location: {
+          href: locationHref,
+          hostname: new URL(locationHref).hostname,
+        },
       });
     },
   };
 }
 
-function otpControl() {
+function control(attributes: Record<string, string>) {
   return {
     getAttribute(name: string) {
-      return name === "autocomplete" ? "one-time-code" : null;
+      return attributes[name] ?? null;
     },
     getBoundingClientRect: () => ({ height: 24, width: 180 }),
+  };
+}
+
+function otpControl() {
+  return control({ autocomplete: "one-time-code" });
+}
+
+function iframeControl({
+  height,
+  src,
+  width,
+}: {
+  height: number;
+  src: string;
+  width: number;
+}) {
+  return {
+    getAttribute(name: string) {
+      return name === "src" ? src : null;
+    },
+    getBoundingClientRect: () => ({ height, width }),
+    src,
   };
 }

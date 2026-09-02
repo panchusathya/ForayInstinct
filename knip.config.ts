@@ -11,6 +11,7 @@ export default {
     "db/drizzle.config.ts",
     "evals/**/*.eval.ts",
     "evals/evals.config.ts",
+    "lib/application-runner/workflow.ts",
     "taze.config.ts",
   ],
   ignoreDependencies: [
