@@ -10,6 +10,24 @@ const domHelpers = `
     const box = node.getBoundingClientRect();
     return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
   };
+  /**
+   * A control the page hides from assistive technology is not one a candidate
+   * is meant to touch. react-select keeps an invisible <input required
+   * aria-hidden> beside every required select that has no value yet, purely so
+   * the browser's constraint validation blocks the form; read as a field it is
+   * an unlabelled required control nobody can answer, which is what the runner
+   * kept reporting ten of.
+   */
+  const assistiveHidden = (node) => node.getAttribute("aria-hidden") === "true"
+    || node.closest("[aria-hidden=true]") !== null;
+  /**
+   * A file input is nearly always hidden behind a styled button, and
+   * setInputFiles works on it regardless, so it is the one control collected
+   * whether or not it is drawn.
+   */
+  const isFileInput = (node) => node.tagName.toLowerCase() === "input"
+    && String(node.getAttribute("type") || "").toLowerCase() === "file";
+  const candidateFacing = (node) => !assistiveHidden(node) && (isFileInput(node) || visible(node));
   const selectorFor = (node, index) => {
     if (node.id) return "#" + CSS.escape(node.id);
     const name = node.getAttribute("name");
@@ -59,17 +77,29 @@ const domHelpers = `
     || /\\*/.test(ownLabel(node).slice(0, 200));
   /**
    * Whether this node is the editable interior of a select-like widget rather
-   * than the widget itself.
+   * than the widget itself: some other element carries the combobox role for
+   * it. Nothing broader. A react-select puts role=combobox on its typeahead
+   * input, so that input IS the widget; a rule that skipped every input with
+   * aria-autocomplete removed every dropdown on a Greenhouse form from both
+   * scans at once, so nothing filled them and nothing reported them blank, and
+   * the form went to the candidate for approval with all of them empty.
    */
-  const isComboboxInner = (node) => {
+  const isWidgetInterior = (node) => {
     const owner = node.closest("[role=combobox], [role=listbox]");
-    if (owner && owner !== node) return true;
-    if (node.tagName.toLowerCase() !== "input") return false;
-    if (node.hasAttribute("aria-autocomplete")) return true;
-    if (/^react-select/.test(node.id || "")) return true;
-    const wrapper = node.parentElement && node.parentElement.parentElement;
-    return Boolean(wrapper && wrapper.querySelector("[role=combobox], [role=listbox]"));
+    return Boolean(owner && owner !== node);
   };
+  /**
+   * The placeholder a select-like widget shows while it has no value, if the
+   * page names one. react-select describes its input by its placeholder
+   * element exactly while nothing is chosen, so the element's presence is the
+   * widget's own word that it is empty, and its text is what to discount when
+   * reading the widget.
+   */
+  const describedPlaceholder = (node) => (node.getAttribute("aria-describedby") || "")
+    .split(/\\s+/)
+    .filter(Boolean)
+    .map((id) => document.getElementById(id))
+    .find((element) => element && /placeholder/i.test(element.id));
 `;
 
 /**
@@ -103,18 +133,15 @@ ${domHelpers}
     };
     const seenRadioGroups = new Set();
     return nodes.flatMap((node, index) => {
-      if (!visible(node)) return [];
+      if (!candidateFacing(node)) return [];
       const tagName = node.tagName.toLowerCase();
       const role = (node.getAttribute("role") || "").toLowerCase();
       const type = (node.getAttribute("type") || tagName).toLowerCase();
       if (type === "hidden" || type === "submit" || type === "button" || type === "image") return [];
-      // A combobox's inner typeahead input is part of the wrapper already
-      // collected, not a field of its own. Counted separately it becomes a
-      // required control with no label and nothing to ask about. The role is
-      // only one shape this takes: a react-select renders a plain input with
-      // aria-autocomplete and a generated id, and a form built that way left
-      // ten unlabelled required controls nobody could answer.
-      if (isComboboxInner(node)) return [];
+      // A widget's inner input is part of the combobox already collected, not
+      // a field of its own. Counted separately it becomes a required control
+      // with no label and nothing to ask about.
+      if (isWidgetInterior(node)) return [];
 
       // One entry per radio group, not per radio.
       if (type === "radio") {
@@ -260,22 +287,56 @@ for (const fill of fills) {
     if (role === "combobox" || role === "listbox") {
       // A react-select renders no listbox until it is opened, so its choices
       // cannot be read when the page is first scanned. Open it, read what is
-      // really there, then decide.
-      await locator.click();
+      // really there, then decide. The click can be intercepted by the
+      // placeholder painted over a typeahead's input, and a react-select opens
+      // on ArrowDown just as well, so fall back to the keyboard rather than
+      // wait out a thirty-second click on every such control.
+      const clicked = await locator.click({ timeout: 4000 }).then(() => true).catch(() => false);
+      if (!clicked) {
+        await locator.focus().catch(() => undefined);
+        await page.keyboard.press("ArrowDown").catch(() => undefined);
+      }
       await page.waitForTimeout(150);
-      const live = await page.$$eval("[role=option]", (nodes) => nodes
+      const liveOptions = () => page.$$eval("[role=option]", (nodes) => nodes
         .filter((node) => {
           const box = node.getBoundingClientRect();
           return box.width > 0 && box.height > 0;
         })
         .map((node) => (node.innerText || node.textContent || "").trim())
         .filter(Boolean));
-      const wanted = matchOption(live, wantedList(fill));
+      const shown = await liveOptions();
+      let live = shown;
+      let wanted = matchOption(shown, wantedList(fill));
+      // A typeahead offers nothing until something is typed: Greenhouse's
+      // Location (City) is one, and it opened to an empty list on every run,
+      // so the city never went anywhere and the question came back each time.
+      // Type each phrasing into the widget's own input, wait for the
+      // suggestions, and choose among them. A list that was already showing
+      // choices is a closed set, where typing would only filter away the
+      // options the caller needs to see.
+      const box = tag === "input" ? locator : locator.locator("input").first();
+      const typeahead = shown.length === 0 && (await box.count()) > 0;
+      if (wanted === undefined && typeahead) {
+        for (const value of wantedList(fill)) {
+          await box.fill(value);
+          const deadline = Date.now() + 2500;
+          live = [];
+          while (live.length === 0 && Date.now() < deadline) {
+            await page.waitForTimeout(200);
+            live = await liveOptions();
+          }
+          wanted = matchOption(live, [value]);
+          if (wanted !== undefined) break;
+        }
+        // Leave the page as it was found: typed text a widget did not accept
+        // is not a value, and it would read as one in a screenshot.
+        if (wanted === undefined) await box.fill("").catch(() => undefined);
+      }
       if (wanted === undefined) {
         await page.keyboard.press("Escape").catch(() => undefined);
         // Hand the real choices back so the caller can decide rather than
         // guess. A closed set is the one place a model can safely pick.
-        offered.push({ options: live, selector: fill.selector });
+        offered.push({ options: shown.length > 0 ? shown : live, selector: fill.selector });
         skipped.push({ reason: "no-option", selector: fill.selector });
         continue;
       }
@@ -305,18 +366,15 @@ const empty = await page.$$eval(
 ${domHelpers}
     const seenRadioGroups = new Set();
     return nodes.flatMap((node, index) => {
-      if (!visible(node)) return [];
+      if (!candidateFacing(node)) return [];
       const tagName = node.tagName.toLowerCase();
       const role = (node.getAttribute("role") || "").toLowerCase();
       const type = (node.getAttribute("type") || tagName).toLowerCase();
       if (type === "hidden" || type === "submit" || type === "button" || type === "image") return [];
-      // A combobox's inner typeahead input is part of the wrapper already
-      // collected, not a field of its own. Counted separately it becomes a
-      // required control with no label and nothing to ask about. The role is
-      // only one shape this takes: a react-select renders a plain input with
-      // aria-autocomplete and a generated id, and a form built that way left
-      // ten unlabelled required controls nobody could answer.
-      if (isComboboxInner(node)) return [];
+      // A widget's inner input is part of the combobox already collected, not
+      // a field of its own. Counted separately it becomes a required control
+      // with no label and nothing to ask about.
+      if (isWidgetInterior(node)) return [];
       if (!isRequired(node)) return [];
       let blank;
       if (type === "radio") {
@@ -329,6 +387,8 @@ ${domHelpers}
         blank = !peers.some((peer) => peer.checked);
       } else if (type === "checkbox") {
         blank = node.checked !== true;
+      } else if (type === "file") {
+        blank = !(node.files && node.files.length > 0);
       } else if (role === "combobox" || role === "listbox") {
         // Whatever the widget shows once a choice is made. A react-select keeps
         // its typeahead input empty and paints the chosen option in a sibling,
@@ -337,7 +397,11 @@ ${domHelpers}
         // and treat any text other than the label or a placeholder as a choice.
         const own = (node.value || node.innerText || node.textContent || "").trim();
         const label = labelFor(node).replace(/\\s+/g, " ").trim();
-        const placeholder = (node.getAttribute("placeholder") || "").trim();
+        const placeholderNode = describedPlaceholder(node);
+        const placeholders = [
+          node.getAttribute("placeholder") || "",
+          placeholderNode ? (placeholderNode.innerText || placeholderNode.textContent || "") : "",
+        ].map((text) => text.replace(/\\s+/g, " ").trim()).filter(Boolean);
         let shown = "";
         let ancestor = node.parentElement;
         for (let depth = 0; ancestor && depth < 3 && shown === ""; depth += 1) {
@@ -346,9 +410,11 @@ ${domHelpers}
           ancestor = ancestor.parentElement;
         }
         const chosen = shown !== ""
-          && shown !== placeholder
+          && !placeholders.includes(shown)
           && !/^(select|choose|please select)\\b[\\s.…]*(an? |one )?(option)?\\.{0,3}$/i.test(shown);
-        blank = own === "" && !chosen;
+        // The widget pointing at its own placeholder outranks any text found
+        // nearby: that is the page saying nothing is chosen.
+        blank = own === "" && (placeholderNode !== undefined || !chosen);
       } else {
         blank = String(node.value || "").trim() === "";
       }
@@ -391,8 +457,25 @@ return { loginWall: password > 0 && signIn, href: page.url() };
  */
 export const clickSubmitCode = `
 const before = page.url();
-const button = page.getByRole("button", { name: /submit|apply|send application/i }).first();
-if (await button.count() === 0) return { clicked: false, errors: [], href: before };
+// The form's own submit control first. A posting page can carry other buttons
+// whose names also say Apply, and taking the first name match means a click
+// the runner reports as landed may have gone to a control that never submits
+// anything: the DoorDash submit came back clicked, with no navigation and no
+// error text, and the application was not in.
+const candidates = [
+  page.locator("form button[type=submit], form input[type=submit]"),
+  page.getByRole("button", { name: /submit application|submit/i }),
+  page.getByRole("button", { name: /apply|send application/i }),
+];
+let button;
+for (const candidate of candidates) {
+  const count = await candidate.count();
+  for (let i = 0; i < count && !button; i += 1) {
+    if (await candidate.nth(i).isVisible()) button = candidate.nth(i);
+  }
+  if (button) break;
+}
+if (!button) return { clicked: false, errors: [], href: before };
 await button.click();
 await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => undefined);
 const errors = await page.$$eval(

@@ -121,6 +121,17 @@ async function applyFills(sessionId: string, fills: MappedFill[]) {
     });
   }
   const skipped = applied?.skipped ?? [];
+  for (const row of skipped) {
+    if (row.reason === "no-option") continue;
+    // A fill the page threw on was invisible: neither filled nor refused, it
+    // left a control blank with nothing in the log to say so. The reason is
+    // the browser's own error text, never the value that was being placed.
+    applicationExecutionLog({
+      event: "runner.fill_skipped",
+      reason: row.reason.slice(0, 200),
+      selector: row.selector,
+    });
+  }
   return {
     refused: skipped
       .filter((row) => row.reason === "no-option")
