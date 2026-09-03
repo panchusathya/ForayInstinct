@@ -25,6 +25,7 @@ describe("reading a profile off a resume", () => {
     mocks.generateText.mockResolvedValue({
       text: JSON.stringify({
         headline: "Strategic Finance",
+        contactEmail: "sathya@example.com",
         legalFirstName: "Sathya",
         legalLastName: "Panchu",
         linkedInUrl: "https://linkedin.com/in/sathya",
@@ -45,6 +46,7 @@ describe("reading a profile off a resume", () => {
     const patch = await extractProfileFromResume(resume);
 
     expect(patch).toMatchObject({
+      contactEmail: "sathya@example.com",
       legalFirstName: "Sathya",
       legalLastName: "Panchu",
       locationCity: "San Francisco",

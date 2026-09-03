@@ -16,6 +16,12 @@ export interface VisibleFormField {
 }
 
 export interface MappedFill {
+  /**
+   * Other wording that answers the same question. A control's real options are
+   * often unreadable until it is opened, so the fill carries every phrasing the
+   * profile knows and matches against what the page actually offers.
+   */
+  alternatives?: string[];
   selector: string;
   value: string;
 }
@@ -64,7 +70,11 @@ export function mapProfileToFormFields(input: {
         ? undefined
         : resolveAgainstOptions(field, value);
     if (resolved !== undefined) {
-      fills.push({ selector: field.selector, value: resolved });
+      fills.push({
+        alternatives: alternativesFor(field, value ?? resolved),
+        selector: field.selector,
+        value: resolved,
+      });
     } else if (field.required) {
       unmapped.push(field);
     }
@@ -98,6 +108,14 @@ export function profilePatchForAnswer(
     return { legalLastName: value };
   }
   if (/preferred.?name|nickname/u.test(key)) return { preferredName: value };
+  // A contact address the candidate gave for their own applications. Not a
+  // credential, and not the verified login identity, which only Better Auth
+  // may set.
+  if (/e.?mail/u.test(key)) {
+    return /^[^@\s]+@[^@\s.]+\.[^@\s]+$/u.test(value)
+      ? { contactEmail: value }
+      : undefined;
+  }
   if (/city/u.test(key)) return { locationCity: value };
   if (/state|region|province/u.test(key)) return { locationRegion: value };
   if (/zip|postal/u.test(key)) return { locationPostalCode: value };
@@ -159,7 +177,12 @@ function valueForField(
   identity: CandidateContactIdentity
 ): string | undefined {
   const key = normalize(field.label, field.name, field.type);
-  if (key.includes("email") || field.type === "email") return identity.email;
+  // `normalize` turns "E-mail" into "e mail", so match both spellings. The
+  // verified auth address wins; the profile one is the fallback for a
+  // candidate who only ever texts and has no verified login email.
+  if (/e.?mail/u.test(key) || field.type === "email") {
+    return identity.email ?? profile.contactEmail;
+  }
   if (/(mobile|phone|tel)/u.test(key) || field.type === "tel") {
     return identity.phone;
   }
@@ -206,6 +229,28 @@ function valueForField(
   }
   if (/headline|title/u.test(key) && profile.headline) return profile.headline;
   return undefined;
+}
+
+/**
+ * Every other phrasing that answers the same question.
+ *
+ * A closed control frequently cannot be read until it is opened, so the value
+ * alone is not enough: the profile says "U.S. Citizen" where the posting
+ * offers Yes/No. Carrying both lets the fill match against the real options
+ * without a second pass.
+ */
+function alternativesFor(field: VisibleFormField, value: string) {
+  const alternatives = new Set<string>();
+  const affirmative = affirmativeAnswer(value);
+  if (affirmative !== undefined) {
+    alternatives.add(affirmative ? "Yes" : "No");
+  }
+  const key = normalize(field.label, field.name, field.type);
+  if (/authoriz|work.?eligib|citizenship/u.test(key)) {
+    for (const [, label] of workAuthorizationOptions) alternatives.add(label);
+  }
+  alternatives.delete(value);
+  return alternatives.size > 0 ? [...alternatives] : undefined;
 }
 
 /**

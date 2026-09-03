@@ -4,6 +4,7 @@ import {
 } from "@/db/services/candidate-profile";
 import { readOrImportDefaultResume } from "@/db/services/default-resume";
 import type { AccessScope } from "@/lib/access-scope";
+import { applicationExecutionLog } from "@/lib/application-execution";
 import {
   type CandidateProfile,
   type CandidateProfilePatch,
@@ -76,12 +77,23 @@ async function adoptResumeFacts(
       bytes: resume.bytes,
       mimeType: resume.mimeType,
     });
-    if (!extracted) return stored;
-    const patch = onlyUnset(stored, extracted);
+    const patch = extracted ? onlyUnset(stored, extracted) : {};
+    // Field names only, never their values. Without this there is no way to
+    // tell a model that failed from a resume that said nothing from a patch
+    // correctly skipped because the candidate had already answered.
+    applicationExecutionLog({
+      event: "runner.resume_profile",
+      extracted: extracted ? Object.keys(extracted).join(", ") : "none",
+      stored: Object.keys(patch).join(", ") || "none",
+    });
     if (Object.keys(patch).length === 0) return stored;
     const saved = await saveCandidateProfile(scope, patch);
     return saved.profile;
-  } catch {
+  } catch (error) {
+    applicationExecutionLog({
+      error: error instanceof Error ? error.message : "unknown",
+      event: "runner.resume_profile_failed",
+    });
     return stored;
   }
 }

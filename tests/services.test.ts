@@ -1028,6 +1028,7 @@ async function applyMigration(database: PGlite, name: string) {
 async function applyInitialMigration(database: PGlite) {
   await applyMigration(database, "0000_fluffy_the_spike.sql");
   await applyMigration(database, "0009_candidate_profile.sql");
+  await applyMigration(database, "0023_little_sentinels.sql");
   await applyMigration(database, "0018_browser_state_namespace.sql");
 }
 

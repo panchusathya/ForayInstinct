@@ -95,6 +95,11 @@ ${domHelpers}
       const role = (node.getAttribute("role") || "").toLowerCase();
       const type = (node.getAttribute("type") || tagName).toLowerCase();
       if (type === "hidden" || type === "submit" || type === "button" || type === "image") return [];
+      // A combobox's inner typeahead input is part of the wrapper already
+      // collected, not a field of its own. Counted separately it becomes a
+      // required control with no label and nothing to ask about.
+      const owner = node.closest("[role=combobox], [role=listbox]");
+      if (owner && owner !== node) return [];
 
       // One entry per radio group, not per radio.
       if (type === "radio") {
@@ -148,19 +153,33 @@ return { fields, href: page.url(), title: await page.title() };
  * landed, so it must always come back, even when the page fights it.
  */
 export const applyFillsCode = (
-  fills: { selector: string; value: string }[]
+  fills: { alternatives?: string[]; selector: string; value: string }[]
 ) => `
 const fills = ${JSON.stringify(fills)};
 const filled = [];
 const skipped = [];
-const matchOption = (options, value) => {
-  const wanted = String(value).trim().toLowerCase();
-  const exact = options.find((option) => option.trim().toLowerCase() === wanted);
-  if (exact) return exact;
-  return options.find((option) => {
-    const text = option.trim().toLowerCase();
-    return text.startsWith(wanted) || wanted.startsWith(text);
-  });
+const offered = [];
+// The value first, then any wording the profile knows means the same thing.
+// A posting that asks "authorized to work?" offers Yes/No while the profile
+// says "U.S. Citizen", so one string is rarely enough to match on.
+const wantedList = (fill) => [fill.value, ...(fill.alternatives || [])]
+  .map((value) => String(value).trim())
+  .filter(Boolean);
+const matchOption = (options, values) => {
+  for (const value of values) {
+    const wanted = value.toLowerCase();
+    const exact = options.find((option) => option.trim().toLowerCase() === wanted);
+    if (exact) return exact;
+  }
+  for (const value of values) {
+    const wanted = value.toLowerCase();
+    const partial = options.find((option) => {
+      const text = option.trim().toLowerCase();
+      return text.startsWith(wanted) || wanted.startsWith(text);
+    });
+    if (partial) return partial;
+  }
+  return undefined;
 };
 for (const fill of fills) {
   try {
@@ -188,7 +207,8 @@ for (const fill of fills) {
           const own = node.closest("label");
           return ((byFor && byFor.innerText) || (own && own.innerText) || node.value || "").trim();
         });
-        if (String(text).trim().toLowerCase() === String(fill.value).trim().toLowerCase()) {
+        const wanted = matchOption([String(text)], wantedList(fill));
+        if (wanted !== undefined) {
           await option.check();
           checked = true;
           break;
@@ -211,8 +231,9 @@ for (const fill of fills) {
       const options = await locator.evaluate((node) =>
         [...node.options].map((option) => (option.label || option.text || "").trim())
       );
-      const wanted = matchOption(options, fill.value);
+      const wanted = matchOption(options, wantedList(fill));
       if (wanted === undefined) {
+        offered.push({ options, selector: fill.selector });
         skipped.push({ reason: "no-option", selector: fill.selector });
         continue;
       }
@@ -222,14 +243,28 @@ for (const fill of fills) {
     }
 
     if (role === "combobox" || role === "listbox") {
+      // A react-select renders no listbox until it is opened, so its choices
+      // cannot be read when the page is first scanned. Open it, read what is
+      // really there, then decide.
       await locator.click();
-      const option = page.getByRole("option", { name: new RegExp("^\\\\s*" + String(fill.value).replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&") + "\\\\s*$", "i") }).first();
-      if (await option.count() === 0) {
+      await page.waitForTimeout(150);
+      const live = await page.$$eval("[role=option]", (nodes) => nodes
+        .filter((node) => {
+          const box = node.getBoundingClientRect();
+          return box.width > 0 && box.height > 0;
+        })
+        .map((node) => (node.innerText || node.textContent || "").trim())
+        .filter(Boolean));
+      const wanted = matchOption(live, wantedList(fill));
+      if (wanted === undefined) {
         await page.keyboard.press("Escape").catch(() => undefined);
+        // Hand the real choices back so the caller can decide rather than
+        // guess. A closed set is the one place a model can safely pick.
+        offered.push({ options: live, selector: fill.selector });
         skipped.push({ reason: "no-option", selector: fill.selector });
         continue;
       }
-      await option.click();
+      await page.getByRole("option", { name: wanted, exact: true }).first().click();
       filled.push(fill.selector);
       continue;
     }
@@ -240,7 +275,7 @@ for (const fill of fills) {
     skipped.push({ reason: String(error && error.message || error).slice(0, 200), selector: fill.selector });
   }
 }
-return { filled, href: page.url(), skipped };
+return { filled, href: page.url(), offered, skipped };
 `;
 
 /**
@@ -260,6 +295,11 @@ ${domHelpers}
       const role = (node.getAttribute("role") || "").toLowerCase();
       const type = (node.getAttribute("type") || tagName).toLowerCase();
       if (type === "hidden" || type === "submit" || type === "button" || type === "image") return [];
+      // A combobox's inner typeahead input is part of the wrapper already
+      // collected, not a field of its own. Counted separately it becomes a
+      // required control with no label and nothing to ask about.
+      const owner = node.closest("[role=combobox], [role=listbox]");
+      if (owner && owner !== node) return [];
       if (!isRequired(node)) return [];
       let blank;
       if (type === "radio") {

@@ -204,6 +204,7 @@ async function setupStart() {
   await applyMigration(client, "0019_application_execution_traces.sql");
   await applyMigration(client, "0021_application_leases.sql");
   await applyMigration(client, "0022_application_runner.sql");
+  await applyMigration(client, "0023_little_sentinels.sql");
 
   const pgliteDatabase = drizzle(client, { schema });
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
@@ -301,7 +302,7 @@ describe("option-based questions", () => {
       ["Yes", "No"],
       "us_visa_no_sponsorship"
     );
-    expect(mapped.fills).toEqual([{ selector: "#q", value: "Yes" }]);
+    expect(mapped.fills).toMatchObject([{ selector: "#q", value: "Yes" }]);
     expect(mapped.unmapped).toEqual([]);
   });
 
@@ -311,7 +312,7 @@ describe("option-based questions", () => {
       ["Yes", "No"],
       "requires_sponsorship"
     );
-    expect(mapped.fills).toEqual([{ selector: "#q", value: "No" }]);
+    expect(mapped.fills).toMatchObject([{ selector: "#q", value: "No" }]);
   });
 
   it("still matches an option stated in the profile's own words", () => {
@@ -320,7 +321,9 @@ describe("option-based questions", () => {
       ["U.S. Citizen", "Permanent Resident", "Requires sponsorship"],
       "us_citizen"
     );
-    expect(mapped.fills).toEqual([{ selector: "#q", value: "U.S. Citizen" }]);
+    expect(mapped.fills).toMatchObject([
+      { selector: "#q", value: "U.S. Citizen" },
+    ]);
   });
 
   it("leaves a question it cannot answer for the candidate", () => {
@@ -405,5 +408,118 @@ describe("reading a control's label", () => {
     expect(script).not.toMatch(
       /closest\("fieldset, \[role=group\], \[role=radiogroup\], div"\)/u
     );
+  });
+});
+
+describe("closed-choice controls", () => {
+  const script = readFileSync(
+    "lib/application-runner/playwright-scripts.ts",
+    "utf8"
+  );
+
+  it("reads a combobox's options after opening it, not at scan time", () => {
+    // A react-select renders no listbox until opened, so scan-time options are
+    // empty and the profile's own wording was matched against nothing.
+    const combobox = script.slice(script.indexOf('role === "combobox"'));
+    expect(combobox).toContain("await locator.click()");
+    expect(combobox.indexOf("await locator.click()")).toBeLessThan(
+      combobox.indexOf('page.$$eval("[role=option]"')
+    );
+  });
+
+  it("never treats a combobox's inner input as its own field", () => {
+    expect(script).toContain('node.closest("[role=combobox], [role=listbox]")');
+  });
+
+  it("offers Yes as an alternative for an authorized candidate", () => {
+    const mapped = mapProfileToFormFields({
+      fields: [
+        {
+          label: "Are you authorized to work for any employer in the U.S?",
+          name: "q",
+          options: [],
+          required: true,
+          selector: "#q",
+          tag: "combobox",
+          type: "text",
+        },
+      ],
+      identity: { email: "ada@example.com", name: "Ada", phone: "" },
+      profile: { ...emptyCandidateProfile, workAuthorization: "us_citizen" },
+    });
+
+    // The control cannot be read until it opens, so the fill carries every
+    // phrasing that answers the question and matches against the live options.
+    expect(mapped.fills[0]?.alternatives).toContain("Yes");
+  });
+
+  it("offers No when the candidate needs sponsorship", () => {
+    const mapped = mapProfileToFormFields({
+      fields: [
+        {
+          label: "Will you now or in the future require sponsorship?",
+          name: "q",
+          options: [],
+          required: true,
+          selector: "#q",
+          tag: "combobox",
+          type: "text",
+        },
+      ],
+      identity: { email: "ada@example.com", name: "Ada", phone: "" },
+      profile: { ...emptyCandidateProfile, requiresSponsorshipNow: "no" },
+    });
+
+    expect(mapped.fills[0]?.value).toBe("No");
+  });
+});
+
+describe("contact email", () => {
+  const emailField = (label: string) => ({
+    label,
+    name: "email",
+    required: true,
+    selector: "#email",
+    tag: "input",
+    type: "text",
+  });
+
+  const fill = (label: string, identityEmail?: string) =>
+    mapProfileToFormFields({
+      fields: [emailField(label)],
+      identity: {
+        name: "Ada",
+        phone: "",
+        ...(identityEmail ? { email: identityEmail } : {}),
+      },
+      profile: { ...emptyCandidateProfile, contactEmail: "sathya@example.com" },
+    }).fills[0];
+
+  it("falls back to the profile when there is no verified login email", () => {
+    // An iMessage-only candidate has no Better Auth email, so this field had
+    // nothing to draw on and was asked for on every posting.
+    expect(fill("Email")?.value).toBe("sathya@example.com");
+  });
+
+  it("still prefers the verified address", () => {
+    expect(fill("Email", "verified@example.com")?.value).toBe(
+      "verified@example.com"
+    );
+  });
+
+  it("recognizes a control labelled E-mail", () => {
+    expect(fill("E-mail")?.value).toBe("sathya@example.com");
+  });
+
+  it("keeps an address the candidate typed", () => {
+    expect(
+      profilePatchForAnswer(emailField("Email"), "sathya@example.com")
+    ).toEqual({ contactEmail: "sathya@example.com" });
+  });
+
+  it("keeps nothing that is not an address", () => {
+    expect(
+      profilePatchForAnswer(emailField("Email"), "not an email")
+    ).toBeUndefined();
   });
 });

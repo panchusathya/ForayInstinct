@@ -101,6 +101,17 @@ describe("writing a partial profile", () => {
     });
   });
 
+  it("carries a contact email without making it block a start", () => {
+    // Better Auth may still supply a verified address, so an empty one here
+    // must never stop an application from starting.
+    expect(profilePatchOf({ contactEmail: "sathya@example.com" })).toEqual({
+      contactEmail: "sathya@example.com",
+    });
+    expect(missingProfileFields(emptyCandidateProfile)).not.toContain(
+      "contact email"
+    );
+  });
+
   it("keeps nothing from an empty or invalid patch", () => {
     expect(profilePatchOf({})).toBeUndefined();
     expect(

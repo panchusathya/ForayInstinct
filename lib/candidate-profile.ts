@@ -67,6 +67,13 @@ const workHistorySchema = z.array(workHistoryEntrySchema).max(30).catch([]);
 const educationSchema = z.array(educationEntrySchema).max(20).catch([]);
 
 export const candidateProfileSchema = z.object({
+  /**
+   * The address the candidate puts on applications. Separate from the Better
+   * Auth row on purpose: that one is a verified login identity, and a
+   * candidate who only ever texts has none, so a form's Email field had no
+   * value to draw on and was asked for on every posting.
+   */
+  contactEmail: boundedText(320),
   earliestStartDate: boundedText(80),
   education: educationSchema,
   headline: boundedText(200),

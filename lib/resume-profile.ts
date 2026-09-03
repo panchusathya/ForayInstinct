@@ -14,6 +14,7 @@ import {
  * application under the candidate's name.
  */
 const extractedSchema = z.object({
+  contactEmail: z.string().max(320).optional(),
   headline: z.string().max(200).optional(),
   legalFirstName: z.string().max(80).optional(),
   legalLastName: z.string().max(80).optional(),
@@ -39,7 +40,7 @@ const extractedSchema = z.object({
 
 const instructions = [
   "Read this resume and return the candidate's details as JSON.",
-  "Shape: { legalFirstName, legalLastName, headline, locationCity, locationRegion, locationCountryCode, linkedInUrl, workHistory: [{ company, title, startYear, endYear, current, location, description }] }.",
+  "Shape: { legalFirstName, legalLastName, contactEmail, headline, locationCity, locationRegion, locationCountryCode, linkedInUrl, workHistory: [{ company, title, startYear, endYear, current, location, description }] }.",
   "Omit any field the resume does not state. Never guess a value.",
   "Never infer work authorization, visa status, sponsorship, or anything about the candidate's legal right to work: a resume does not establish those.",
   "locationCountryCode is a two-letter ISO code. Years are four-digit numbers.",
@@ -87,6 +88,7 @@ function toProfilePatch(
 ): CandidateProfilePatch | undefined {
   const patch: Record<string, unknown> = {};
   for (const key of [
+    "contactEmail",
     "headline",
     "legalFirstName",
     "legalLastName",

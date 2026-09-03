@@ -88,9 +88,22 @@ async function applyFills(sessionId: string, fills: MappedFill[]) {
     applyFillsCode(fills),
     z.object({
       filled: z.array(z.string()),
+      offered: z
+        .array(z.object({ options: z.array(z.string()), selector: z.string() }))
+        .default([]),
       skipped: z.array(z.object({ reason: z.string(), selector: z.string() })),
     })
   );
+  // A control that refused every phrasing hands back the choices it does
+  // offer, so the caller can report what the page really asked rather than
+  // guessing at wording.
+  for (const control of applied?.offered ?? []) {
+    applicationExecutionLog({
+      event: "runner.option_mismatch",
+      options: control.options.slice(0, 12).join(" | "),
+      selector: control.selector,
+    });
+  }
   return applied?.skipped ?? [];
 }
 
@@ -295,7 +308,7 @@ export async function fillVisibleForm(
             ? `these required questions are still blank: ${asked.join("; ")}`
             : "",
           unreadable.length > 0
-            ? `${String(unreadable.length)} required field${unreadable.length === 1 ? "" : "s"} on the form carry no label I can read, so I cannot say what ${unreadable.length === 1 ? "it is" : "they are"} asking`
+            ? `${String(unreadable.length)} required ${unreadable.length === 1 ? "field carries" : "fields carry"} no label I can read, so I cannot say what ${unreadable.length === 1 ? "it is" : "they are"} asking`
             : "",
         ]
           .filter(Boolean)

@@ -414,6 +414,7 @@ export const candidateProfiles = pgTable(
   "candidate_profiles",
   {
     workspaceId: text("workspace_id").primaryKey(),
+    contactEmail: text("contact_email").notNull().default(""),
     legalFirstName: text("legal_first_name").notNull().default(""),
     legalLastName: text("legal_last_name").notNull().default(""),
     preferredName: text("preferred_name").notNull().default(""),

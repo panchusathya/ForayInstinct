@@ -162,6 +162,13 @@
       "when": 1788476500000,
       "tag": "0022_application_runner",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788400644289,
+      "tag": "0023_little_sentinels",
+      "breakpoints": true
     }
   ]
 }
