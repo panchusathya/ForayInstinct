@@ -299,6 +299,69 @@ describe("database services", () => {
     );
   }, 15_000);
 
+  it("keeps every answer a save did not mention", async () => {
+    // Every writer trimmed its patch to the keys it meant, and the service
+    // still re-parsed that patch through the partial schema, which filled in
+    // each default. Saving one answer therefore carried workAuthorization: ""
+    // over a real one, and the profile went backwards between applications.
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, candidateProfile] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/candidate-profile"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    await candidateProfile.saveCandidateProfile(alice, {
+      contactEmail: "alice@example.com",
+      requiresSponsorshipNow: "no",
+      workAuthorization: "us_citizen",
+    });
+    const afterName = await candidateProfile.saveCandidateProfile(alice, {
+      legalFirstName: "Ada",
+    });
+
+    expect(afterName.stored).toBe(true);
+    expect(afterName.profile).toMatchObject({
+      contactEmail: "alice@example.com",
+      legalFirstName: "Ada",
+      requiresSponsorshipNow: "no",
+      workAuthorization: "us_citizen",
+    });
+    // The column is read back, not only written: a stored email that never
+    // reaches the profile is reset to blank by the next unrelated save.
+    expect(await candidateProfile.readCandidateProfile(alice)).toMatchObject({
+      contactEmail: "alice@example.com",
+      workAuthorization: "us_citizen",
+    });
+
+    // A deliberate blank from the profile page still clears.
+    await candidateProfile.saveCandidateProfile(alice, {
+      workAuthorization: "",
+    });
+    expect(
+      (await candidateProfile.readCandidateProfile(alice)).workAuthorization
+    ).toBe("");
+
+    // An empty patch is a no-op and an invalid one is still an error.
+    const untouched = await candidateProfile.saveCandidateProfile(alice, {});
+    expect(untouched.profile.legalFirstName).toBe("Ada");
+    await expect(
+      candidateProfile.saveCandidateProfile(alice, {
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- deliberately invalid input
+        workAuthorization: "not-an-option" as "us_citizen",
+      })
+    ).rejects.toThrow(/invalid/iu);
+  }, 15_000);
+
   it("looks up Better Auth contact identity by phone scope", async () => {
     const client = new PGlite();
     databases.push(client);

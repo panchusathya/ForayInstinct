@@ -313,10 +313,25 @@ ${domHelpers}
       } else if (type === "checkbox") {
         blank = node.checked !== true;
       } else if (role === "combobox" || role === "listbox") {
-        // Whatever the widget shows once a choice is made. Reading it loosely
-        // risks calling a filled control blank, which would stall the run on a
-        // question the candidate has already answered.
-        blank = (node.value || node.innerText || node.textContent || "").trim() === "";
+        // Whatever the widget shows once a choice is made. A react-select keeps
+        // its typeahead input empty and paints the chosen option in a sibling,
+        // so the input alone reads blank forever and the run stalls on a
+        // question the candidate has already answered. Walk a few levels up
+        // and treat any text other than the label or a placeholder as a choice.
+        const own = (node.value || node.innerText || node.textContent || "").trim();
+        const label = labelFor(node).replace(/\\s+/g, " ").trim();
+        const placeholder = (node.getAttribute("placeholder") || "").trim();
+        let shown = "";
+        let ancestor = node.parentElement;
+        for (let depth = 0; ancestor && depth < 3 && shown === ""; depth += 1) {
+          shown = (ancestor.innerText || "").replace(/\\s+/g, " ").trim();
+          if (label && shown.startsWith(label)) shown = shown.slice(label.length).trim();
+          ancestor = ancestor.parentElement;
+        }
+        const chosen = shown !== ""
+          && shown !== placeholder
+          && !/^(select|choose|please select)\\b[\\s.…]*(an? |one )?(option)?\\.{0,3}$/i.test(shown);
+        blank = own === "" && !chosen;
       } else {
         blank = String(node.value || "").trim() === "";
       }

@@ -12,8 +12,10 @@ import { applicationExecutionLog } from "@/lib/application-execution";
 import { browserProvider } from "@/lib/browser";
 import { suggestUnmappedFills } from "@/lib/application-runner/ambiguous";
 import {
-  mapProfileToFormFields,
+  fillForAnswer,
   type MappedFill,
+  mapProfileToFormFields,
+  matchFieldByLabel,
   profilePatchForAnswer,
   type VisibleFormField,
 } from "@/lib/application-runner/form-map";
@@ -29,13 +31,23 @@ import { tryFillLoginFromVault } from "@/lib/application-runner/vault";
 import type {
   ApplicationPauseReason,
   ApplicationRunInput,
+  RunnerQuestion,
 } from "@/lib/application-runner/types";
-import { type CandidateProfile, profilePatchOf } from "@/lib/candidate-profile";
+import {
+  type CandidateProfile,
+  candidateProfileSummary,
+  profilePatchOf,
+} from "@/lib/candidate-profile";
 import { applicationPauseMessage } from "@/lib/task-completion";
 import { z } from "zod";
 
 export type FillStepResult =
-  | { applyUrl: string; pause: ApplicationPauseReason; message: string }
+  | {
+      applyUrl: string;
+      pause: ApplicationPauseReason;
+      message: string;
+      questions?: RunnerQuestion[];
+    }
   | { applyUrl: string; done: true; message: string }
   | { continue: true };
 
@@ -75,14 +87,17 @@ function hasReadableLabel(label: string) {
 }
 
 /**
- * Applies fills and returns the selectors the page refused.
+ * Applies fills and reports what the page refused.
  *
  * The script's report used to be discarded, which is how a form could be
  * offered for approval with a required question still blank: nothing ever
- * compared what was asked for against what took.
+ * compared what was asked for against what took. `refused` is the controls
+ * that matched none of the phrasings offered, each with the choices the page
+ * really has, so the question can go back to the candidate in the page's own
+ * words instead of ours.
  */
 async function applyFills(sessionId: string, fills: MappedFill[]) {
-  if (fills.length === 0) return [];
+  if (fills.length === 0) return { refused: [], skipped: [] };
   const applied = await parseResult(
     sessionId,
     applyFillsCode(fills),
@@ -94,9 +109,9 @@ async function applyFills(sessionId: string, fills: MappedFill[]) {
       skipped: z.array(z.object({ reason: z.string(), selector: z.string() })),
     })
   );
-  // A control that refused every phrasing hands back the choices it does
-  // offer, so the caller can report what the page really asked rather than
-  // guessing at wording.
+  const offered = new Map(
+    (applied?.offered ?? []).map((row) => [row.selector, row.options] as const)
+  );
   for (const control of applied?.offered ?? []) {
     applicationExecutionLog({
       event: "runner.option_mismatch",
@@ -104,11 +119,20 @@ async function applyFills(sessionId: string, fills: MappedFill[]) {
       selector: control.selector,
     });
   }
-  return applied?.skipped ?? [];
+  const skipped = applied?.skipped ?? [];
+  return {
+    refused: skipped
+      .filter((row) => row.reason === "no-option")
+      .map((row) => ({
+        options: offered.get(row.selector) ?? [],
+        selector: row.selector,
+      })),
+    skipped,
+  };
 }
 
 /**
- * Writes what the candidate just answered back onto their profile.
+ * Writes what the helper placed back onto the profile, without overwriting.
  *
  * Without this an answer lives only for the one pass it was given in: the next
  * round re-derives every value from the stored profile, finds the same gap,
@@ -117,7 +141,7 @@ async function applyFills(sessionId: string, fills: MappedFill[]) {
  *
  * Only fills the deterministic mapper could not place are considered, only
  * fields `profilePatchForAnswer` recognizes are kept, and a value already on
- * the profile is never overwritten — a form answer is weaker evidence than
+ * the profile is never overwritten — a helper's fill is weaker evidence than
  * something the candidate entered deliberately.
  */
 async function rememberAnswers(input: {
@@ -152,8 +176,56 @@ async function rememberAnswers(input: {
   await saveCandidateProfile(input.scope, stated).catch(() => undefined);
 }
 
+/**
+ * The candidate's own answers, keyed by the question the runner asked.
+ *
+ * This is the deterministic path an answer takes: the label finds the control
+ * on the fresh scan, the answer becomes a fill with every phrasing that means
+ * the same thing, and the fact it states goes onto the profile — overwriting,
+ * because the candidate just answered this exact question. No model sees it.
+ * An answer whose question is not on the page any more goes to the helper as
+ * plain text rather than being dropped.
+ */
+function answeredFills(
+  fields: VisibleFormField[],
+  answered: Record<string, string>
+) {
+  const fills: MappedFill[] = [];
+  const leftover: string[] = [];
+  const patch: Record<string, unknown> = {};
+  for (const [question, answer] of Object.entries(answered)) {
+    const value = answer.trim();
+    if (value === "") continue;
+    const field = matchFieldByLabel(fields, question);
+    const fill = field ? fillForAnswer(field, value) : undefined;
+    if (!field || !fill) {
+      leftover.push(`${question}: ${value}`);
+      continue;
+    }
+    fills.push(fill);
+    Object.assign(patch, profilePatchForAnswer(field, value) ?? {});
+  }
+  return { fills, leftover, patch };
+}
+
+/** Candidate-facing text for one question, with the page's choices if any. */
+function describeQuestion(question: RunnerQuestion) {
+  const options = question.options?.filter(Boolean).slice(0, 8) ?? [];
+  return options.length > 0
+    ? `${question.label} (${options.join(" / ")})`
+    : question.label;
+}
+
+function tidyLabel(label: string) {
+  return label.replace(/\s+/gu, " ").trim();
+}
+
 export async function fillVisibleForm(
-  input: ApplicationRunInput & { browserSessionId: string; answers?: string }
+  input: ApplicationRunInput & {
+    browserSessionId: string;
+    answered?: Record<string, string>;
+    answers?: string;
+  }
 ): Promise<FillStepResult> {
   const login = await parseResult(
     input.browserSessionId,
@@ -205,6 +277,9 @@ export async function fillVisibleForm(
     z.object({ fields: z.array(visibleFieldSchema) })
   );
   const fields: VisibleFormField[] = collected?.fields ?? [];
+  const bySelector = new Map(
+    fields.map((field) => [field.selector, field] as const)
+  );
   const [profile, identity] = await Promise.all([
     readCandidateProfile(input.scope),
     readCandidateContactIdentity(input.scope),
@@ -216,10 +291,28 @@ export async function fillVisibleForm(
     profile,
     resumePath: resume?.path,
   });
-  await applyFills(
-    input.browserSessionId,
-    mapped.fills.filter((fill) => !fill.value.startsWith("/tmp/"))
+
+  // The candidate's answers first. They outrank the profile for the control
+  // they name — the profile's value is what the page just refused — and they
+  // are kept, so the same question is never asked on the next posting.
+  const answered = answeredFills(fields, input.answered ?? {});
+  const answeredSelectors = new Set(
+    answered.fills.map((fill) => fill.selector)
   );
+  const statedByCandidate = profilePatchOf(answered.patch);
+  if (statedByCandidate) {
+    await saveCandidateProfile(input.scope, statedByCandidate).catch(
+      () => undefined
+    );
+  }
+
+  const report = await applyFills(input.browserSessionId, [
+    ...mapped.fills.filter(
+      (fill) =>
+        !fill.value.startsWith("/tmp/") && !answeredSelectors.has(fill.selector)
+    ),
+    ...answered.fills,
+  ]);
   for (const fill of mapped.fills.filter((row) =>
     row.value.startsWith("/tmp/")
   )) {
@@ -227,23 +320,46 @@ export async function fillVisibleForm(
       code: setFileInputCode(fill.selector, fill.value),
     });
   }
+
+  // A control that refused every phrasing is a question again, now carrying
+  // the choices the page really offers. Before, it vanished here: it was
+  // neither unmapped nor filled, so nothing ever asked about it and the run
+  // stalled on it round after round.
+  const refusedOptions = new Map(
+    report.refused.map((row) => [row.selector, row.options] as const)
+  );
+  const refused = report.refused.flatMap((row) => {
+    const field = bySelector.get(row.selector);
+    if (!field) return [];
+    return [
+      {
+        ...field,
+        options: row.options.length > 0 ? row.options : field.options,
+      },
+    ];
+  });
+  const seen = new Set<string>();
   // Only fields with wording worth showing a candidate. An unlabelled one has
   // no question for the helper to name, and its selector must never become one.
-  const askable = mapped.unmapped.filter((field) =>
-    hasReadableLabel(field.label)
-  );
+  const askable = [...mapped.unmapped, ...refused].filter((field) => {
+    if (
+      answeredSelectors.has(field.selector) &&
+      !refusedOptions.has(field.selector)
+    ) {
+      return false;
+    }
+    if (seen.has(field.selector)) return false;
+    seen.add(field.selector);
+    return hasReadableLabel(field.label);
+  });
+  const helperAnswers = [input.answers, ...answered.leftover]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
   if (askable.length > 0) {
     const helper = await suggestUnmappedFills({
-      answers: input.answers,
+      ...(helperAnswers ? { answers: helperAnswers } : {}),
       fields: askable,
-      profileSummary: [
-        profile.legalFirstName,
-        profile.legalLastName,
-        identity.email,
-        profile.locationCity,
-      ]
-        .filter(Boolean)
-        .join(" "),
+      profileSummary: candidateProfileSummary(profile, identity).text,
     });
     if (helper.fills.length > 0) {
       await applyFills(input.browserSessionId, helper.fills);
@@ -254,20 +370,13 @@ export async function fillVisibleForm(
         scope: input.scope,
       });
     }
-    if (helper.blocker && hasReadableLabel(helper.blocker)) {
-      return {
-        applyUrl: input.applyUrl,
-        message: applicationPauseMessage(
-          "user_input",
-          helper.blocker.replace(/^Needs user input:\s*/iu, "")
-        ),
-        pause: "user_input",
-      };
-    }
   }
+
   // Ask the page itself what is still blank. A control the mapper never saw,
   // or a value it would not accept, is invisible upstream — this is the only
-  // check that stands between an incomplete form and an approval prompt.
+  // check that stands between an incomplete form and an approval prompt, and
+  // it is the one source of the questions put to the candidate: every blank
+  // required control, once, with the page's own choices where it has them.
   const remaining = await parseResult(
     input.browserSessionId,
     collectEmptyRequiredFieldsCode,
@@ -275,10 +384,20 @@ export async function fillVisibleForm(
   );
   const stillEmpty = remaining?.empty ?? [];
   if (stillEmpty.length > 0) {
-    const asked = stillEmpty
-      .filter((field) => hasReadableLabel(field.label))
-      .map((field) => field.label.replace(/\s+/gu, " ").trim())
-      .slice(0, 5);
+    const questions: RunnerQuestion[] = [];
+    const labels = new Set<string>();
+    for (const field of stillEmpty) {
+      if (!hasReadableLabel(field.label)) continue;
+      const label = tidyLabel(field.label);
+      const key = label.toLowerCase();
+      if (labels.has(key)) continue;
+      labels.add(key);
+      const options =
+        refusedOptions.get(field.selector) ??
+        bySelector.get(field.selector)?.options ??
+        [];
+      questions.push(options.length > 0 ? { label, options } : { label });
+    }
     const unreadable = stillEmpty.filter(
       (field) => !hasReadableLabel(field.label)
     );
@@ -304,8 +423,8 @@ export async function fillVisibleForm(
       message: applicationPauseMessage(
         "user_input",
         [
-          asked.length > 0
-            ? `these required questions are still blank: ${asked.join("; ")}`
+          questions.length > 0
+            ? `these required questions are still blank: ${questions.map(describeQuestion).join("; ")}`
             : "",
           unreadable.length > 0
             ? `${String(unreadable.length)} required ${unreadable.length === 1 ? "field carries" : "fields carry"} no label I can read, so I cannot say what ${unreadable.length === 1 ? "it is" : "they are"} asking`
@@ -315,6 +434,7 @@ export async function fillVisibleForm(
           .join("; ") + "."
       ),
       pause: "user_input",
+      ...(questions.length > 0 ? { questions } : {}),
     };
   }
   await recordBrowserRunCheckpoint(input.scope, input.browserSessionId, {

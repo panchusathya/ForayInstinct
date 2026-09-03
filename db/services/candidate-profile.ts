@@ -9,6 +9,7 @@ import {
   type CandidateContactIdentity,
   type CandidateProfile,
   type CandidateProfilePatch,
+  profilePatchOf,
 } from "@/lib/candidate-profile";
 
 /**
@@ -34,16 +35,28 @@ export async function readCandidateProfile(
  * section must send the full array for that section or it would duplicate
  * positions. A failed write returns `{ stored: false }` rather than throwing:
  * an in-flight application must not die with the profile insert.
+ *
+ * Only the keys the caller stated are merged. Parsing the partial schema here
+ * used to fill in every `.default()`, so a one-field save arrived carrying
+ * `workAuthorization: ""` and cleared the answer the candidate had already
+ * given — the profile went backwards between applications no matter how
+ * carefully each caller had trimmed its patch. An invalid patch still throws;
+ * an empty one is a no-op.
  */
 export async function saveCandidateProfile(
   scope: AccessScope,
   patch: CandidateProfilePatch
 ): Promise<{ profile: CandidateProfile; stored: boolean }> {
   const stored = await readCandidateProfile(scope);
-  const parsedPatch = candidateProfilePatchSchema.parse(patch);
+  const stated = profilePatchOf(patch);
+  if (stated === undefined) {
+    // Surface the validation error itself rather than a silent no-op.
+    if (Object.keys(patch).length > 0) candidateProfilePatchSchema.parse(patch);
+    return { profile: stored, stored: true };
+  }
   const merged = candidateProfileSchema.parse({
     ...stored,
-    ...parsedPatch,
+    ...stated,
   });
   const now = new Date().toISOString();
   try {
@@ -91,6 +104,7 @@ export async function readCandidateContactIdentity(
 
 function parseStoredProfile(row: typeof candidateProfiles.$inferSelect) {
   return candidateProfileSchema.catch(emptyCandidateProfile).parse({
+    contactEmail: row.contactEmail,
     earliestStartDate: row.earliestStartDate,
     education: row.education,
     headline: row.headline,

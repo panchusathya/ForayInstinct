@@ -10,7 +10,9 @@ import {
   emptyCandidateProfile,
 } from "@/lib/candidate-profile";
 import {
+  fillForAnswer,
   mapProfileToFormFields,
+  matchFieldByLabel,
   profilePatchForAnswer,
   type VisibleFormField,
 } from "@/lib/application-runner/form-map";
@@ -521,5 +523,82 @@ describe("contact email", () => {
     expect(
       profilePatchForAnswer(emailField("Email"), "not an email")
     ).toBeUndefined();
+  });
+});
+
+describe("finding a question again by its label", () => {
+  const workAuthField: VisibleFormField = {
+    label: "Are you authorized to work for any employer in the U.S?*",
+    name: "q1",
+    options: [],
+    required: true,
+    selector: "(input)[7]",
+    tag: "combobox",
+    type: "text",
+  };
+  const linkedInField: VisibleFormField = {
+    label: "LinkedIn Profile*",
+    name: "q2",
+    required: true,
+    selector: "#linkedin",
+    tag: "input",
+    type: "text",
+  };
+  const fields = [workAuthField, linkedInField];
+
+  it("ignores asterisks, case, and spacing", () => {
+    expect(
+      matchFieldByLabel(
+        fields,
+        "are you authorized to work for any employer in the u.s"
+      )?.selector
+    ).toBe("(input)[7]");
+    expect(matchFieldByLabel(fields, "LinkedIn profile")?.selector).toBe(
+      "#linkedin"
+    );
+  });
+
+  it("refuses an ambiguous or unknown question", () => {
+    expect(matchFieldByLabel(fields, "Favorite color")).toBeUndefined();
+    expect(matchFieldByLabel(fields, "")).toBeUndefined();
+  });
+
+  it("turns an answer into a fill that bends onto the page's options", () => {
+    const yesNo = { ...workAuthField, options: ["Yes", "No"] };
+
+    expect(fillForAnswer(yesNo, "I am a U.S. citizen")).toMatchObject({
+      selector: "(input)[7]",
+      value: "Yes",
+    });
+    expect(fillForAnswer(workAuthField, "Yes")?.alternatives).toContain(
+      "U.S. Citizen"
+    );
+    expect(fillForAnswer(linkedInField, "  ")).toBeUndefined();
+  });
+});
+
+describe("a now-or-future sponsorship answer", () => {
+  const field = {
+    label:
+      "Will you now or in the future require sponsorship for employment visa status?",
+    name: "q3",
+    required: true,
+    selector: "#sponsor",
+    tag: "combobox",
+    type: "text",
+  };
+
+  it("settles both facts on a no", () => {
+    expect(profilePatchForAnswer(field, "No")).toEqual({
+      requiresSponsorshipFuture: "no",
+      requiresSponsorshipNow: "no",
+    });
+  });
+
+  it("commits only to the future on a yes", () => {
+    // Needing sponsorship later says nothing about needing it today.
+    expect(profilePatchForAnswer(field, "Yes")).toEqual({
+      requiresSponsorshipFuture: "yes",
+    });
   });
 });

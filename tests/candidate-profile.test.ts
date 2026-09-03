@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  candidateProfilePatchSchema,
   candidateProfileSchema,
   candidateProfileSummary,
   emptyCandidateProfile,
@@ -87,6 +88,25 @@ describe("writing a partial profile", () => {
     expect(patch).toEqual({ legalFirstName: "Sathya" });
     expect(Object.keys(patch ?? {})).not.toContain("workAuthorization");
     expect(Object.keys(patch ?? {})).not.toContain("salaryCurrency");
+  });
+
+  it("pins why the partial schema alone cannot be trusted", () => {
+    // This is the behaviour the guard exists for. If zod ever stops filling
+    // defaults into a partial, the guard becomes redundant rather than wrong,
+    // and this test says so instead of leaving the reasoning implicit.
+    const inflated = candidateProfilePatchSchema.parse({ legalFirstName: "x" });
+
+    expect(inflated).toHaveProperty("workAuthorization", "");
+    expect(inflated).toHaveProperty("requiresSponsorshipNow", "");
+  });
+
+  it("treats a key carrying undefined as unstated", () => {
+    // The schema hands such a key its default, and that default would then be
+    // merged over a stored answer exactly like an explicit blank.
+    expect(profilePatchOf({ workAuthorization: undefined })).toBeUndefined();
+    expect(
+      profilePatchOf({ legalFirstName: "Sathya", workAuthorization: undefined })
+    ).toEqual({ legalFirstName: "Sathya" });
   });
 
   it("keeps a value the candidate did state", () => {

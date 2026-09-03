@@ -150,6 +150,7 @@ export async function startApplication(input: {
       executionId: id,
       message: outcome.message,
       pause: outcome.pause,
+      ...(outcome.questions ? { questions: outcome.questions } : {}),
       status: "waiting",
     };
   }

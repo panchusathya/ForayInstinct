@@ -22,10 +22,24 @@ export interface ApplicationRunInput {
   applyUrl: string;
   company: string;
   executionId: string;
+  /** The candidate's answers keyed by the question label the runner asked. */
+  resumeAnswered?: Record<string, string>;
+  /** Free-text answers with no question attached; only the helper reads them. */
   resumeAnswers?: string;
   role: string;
   rootSessionId: string;
   scope: AccessScope;
+}
+
+/**
+ * One question the page still needs answered, as the runner will recognize it
+ * again: the exact label, and the choices the control offers when it is a
+ * closed set. The coordinator asks these all at once and hands the answers
+ * back keyed by `label`.
+ */
+export interface RunnerQuestion {
+  label: string;
+  options?: string[];
 }
 
 export type ApplicationRunResult =
@@ -54,6 +68,7 @@ export type ApplicationRunResult =
       executionId: string;
       message: string;
       pause: ApplicationPauseReason;
+      questions?: RunnerQuestion[];
       status: "waiting";
     }
   | {

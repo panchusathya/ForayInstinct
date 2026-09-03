@@ -24,6 +24,7 @@ export async function runApplicationUntilPause(input: ApplicationRunInput) {
         });
   const filled = await fillVisibleForm({
     ...input,
+    answered: input.resumeAnswered,
     answers: input.resumeAnswers,
     browserSessionId: browser.session_id,
   });

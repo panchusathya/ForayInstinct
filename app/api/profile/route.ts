@@ -14,8 +14,8 @@ import { ensureScope } from "@/db/services/scope";
 import { readWorkspaceKernelProfileId } from "@/db/services/workspaces";
 import { browserProvider, isGatewayProvider } from "@/lib/browser";
 import {
-  candidateProfilePatchSchema,
   candidateProfileResponseSchema,
+  profilePatchOf,
 } from "@/lib/candidate-profile";
 import {
   clearWorkspaceBrowserState,
@@ -26,10 +26,15 @@ import { deleteKernelBrowserProfile } from "@/lib/manager/server/kernel-profile"
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+// The profile is validated by `profilePatchOf` below, which keeps only the keys
+// the page actually sent. Parsing `candidateProfilePatchSchema` here instead
+// would fill in every default and turn a section save into a full overwrite —
+// a column the page has no input for, such as the contact email, came back
+// blank on every save.
 const mutationSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("save"),
-    profile: candidateProfilePatchSchema,
+    profile: z.record(z.string(), z.unknown()),
   }),
   z.object({ action: z.literal("sign_out_everywhere") }),
 ]);
@@ -68,7 +73,11 @@ export async function POST(request: Request) {
         headers: { "Cache-Control": "no-store" },
       });
     }
-    const saved = await saveCandidateProfile(scope, mutation.profile);
+    const patch = profilePatchOf(mutation.profile);
+    if (patch === undefined && Object.keys(mutation.profile).length > 0) {
+      return profileError("Could not save profile.");
+    }
+    const saved = await saveCandidateProfile(scope, patch ?? {});
     if (!saved.stored) {
       return profileError("Could not save profile.");
     }
