@@ -88,15 +88,46 @@ function consentQuestion(key: string) {
   );
 }
 
+/**
+ * A voluntary disclosure with no stored answer to draw on. "Do you identify as
+ * transgender?" contains the word gender but is a different question, and the
+ * candidate's gender must never be offered as its answer; it is declined like
+ * any other EEO question the candidate has not chosen to answer.
+ */
+function voluntaryDisclosure(key: string) {
+  return /transgender|sexual orientation|lgbt/u.test(key);
+}
+
 /** The four voluntary EEO fields, and which stored answer belongs to each. */
 function selfIdentificationKey(
   key: string
 ): keyof SelfIdentification | undefined {
+  if (voluntaryDisclosure(key)) return undefined;
   if (/disab/u.test(key)) return "disabilityStatus";
   if (/veteran/u.test(key)) return "veteranStatus";
-  if (/race|ethnic/u.test(key)) return "raceEthnicity";
+  // "Are you Hispanic or Latino?" is the EEO-1 ethnicity question asked on its
+  // own; without this it read as an ordinary required question and stalled.
+  if (/race|ethnic|hispanic|latin/u.test(key)) return "raceEthnicity";
   if (/gender|\bsex\b/u.test(key)) return "gender";
   return undefined;
+}
+
+/**
+ * A question about the candidate's state or province, as opposed to one that
+ * merely mentions the United States. "Are you legally authorized to work in
+ * the United States?" matched the State field first, so the profile's region
+ * was offered as the answer and a Yes typed by the candidate was then stored
+ * as their state.
+ */
+function asksForRegion(key: string) {
+  return /\b(state|region|province)\b/u.test(
+    key.replace(/united states( of america)?|\bu ?s ?a?\b/gu, " ")
+  );
+}
+
+/** Whether a file control is asking for the resume, by its own wording. */
+function asksForResume(field: VisibleFormField) {
+  return /resume|\bcv\b|curriculum/u.test(normalize(field.label, field.name));
 }
 
 /**
@@ -113,11 +144,17 @@ export function mapProfileToFormFields(input: {
 }): { fills: MappedFill[]; unmapped: VisibleFormField[] } {
   const fills: MappedFill[] = [];
   const unmapped: VisibleFormField[] = [];
+  const isFile = (field: VisibleFormField) =>
+    field.tag === "file" || field.type === "file";
+  const fileFields = input.fields.filter(isFile);
   for (const field of input.fields) {
-    if (field.tag === "file" || field.type === "file") {
-      if (input.resumePath) {
+    if (isFile(field)) {
+      // The resume goes to the control asking for it, or to the only file
+      // control on the form. A cover letter slot is not a place for it.
+      const wantsResume = asksForResume(field) || fileFields.length === 1;
+      if (input.resumePath && wantsResume) {
         fills.push({ selector: field.selector, value: input.resumePath });
-      } else {
+      } else if (field.required) {
         unmapped.push(field);
       }
       continue;
@@ -185,13 +222,8 @@ export function profilePatchForAnswer(
       ? { contactEmail: value }
       : undefined;
   }
-  if (/city/u.test(key)) return { locationCity: value };
-  if (/state|region|province/u.test(key)) return { locationRegion: value };
-  if (/zip|postal/u.test(key)) return { locationPostalCode: value };
-  if (/headline|title/u.test(key)) return { headline: value };
-  if (/start.?date|earliest.?start|available/u.test(key)) {
-    return { earliestStartDate: value };
-  }
+  // Work status before location, in the same order `valueForField` reads
+  // them: an authorization question mentions the country it is about.
   if (/sponsor/u.test(key)) {
     const answered = yesNoFromAnswer(value);
     if (!answered) return undefined;
@@ -211,6 +243,13 @@ export function profilePatchForAnswer(
   if (/authoriz|work.?eligib|citizenship/u.test(key)) {
     const authorization = workAuthorizationFromAnswer(value);
     return authorization ? { workAuthorization: authorization } : undefined;
+  }
+  if (/city/u.test(key)) return { locationCity: value };
+  if (asksForRegion(key)) return { locationRegion: value };
+  if (/zip|postal/u.test(key)) return { locationPostalCode: value };
+  if (/headline|title/u.test(key)) return { headline: value };
+  if (/start.?date|earliest.?start|available/u.test(key)) {
+    return { earliestStartDate: value };
   }
   if (/salary|compensation|pay.?expect/u.test(key)) {
     const digits = value.replace(/[^0-9]/gu, "");
@@ -337,6 +376,7 @@ function valueForField(
   // communications via SMS" fell through to nothing and stopped the run.
   const eeoField = selfIdentificationKey(key);
   if (eeoField) return selfIdentification[eeoField] ?? declineOptions[0];
+  if (voluntaryDisclosure(key)) return declineOptions[0];
   if (consentQuestion(key)) return "Yes";
   // `normalize` turns "E-mail" into "e mail", so match both spellings. The
   // verified auth address wins; the profile one is the fallback for a
@@ -361,8 +401,18 @@ function valueForField(
       .filter(Boolean)
       .join(" ");
   }
+  // Work status before location: "authorized to work in the United States"
+  // and "in the country where this role is located" are about authorization,
+  // not an address, and the first of those used to be answered with a state.
+  if (/sponsor/u.test(key)) {
+    return yesNo(profile.requiresSponsorshipNow);
+  }
+  if (/authoriz|work.?eligib|citizenship/u.test(key)) {
+    return workAuthorizationLabels[profile.workAuthorization];
+  }
+  if (/relocat/u.test(key)) return yesNo(profile.willingToRelocate);
   if (/city/u.test(key)) return profile.locationCity;
-  if (/state|region|province/u.test(key)) return profile.locationRegion;
+  if (asksForRegion(key)) return profile.locationRegion;
   if (/zip|postal/u.test(key)) return profile.locationPostalCode;
   if (/country/u.test(key)) return profile.locationCountryCode;
   if (/linkedin/u.test(key)) {
@@ -374,13 +424,6 @@ function valueForField(
     return profile.links.find((link) => /github/iu.test(link.label + link.url))
       ?.url;
   }
-  if (/sponsor/u.test(key)) {
-    return yesNo(profile.requiresSponsorshipNow);
-  }
-  if (/authoriz|work.?eligib|citizenship/u.test(key)) {
-    return workAuthorizationLabels[profile.workAuthorization];
-  }
-  if (/relocat/u.test(key)) return yesNo(profile.willingToRelocate);
   if (/start.?date|earliest.?start|available/u.test(key)) {
     return profile.earliestStartDate;
   }
@@ -412,7 +455,7 @@ function alternativesFor(field: VisibleFormField, value: string) {
   }
   // Every page words these differently and the scan often cannot read the
   // options until the control is opened, so carry all of them.
-  if (selfIdentificationKey(key)) {
+  if (selfIdentificationKey(key) || voluntaryDisclosure(key)) {
     for (const option of declineOptions) alternatives.add(option);
   }
   if (consentQuestion(key)) {

@@ -423,8 +423,8 @@ describe("closed-choice controls", () => {
     // A react-select renders no listbox until opened, so scan-time options are
     // empty and the profile's own wording was matched against nothing.
     const combobox = script.slice(script.indexOf('role === "combobox"'));
-    expect(combobox).toContain("await locator.click()");
-    expect(combobox.indexOf("await locator.click()")).toBeLessThan(
+    expect(combobox).toContain("await locator.click(");
+    expect(combobox.indexOf("await locator.click(")).toBeLessThan(
       combobox.indexOf('page.$$eval("[role=option]"')
     );
   });
@@ -693,15 +693,38 @@ describe("a select-like widget's inner input", () => {
     "utf8"
   );
 
-  it("is skipped by both scans, whatever shape it takes", () => {
-    // Ten unlabelled required controls came from one react-select-based form:
-    // plain inputs with aria-autocomplete and a generated id, carrying no
-    // role at all, so the role-only guard never saw them.
-    expect(scripts).toContain('node.hasAttribute("aria-autocomplete")');
-    expect(scripts).toContain('/^react-select/.test(node.id || "")');
+  it("is skipped by both scans only when another element owns the combobox role", () => {
+    // A react-select puts role=combobox on its typeahead input: that input is
+    // the widget. A rule that skipped every input with aria-autocomplete
+    // removed every dropdown on the DoorDash form from both scans at once, so
+    // nothing filled them and nothing reported them blank, and the form went
+    // to the candidate for approval with all of them empty.
+    expect(scripts).not.toContain('hasAttribute("aria-autocomplete")');
+    expect(scripts).not.toContain("/^react-select/");
     expect(
-      scripts.match(/if \(isComboboxInner\(node\)\) return \[\];/gu)
+      scripts.match(/if \(isWidgetInterior\(node\)\) return \[\];/gu)
     ).toHaveLength(2);
+  });
+
+  it("never counts a control the page hides from assistive technology", () => {
+    // The ten unlabelled required controls were react-select's invisible
+    // <input required aria-hidden>, rendered beside each required select with
+    // no value purely for constraint validation.
+    expect(scripts).toContain('node.getAttribute("aria-hidden") === "true"');
+    expect(
+      scripts.match(/if \(!candidateFacing\(node\)\) return \[\];/gu)
+    ).toHaveLength(2);
+  });
+
+  it("types into a typeahead that opens empty, then chooses a suggestion", () => {
+    // Greenhouse's Location (City) shows nothing until something is typed, so
+    // opening it and reading the list found no option on every run.
+    const combobox = scripts.slice(scripts.indexOf('role === "combobox"'));
+    const opened = combobox.indexOf("const shown = await liveOptions()");
+    const typed = combobox.indexOf("await box.fill(value)");
+    expect(opened).toBeGreaterThan(-1);
+    expect(typed).toBeGreaterThan(opened);
+    expect(combobox).toContain("shown.length === 0");
   });
 });
 
@@ -748,5 +771,140 @@ describe("a link the candidate types once", () => {
 
   it("keeps nothing that is not a link", () => {
     expect(profilePatchForAnswer(field, "ask me later")).toBeUndefined();
+  });
+});
+
+describe("a Greenhouse form, as the DoorDash run saw it", () => {
+  const combobox = (
+    label: string,
+    selector: string,
+    required = true
+  ): VisibleFormField => ({
+    label,
+    name: "",
+    options: [],
+    required,
+    selector,
+    tag: "combobox",
+    type: "text",
+  });
+  const identity = { email: "ada@example.com", name: "Ada", phone: "" };
+  const profile: CandidateProfile = {
+    ...emptyCandidateProfile,
+    locationCity: "San Francisco",
+    locationRegion: "CA",
+    requiresSponsorshipNow: "no",
+    workAuthorization: "us_citizen",
+  };
+
+  it("answers an authorization question about the United States with Yes, not a state", () => {
+    // "United States" matched the State field first, so the region was
+    // offered as the answer to whether the candidate may work here.
+    const { fills } = mapProfileToFormFields({
+      fields: [
+        combobox(
+          "Are you legally authorized to work in the United States?*",
+          "#q"
+        ),
+      ],
+      identity,
+      profile,
+    });
+
+    expect(fills[0]?.value).toBe("U.S. Citizen");
+    expect(fills[0]?.alternatives).toContain("Yes");
+    expect(fills[0]?.value).not.toBe("CA");
+  });
+
+  it("never stores a Yes to that question as the candidate's state", () => {
+    const field = combobox(
+      "Are you legally authorized to work in the United States?*",
+      "#q"
+    );
+
+    expect(profilePatchForAnswer(field, "Yes")).toEqual({
+      workAuthorization: "us_visa_no_sponsorship",
+    });
+    expect(profilePatchForAnswer(combobox("State*", "#s"), "CA")).toEqual({
+      locationRegion: "CA",
+    });
+  });
+
+  it("declines the Hispanic or Latino question like the rest of the EEO section", () => {
+    const { fills, unmapped } = mapProfileToFormFields({
+      fields: [combobox("Are you Hispanic or Latinx?*", "#q")],
+      identity,
+      profile,
+    });
+
+    expect(unmapped).toEqual([]);
+    expect(fills[0]?.alternatives).toContain("I don't wish to answer");
+  });
+
+  it("never offers the candidate's gender as the answer to a transgender question", () => {
+    const { fills } = mapProfileToFormFields({
+      fields: [combobox("Do you identify as transgender?*", "#q")],
+      identity,
+      profile,
+      selfIdentification: { gender: "Female" },
+    });
+
+    expect(fills[0]?.value).toBe("Decline to self identify");
+    expect(fills[0]?.alternatives).not.toContain("Female");
+  });
+
+  it("puts the resume on the control asking for it, never in the cover letter slot", () => {
+    const file = (label: string, selector: string, required: boolean) => ({
+      label,
+      name: "",
+      required,
+      selector,
+      tag: "file",
+      type: "file",
+    });
+    const { fills, unmapped } = mapProfileToFormFields({
+      fields: [
+        file("Resume/CV*", "#resume", true),
+        file("Cover Letter", "#cover_letter", false),
+      ],
+      identity,
+      profile,
+      resumePath: "/tmp/goforay-default-resume-ada.pdf",
+    });
+
+    expect(fills).toEqual([
+      { selector: "#resume", value: "/tmp/goforay-default-resume-ada.pdf" },
+    ]);
+    expect(unmapped).toEqual([]);
+  });
+
+  it("collects a file input the page hides behind an Attach button", () => {
+    // Greenhouse never draws the file input, so a scan that only saw visible
+    // controls never attached the resume and never noticed it was missing.
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    expect(scripts).toContain(
+      "const candidateFacing = (node) => !assistiveHidden(node) && (isFileInput(node) || visible(node));"
+    );
+    expect(scripts).toContain(
+      "blank = !(node.files && node.files.length > 0);"
+    );
+  });
+});
+
+describe("the submit click", () => {
+  it("prefers the form's own submit control over any button named Apply", () => {
+    // The DoorDash submit reported clicked: true, navigated: false, errors:
+    // none. A posting page can carry other buttons whose names say Apply, and
+    // `.first()` on the name match takes whichever comes first in the DOM.
+    expect(clickSubmitCode).toContain("form button[type=submit]");
+    expect(clickSubmitCode.indexOf("form button[type=submit]")).toBeLessThan(
+      clickSubmitCode.indexOf("/apply|send application/i")
+    );
+    expect(
+      clickSubmitCode.indexOf("/submit application|submit/i")
+    ).toBeLessThan(clickSubmitCode.indexOf("/apply|send application/i"));
   });
 });
