@@ -14,6 +14,7 @@ const applicationEnvironment = [
   "NODE_ENV",
   "OPENINSTINCT_SHARED_SECRET",
   "SECRET_ENCRYPTION_KEY",
+  "VERCEL_DEPLOYMENT_ID",
   "VERCEL_ENV",
 ];
 

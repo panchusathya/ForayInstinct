@@ -18,9 +18,10 @@ vi.mock("@/lib/eve-client", () => ({
 import {
   LINQ_SESSION_IDLE_MS,
   isLinqSessionIdle,
+  isLinqSessionOnCurrentBuild,
   readLinqSessionActivity,
   rememberLinqSessionActivity,
-  rollOverIdleLinqSession,
+  rollOverStaleLinqSession,
 } from "@/agent/lib/linq-session-rollover";
 
 function fakeThread(initial: Record<string, unknown> = {}) {
@@ -47,7 +48,7 @@ beforeEach(() => {
   mocks.reset.mockResolvedValue({ status: "reset" });
 });
 
-describe("Linq idle session rollover", () => {
+describe("Linq stale session rollover", () => {
   it("remembers which session answered the thread and when", async () => {
     const thread = fakeThread();
     await rememberLinqSessionActivity(thread, { id: "session-1" }, now);
@@ -76,16 +77,16 @@ describe("Linq idle session rollover", () => {
   it("retires an idle session so the next message starts fresh", async () => {
     const thread = fakeThread();
     await rememberLinqSessionActivity(thread, { id: "session-1" }, longAgo);
-    expect(await rollOverIdleLinqSession(thread, now)).toBe("rolled_over");
+    expect(await rollOverStaleLinqSession(thread, now)).toBe("rolled_over");
     expect(mocks.reset).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a recent session, an unknown thread, and a session with a parked worker", async () => {
-    expect(await rollOverIdleLinqSession(fakeThread(), now)).toBe("none");
+    expect(await rollOverStaleLinqSession(fakeThread(), now)).toBe("none");
 
     const recent = fakeThread();
     await rememberLinqSessionActivity(recent, { id: "session-1" }, now);
-    expect(await rollOverIdleLinqSession(recent, now)).toBe("kept");
+    expect(await rollOverStaleLinqSession(recent, now)).toBe("kept");
 
     // A worker waiting on this candidate's approval must still be reachable
     // when they finally reply, however long that takes — unfinished
@@ -93,7 +94,7 @@ describe("Linq idle session rollover", () => {
     mocks.hasUnfinishedApplicationExecution.mockResolvedValueOnce(true);
     const parked = fakeThread();
     await rememberLinqSessionActivity(parked, { id: "session-1" }, longAgo);
-    expect(await rollOverIdleLinqSession(parked, now)).toBe("kept");
+    expect(await rollOverStaleLinqSession(parked, now)).toBe("kept");
     expect(mocks.reset).not.toHaveBeenCalled();
   });
 
@@ -104,13 +105,90 @@ describe("Linq idle session rollover", () => {
       .mockImplementation(() => undefined);
     const thread = fakeThread();
     await rememberLinqSessionActivity(thread, { id: "session-1" }, longAgo);
-    expect(await rollOverIdleLinqSession(thread, now)).toBe("kept");
+    expect(await rollOverStaleLinqSession(thread, now)).toBe("kept");
     errorSpy.mockRestore();
+  });
+
+  it("retires a session whose deployment has been replaced, however recent", async () => {
+    // A durable run executes the code of the deployment that started it, so
+    // without this a shipped fix never reaches a thread already talking and
+    // the candidate keeps hitting a bug that was fixed hours ago.
+    const thread = fakeThread();
+    await rememberLinqSessionActivity(
+      thread,
+      { id: "session-1" },
+      now,
+      "dpl_old"
+    );
+
+    expect(await rollOverStaleLinqSession(thread, now, "dpl_new")).toBe(
+      "rolled_over"
+    );
+    expect(mocks.reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a session on the build that is still deployed", async () => {
+    const thread = fakeThread();
+    await rememberLinqSessionActivity(
+      thread,
+      { id: "session-1" },
+      now,
+      "dpl_a"
+    );
+
+    expect(await rollOverStaleLinqSession(thread, now, "dpl_a")).toBe("kept");
+    expect(mocks.reset).not.toHaveBeenCalled();
+  });
+
+  it("keeps a session a worker is parked on even when the build moved", async () => {
+    // The browser holds a filled form. A new deployment is never worth
+    // destroying the candidate's completed application for.
+    const thread = fakeThread();
+    await rememberLinqSessionActivity(
+      thread,
+      { id: "session-1" },
+      now,
+      "dpl_old"
+    );
+    mocks.hasUnfinishedApplicationExecution.mockResolvedValueOnce(true);
+
+    expect(await rollOverStaleLinqSession(thread, now, "dpl_new")).toBe("kept");
+    expect(mocks.reset).not.toHaveBeenCalled();
+  });
+
+  it("never retires on a guess when either build is unknown", async () => {
+    // A thread from before the build was recorded, and any run off Vercel.
+    expect(
+      isLinqSessionOnCurrentBuild(
+        { lastActivityAt: now.toISOString(), sessionId: "s" },
+        "dpl_new"
+      )
+    ).toBe(true);
+    expect(
+      isLinqSessionOnCurrentBuild(
+        {
+          buildId: "dpl_old",
+          lastActivityAt: now.toISOString(),
+          sessionId: "s",
+        },
+        undefined
+      )
+    ).toBe(true);
+
+    const thread = fakeThread();
+    await rememberLinqSessionActivity(
+      thread,
+      { id: "session-1" },
+      now,
+      undefined
+    );
+    expect(await rollOverStaleLinqSession(thread, now, "dpl_new")).toBe("kept");
+    expect(mocks.reset).not.toHaveBeenCalled();
   });
 
   it("runs before every inbound send in the Linq channel", () => {
     const channel = readFileSync("agent/channels/linq-v2.ts", "utf8");
-    expect(channel.match(/rollOverIdleLinqSession\(thread\)/gu)).toHaveLength(
+    expect(channel.match(/rollOverStaleLinqSession\(thread\)/gu)).toHaveLength(
       2
     );
     expect(

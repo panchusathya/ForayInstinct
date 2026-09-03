@@ -78,7 +78,7 @@ describe("the Linq inbound path", () => {
     for (const step of [
       'bot.getAdapter("linq").markRead(thread.id, message.id)',
       'reactToLinqMessage(thread, message.id, "👍")',
-      "rollOverIdleLinqSession(thread)",
+      "rollOverStaleLinqSession(thread)",
     ]) {
       const sites = [...channel.matchAll(new RegExp(escapeRegExp(step), "gu"))];
       expect(sites.length).toBeGreaterThan(0);

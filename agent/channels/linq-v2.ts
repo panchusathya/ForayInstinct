@@ -64,7 +64,7 @@ import { getVercelOidcToken } from "@vercel/oidc";
 import { findRestartableApplicationExecutions } from "@/db/services/application-executions";
 import {
   rememberLinqSessionActivity,
-  rollOverIdleLinqSession,
+  rollOverStaleLinqSession,
 } from "../lib/linq-session-rollover";
 import {
   renderInputRequestText,
@@ -630,7 +630,7 @@ async function dispatchLinqJobCardTapback(event: ReactionEvent) {
     // reaction webhook, and an idle reset that never settles would spend the
     // whole function budget before the application is ever started.
     await withTimeout(
-      () => rollOverIdleLinqSession(thread),
+      () => rollOverStaleLinqSession(thread),
       INBOUND_STEP_TIMEOUT_MS,
       "kept" as const
     );
@@ -766,7 +766,7 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
   // every call, and the current deployment's instructions.
   await inboundStep("rollover", message.id, () =>
     withTimeout(
-      () => rollOverIdleLinqSession(thread),
+      () => rollOverStaleLinqSession(thread),
       INBOUND_STEP_TIMEOUT_MS,
       "kept" as const
     )
