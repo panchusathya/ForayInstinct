@@ -156,11 +156,17 @@ export function mapProfileToFormFields(input: {
  */
 export function profilePatchForAnswer(
   field: VisibleFormField,
-  answer: string
+  answer: string,
+  profile?: CandidateProfile
 ): CandidateProfilePatch | undefined {
   const value = answer.trim();
   if (value === "") return undefined;
   const key = normalize(field.label, field.name, field.type);
+  // A profile link is read from the profile on every fill but was never
+  // written back from an answer, so "LinkedIn Profile" was asked on every
+  // posting forever however many times the candidate typed it.
+  const linkLabel = profileLinkLabel(key);
+  if (linkLabel) return linkPatch(linkLabel, value, profile);
   if (/password|ssn|social.?security|date.?of.?birth|birth.?date/u.test(key)) {
     return undefined;
   }
@@ -261,6 +267,35 @@ export function fillForAnswer(
     selector: field.selector,
     value: resolved,
   };
+}
+
+/** The kind of link a question is asking for, if it is asking for one. */
+function profileLinkLabel(key: string) {
+  if (/linkedin/u.test(key)) return "LinkedIn";
+  if (/github/u.test(key)) return "GitHub";
+  if (/portfolio|personal (site|website)|website|url/u.test(key)) {
+    return "Portfolio";
+  }
+  return undefined;
+}
+
+/**
+ * The candidate's links with this one added or replaced.
+ *
+ * A save replaces the whole array, so the existing links have to be carried
+ * through here or answering one question would delete the rest.
+ */
+function linkPatch(
+  label: string,
+  value: string,
+  profile: CandidateProfile | undefined
+): CandidateProfilePatch | undefined {
+  const url = /^https?:\/\//iu.test(value) ? value : `https://${value}`;
+  if (!/^https?:\/\/[^\s.]+\.[^\s]{2,}$/iu.test(url)) return undefined;
+  const existing = (profile?.links ?? []).filter(
+    (link) => link.label.toLowerCase() !== label.toLowerCase()
+  );
+  return { links: [...existing, { label, url }] };
 }
 
 function yesNoFromAnswer(value: string): "yes" | "no" | undefined {

@@ -48,6 +48,26 @@ export async function continueApplication(input: {
     };
   }
   if (input.approved === true && run.browserSessionId) {
+    // Answers first, approval second. Approval used to short-circuit straight
+    // to the click, so replies sent in the same breath as a yes were dropped
+    // and the form was submitted exactly as incomplete as it had just been
+    // reported. Filling first also refreshes the page's own blank check, which
+    // is what stops a submit the page would only refuse.
+    if (answered || input.answers) {
+      const filled = await runApplicationUntilPause({
+        applyUrl,
+        company: run.company,
+        executionId: run.id,
+        ...(answered ? { resumeAnswered: answered } : {}),
+        ...(input.answers ? { resumeAnswers: input.answers } : {}),
+        role: run.role,
+        rootSessionId: run.rootSessionId,
+        scope: input.scope,
+      });
+      // Still short, or now waiting on the review it just captured: either way
+      // the candidate has something to see before anything is sent.
+      if ("pause" in filled && filled.pause === "user_input") return filled;
+    }
     return submitApplication({
       applyUrl,
       browserSessionId: run.browserSessionId,

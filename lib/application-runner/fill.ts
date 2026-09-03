@@ -159,7 +159,7 @@ async function rememberAnswers(input: {
   for (const fill of input.fills) {
     const field = bySelector.get(fill.selector);
     if (!field) continue;
-    const candidate = profilePatchForAnswer(field, fill.value);
+    const candidate = profilePatchForAnswer(field, fill.value, input.profile);
     if (!candidate) continue;
     for (const [key, value] of Object.entries(candidate)) {
       const existing = current[key];
@@ -189,7 +189,8 @@ async function rememberAnswers(input: {
  */
 function answeredFills(
   fields: VisibleFormField[],
-  answered: Record<string, string>
+  answered: Record<string, string>,
+  profile: CandidateProfile
 ) {
   const fills: MappedFill[] = [];
   const leftover: string[] = [];
@@ -204,7 +205,7 @@ function answeredFills(
       continue;
     }
     fills.push(fill);
-    Object.assign(patch, profilePatchForAnswer(field, value) ?? {});
+    Object.assign(patch, profilePatchForAnswer(field, value, profile) ?? {});
   }
   return { fills, leftover, patch };
 }
@@ -219,6 +220,79 @@ function describeQuestion(question: RunnerQuestion) {
 
 function tidyLabel(label: string) {
   return label.replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * The page's own account of what is still blank, as a pause when anything is.
+ *
+ * A control the mapper never saw, or a value the page would not accept, is
+ * invisible upstream, so this is the one check standing between an incomplete
+ * form and a submit. It runs before the approval gate and again immediately
+ * before the click, because between the two the candidate answers questions
+ * and a form can come back still short.
+ */
+async function blankRequiredPause(
+  input: ApplicationRunInput & {
+    browserSessionId: string;
+    knownOptions?: (selector: string) => string[];
+  }
+): Promise<FillStepResult | undefined> {
+  const remaining = await parseResult(
+    input.browserSessionId,
+    collectEmptyRequiredFieldsCode,
+    emptyRequiredSchema
+  );
+  const stillEmpty = remaining?.empty ?? [];
+  if (stillEmpty.length === 0) return undefined;
+  const questions: RunnerQuestion[] = [];
+  const labels = new Set<string>();
+  for (const field of stillEmpty) {
+    if (!hasReadableLabel(field.label)) continue;
+    const label = tidyLabel(field.label);
+    const key = label.toLowerCase();
+    if (labels.has(key)) continue;
+    labels.add(key);
+    const options = input.knownOptions?.(field.selector) ?? [];
+    questions.push(options.length > 0 ? { label, options } : { label });
+  }
+  const unreadable = stillEmpty.filter(
+    (field) => !hasReadableLabel(field.label)
+  );
+  for (const field of unreadable) {
+    // The selector alone says nothing. Record the shape and the surrounding
+    // form wording so an unreadable control can be identified from the logs.
+    applicationExecutionLog({
+      apply_url: input.applyUrl,
+      event: "runner.unlabelled_field",
+      execution_id: input.executionId,
+      nearby: field.nearby,
+      selector: field.selector,
+      tag: field.tag,
+    });
+  }
+  await updateApplicationRun({
+    executionId: input.executionId,
+    pauseReason: "user_input",
+    status: "waiting",
+  });
+  return {
+    applyUrl: input.applyUrl,
+    message: applicationPauseMessage(
+      "user_input",
+      [
+        questions.length > 0
+          ? `these required questions are still blank: ${questions.map(describeQuestion).join("; ")}`
+          : "",
+        unreadable.length > 0
+          ? `${String(unreadable.length)} required ${unreadable.length === 1 ? "field carries" : "fields carry"} no label I can read, so I cannot say what ${unreadable.length === 1 ? "it is" : "they are"} asking`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("; ") + "."
+    ),
+    pause: "user_input",
+    ...(questions.length > 0 ? { questions } : {}),
+  };
 }
 
 export async function fillVisibleForm(
@@ -300,7 +374,7 @@ export async function fillVisibleForm(
   // The candidate's answers first. They outrank the profile for the control
   // they name — the profile's value is what the page just refused — and they
   // are kept, so the same question is never asked on the next posting.
-  const answered = answeredFills(fields, input.answered ?? {});
+  const answered = answeredFills(fields, input.answered ?? {}, profile);
   const answeredSelectors = new Set(
     answered.fills.map((fill) => fill.selector)
   );
@@ -377,71 +451,12 @@ export async function fillVisibleForm(
     }
   }
 
-  // Ask the page itself what is still blank. A control the mapper never saw,
-  // or a value it would not accept, is invisible upstream — this is the only
-  // check that stands between an incomplete form and an approval prompt, and
-  // it is the one source of the questions put to the candidate: every blank
-  // required control, once, with the page's own choices where it has them.
-  const remaining = await parseResult(
-    input.browserSessionId,
-    collectEmptyRequiredFieldsCode,
-    emptyRequiredSchema
-  );
-  const stillEmpty = remaining?.empty ?? [];
-  if (stillEmpty.length > 0) {
-    const questions: RunnerQuestion[] = [];
-    const labels = new Set<string>();
-    for (const field of stillEmpty) {
-      if (!hasReadableLabel(field.label)) continue;
-      const label = tidyLabel(field.label);
-      const key = label.toLowerCase();
-      if (labels.has(key)) continue;
-      labels.add(key);
-      const options =
-        refusedOptions.get(field.selector) ??
-        bySelector.get(field.selector)?.options ??
-        [];
-      questions.push(options.length > 0 ? { label, options } : { label });
-    }
-    const unreadable = stillEmpty.filter(
-      (field) => !hasReadableLabel(field.label)
-    );
-    for (const field of unreadable) {
-      // The selector alone says nothing. Record the shape and the surrounding
-      // form wording so an unreadable control can be identified from the logs.
-      applicationExecutionLog({
-        apply_url: input.applyUrl,
-        event: "runner.unlabelled_field",
-        execution_id: input.executionId,
-        nearby: field.nearby,
-        selector: field.selector,
-        tag: field.tag,
-      });
-    }
-    await updateApplicationRun({
-      executionId: input.executionId,
-      pauseReason: "user_input",
-      status: "waiting",
-    });
-    return {
-      applyUrl: input.applyUrl,
-      message: applicationPauseMessage(
-        "user_input",
-        [
-          questions.length > 0
-            ? `these required questions are still blank: ${questions.map(describeQuestion).join("; ")}`
-            : "",
-          unreadable.length > 0
-            ? `${String(unreadable.length)} required ${unreadable.length === 1 ? "field carries" : "fields carry"} no label I can read, so I cannot say what ${unreadable.length === 1 ? "it is" : "they are"} asking`
-            : "",
-        ]
-          .filter(Boolean)
-          .join("; ") + "."
-      ),
-      pause: "user_input",
-      ...(questions.length > 0 ? { questions } : {}),
-    };
-  }
+  const blank = await blankRequiredPause({
+    ...input,
+    knownOptions: (selector) =>
+      refusedOptions.get(selector) ?? bySelector.get(selector)?.options ?? [],
+  });
+  if (blank) return blank;
   await recordBrowserRunCheckpoint(input.scope, input.browserSessionId, {
     action: "fill",
     executionId: input.executionId,
@@ -485,12 +500,20 @@ export async function captureApproval(
 export async function submitApplication(
   input: ApplicationRunInput & { browserSessionId: string }
 ): Promise<FillStepResult> {
+  // Never click submit on a form that is not finished. Approval used to go
+  // straight here, so a run whose last pause named a blank required question
+  // clicked anyway: the page refused it silently, nothing navigated, and the
+  // candidate was told the application had not gone through with no reason
+  // given. Asking the page first turns that into the question it always was.
+  const blank = await blankRequiredPause(input);
+  if (blank) return blank;
   const click = await parseResult(
     input.browserSessionId,
     clickSubmitCode,
     z.object({
       clicked: z.boolean(),
       errors: z.array(z.string()).default([]),
+      invalid: z.array(z.string()).default([]),
       navigated: z.boolean().default(false),
     })
   );
@@ -498,10 +521,13 @@ export async function submitApplication(
     input.browserSessionId
   ).catch(() => undefined);
   const submitted = probe?.submitted === true;
-  const complaint = (click?.errors ?? [])
+  // The page's visible error text, and failing that the browser's own verdict
+  // on each control. A form can refuse a submit with no message rendered at
+  // all, which is how a blocked submit reported "errors: none".
+  const complaint = [...(click?.errors ?? []), ...(click?.invalid ?? [])]
     .map((error) => error.replace(/\s+/gu, " ").trim())
     .filter(Boolean)
-    .slice(0, 3);
+    .slice(0, 5);
   // The one question that matters most about a run — did the application
   // actually go in — was the only transition that wrote no log line. It was
   // answerable from a checkpoint row and nowhere else, so nobody reading the
@@ -511,6 +537,7 @@ export async function submitApplication(
     apply_url: input.applyUrl,
     clicked: click?.clicked === true,
     errors: complaint.join(" | ") || "none",
+    invalid: (click?.invalid ?? []).length,
     event: "runner.submit",
     execution_id: input.executionId,
     navigated: click?.navigated === true,
