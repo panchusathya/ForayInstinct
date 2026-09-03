@@ -98,6 +98,10 @@ export const env = createEnv({
     NODE_ENV: z
       .enum(["development", "production", "test"])
       .default("production"),
+    // Which build is answering. A durable session runs the code of the
+    // deployment that started it, so a thread has to be able to notice that
+    // its own build is no longer the current one.
+    VERCEL_DEPLOYMENT_ID: requiredValue.optional(),
     VERCEL_ENV: z.enum(["production", "preview", "development"]).optional(),
   },
   experimental__runtimeEnv: {},
