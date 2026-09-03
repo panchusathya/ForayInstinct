@@ -254,14 +254,18 @@ describe("submitApplication", () => {
     });
 
   it("does not report a submission the posting never confirmed", async () => {
-    mocks.executePlaywright.mockResolvedValue({
-      result: {
-        clicked: true,
-        errors: ["This field is required."],
-        navigated: false,
-      },
-      success: true,
-    });
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) =>
+      request.code.includes("const empty = await")
+        ? { result: { empty: [] }, success: true }
+        : {
+            result: {
+              clicked: true,
+              errors: ["This field is required."],
+              navigated: false,
+            },
+            success: true,
+          }
+    );
     mocks.inspect.mockResolvedValue({ submitted: false });
 
     const result = await submit();
@@ -277,18 +281,75 @@ describe("submitApplication", () => {
     );
   });
 
+  it("never clicks submit on a form that is still short", async () => {
+    // Approval used to go straight to the click, so a run whose last pause
+    // named a blank required question submitted anyway: the page refused it
+    // in silence, nothing navigated, and the candidate was told only that it
+    // had not gone through.
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("const empty = await")) {
+        return {
+          result: { empty: [{ label: "LinkedIn Profile*", selector: "#li" }] },
+          success: true,
+        };
+      }
+      return { result: { clicked: true, errors: [] }, success: true };
+    });
+
+    const result = await submit();
+
+    expect(result).toMatchObject({
+      pause: "user_input",
+      questions: [{ label: "LinkedIn Profile*" }],
+    });
+    const codes = mocks.executePlaywright.mock.calls.map(
+      (call) => call[1].code
+    );
+    expect(codes.some((code) => code.includes("getByRole"))).toBe(false);
+  });
+
+  it("carries the browser's own verdict when the page renders no message", async () => {
+    // A form can refuse a submit with nothing drawn anywhere, which is how a
+    // blocked submit came back reporting no errors at all.
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      return {
+        result: {
+          clicked: true,
+          errors: [],
+          invalid: ["LinkedIn Profile: Please fill out this field."],
+          navigated: false,
+        },
+        success: true,
+      };
+    });
+    mocks.inspect.mockResolvedValue({ submitted: false });
+
+    const result = await submit();
+
+    expect("message" in result ? result.message : "").toContain(
+      "Please fill out this field."
+    );
+  });
+
   it("records what the page did, so a submission is never in doubt", async () => {
     // The one transition that mattered most wrote no log line, so a submitted
     // application and a refused one read identically afterwards.
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    mocks.executePlaywright.mockResolvedValue({
-      result: {
-        clicked: true,
-        errors: ["This field is required."],
-        navigated: false,
-      },
-      success: true,
-    });
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) =>
+      request.code.includes("const empty = await")
+        ? { result: { empty: [] }, success: true }
+        : {
+            result: {
+              clicked: true,
+              errors: ["This field is required."],
+              navigated: false,
+            },
+            success: true,
+          }
+    );
     mocks.inspect.mockResolvedValue({ submitted: false });
 
     await submit();
@@ -303,10 +364,14 @@ describe("submitApplication", () => {
   });
 
   it("reports done once the posting confirms it", async () => {
-    mocks.executePlaywright.mockResolvedValue({
-      result: { clicked: true, errors: [], navigated: true },
-      success: true,
-    });
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) =>
+      request.code.includes("const empty = await")
+        ? { result: { empty: [] }, success: true }
+        : {
+            result: { clicked: true, errors: [], navigated: true },
+            success: true,
+          }
+    );
     mocks.inspect.mockResolvedValue({ submitted: true });
 
     await expect(submit()).resolves.toMatchObject({ done: true });

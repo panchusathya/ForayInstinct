@@ -704,3 +704,49 @@ describe("a select-like widget's inner input", () => {
     ).toHaveLength(2);
   });
 });
+
+describe("a link the candidate types once", () => {
+  const field: VisibleFormField = {
+    label: "LinkedIn Profile*",
+    name: "",
+    required: true,
+    selector: "#li",
+    tag: "input",
+    type: "text",
+  };
+
+  it("is written to the profile so the next posting fills it", () => {
+    // valueForField reads a link from the profile on every fill, but nothing
+    // ever wrote one back, so this question returned on every application no
+    // matter how many times it was answered.
+    expect(
+      profilePatchForAnswer(field, "linkedin.com/in/sathya-panchu")
+    ).toEqual({
+      links: [
+        { label: "LinkedIn", url: "https://linkedin.com/in/sathya-panchu" },
+      ],
+    });
+  });
+
+  it("keeps the candidate's other links and replaces only its own", () => {
+    const profile = {
+      ...emptyCandidateProfile,
+      links: [
+        { label: "GitHub", url: "https://github.com/sathya" },
+        { label: "LinkedIn", url: "https://linkedin.com/in/old" },
+      ],
+    };
+
+    expect(
+      profilePatchForAnswer(field, "https://linkedin.com/in/new", profile)
+        ?.links
+    ).toEqual([
+      { label: "GitHub", url: "https://github.com/sathya" },
+      { label: "LinkedIn", url: "https://linkedin.com/in/new" },
+    ]);
+  });
+
+  it("keeps nothing that is not a link", () => {
+    expect(profilePatchForAnswer(field, "ask me later")).toBeUndefined();
+  });
+});

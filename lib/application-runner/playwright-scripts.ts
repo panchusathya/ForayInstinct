@@ -407,5 +407,25 @@ const errors = await page.$$eval(
     .filter((text) => text.length > 0 && text.length < 300)
     .slice(0, 10)
 ).catch(() => []);
-return { clicked: true, errors: [...new Set(errors)], href: page.url(), navigated: page.url() !== before };
+// The browser's own verdict on every control it validates. A form can refuse
+// a submit with no message rendered anywhere, which is how a blocked submit
+// came back reporting no errors at all: constraint validation had already
+// stopped it before anything was drawn.
+const invalid = await page.$$eval(
+  "input, select, textarea",
+  (nodes) => nodes
+    .filter((node) => node.willValidate && !node.checkValidity())
+    .map((node) => {
+      const byFor = node.id && document.querySelector("label[for=" + JSON.stringify(node.id) + "]");
+      const own = node.closest("label");
+      const label = ((byFor && byFor.innerText) || (own && own.innerText) || node.getAttribute("aria-label") || node.getAttribute("name") || "")
+        .replace(/\\s+/g, " ")
+        .trim()
+        .slice(0, 120);
+      const message = (node.validationMessage || "needs a value").trim();
+      return label ? label + ": " + message : message;
+    })
+    .slice(0, 10)
+).catch(() => []);
+return { clicked: true, errors: [...new Set(errors)], href: page.url(), invalid: [...new Set(invalid)], navigated: page.url() !== before };
 `;
