@@ -5,6 +5,7 @@ import {
   candidateProfileSummary,
   emptyCandidateProfile,
   missingProfileFields,
+  profilePatchOf,
 } from "../lib/candidate-profile";
 
 describe("candidate profile", () => {
@@ -73,5 +74,37 @@ describe("candidate profile", () => {
     expect(instructions).toContain("`candidate_profile` `save`");
     expect(instructions).toContain("Paste the profile `assignment`");
     expect(tool).toContain("paste the returned `assignment`");
+  });
+});
+
+describe("writing a partial profile", () => {
+  it("never invents the fields a patch did not mention", () => {
+    // Parsing through the patch schema alone fills in every default, so saving
+    // one answer merged `workAuthorization: ""` over a real one and the profile
+    // silently went backwards between applications.
+    const patch = profilePatchOf({ legalFirstName: "Sathya" });
+
+    expect(patch).toEqual({ legalFirstName: "Sathya" });
+    expect(Object.keys(patch ?? {})).not.toContain("workAuthorization");
+    expect(Object.keys(patch ?? {})).not.toContain("salaryCurrency");
+  });
+
+  it("keeps a value the candidate did state", () => {
+    expect(
+      profilePatchOf({
+        requiresSponsorshipNow: "no",
+        workAuthorization: "us_citizen",
+      })
+    ).toEqual({
+      requiresSponsorshipNow: "no",
+      workAuthorization: "us_citizen",
+    });
+  });
+
+  it("keeps nothing from an empty or invalid patch", () => {
+    expect(profilePatchOf({})).toBeUndefined();
+    expect(
+      profilePatchOf({ workAuthorization: "not-an-option" })
+    ).toBeUndefined();
   });
 });

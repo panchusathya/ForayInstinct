@@ -30,10 +30,7 @@ import type {
   ApplicationPauseReason,
   ApplicationRunInput,
 } from "@/lib/application-runner/types";
-import {
-  type CandidateProfile,
-  candidateProfilePatchSchema,
-} from "@/lib/candidate-profile";
+import { type CandidateProfile, profilePatchOf } from "@/lib/candidate-profile";
 import { applicationPauseMessage } from "@/lib/task-completion";
 import { z } from "zod";
 
@@ -136,11 +133,10 @@ async function rememberAnswers(input: {
       patch[key] = value;
     }
   }
-  if (Object.keys(patch).length === 0) return;
-  const parsed = candidateProfilePatchSchema.safeParse(patch);
-  if (!parsed.success) return;
+  const stated = profilePatchOf(patch);
+  if (!stated) return;
   // A profile write must never take down an in-flight application.
-  await saveCandidateProfile(input.scope, parsed.data).catch(() => undefined);
+  await saveCandidateProfile(input.scope, stated).catch(() => undefined);
 }
 
 export async function fillVisibleForm(

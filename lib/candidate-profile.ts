@@ -104,6 +104,32 @@ export const emptyCandidateProfile: CandidateProfile =
 export const candidateProfilePatchSchema = candidateProfileSchema.partial();
 export type CandidateProfilePatch = z.infer<typeof candidateProfilePatchSchema>;
 
+/**
+ * Validates a patch without inventing the keys it did not mention.
+ *
+ * Parsing through the patch schema alone fills in every `.default()`, so a
+ * one-field patch comes back carrying `workAuthorization: ""` and the rest.
+ * Merged over a stored profile that clears real answers, which is how a
+ * profile went backwards between applications. Anything writing a patch
+ * assembled from partial knowledge must come through here.
+ */
+export function profilePatchOf(
+  input: Record<string, unknown>
+): CandidateProfilePatch | undefined {
+  const provided = new Set(Object.keys(input));
+  if (provided.size === 0) return undefined;
+  const parsed = candidateProfilePatchSchema.safeParse(input);
+  if (!parsed.success) return undefined;
+  const stated: CandidateProfilePatch = {};
+  let kept = 0;
+  for (const [key, value] of Object.entries(parsed.data)) {
+    if (!provided.has(key)) continue;
+    Object.assign(stated, { [key]: value });
+    kept += 1;
+  }
+  return kept > 0 ? stated : undefined;
+}
+
 const candidateContactIdentitySchema = z.object({
   email: z.string().optional(),
   name: z.string(),
