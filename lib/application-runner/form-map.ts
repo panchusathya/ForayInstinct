@@ -3,6 +3,7 @@ import type {
   CandidateProfile,
   CandidateProfilePatch,
 } from "@/lib/candidate-profile";
+import type { SelfIdentification } from "@/lib/self-identification";
 
 export interface VisibleFormField {
   label: string;
@@ -43,6 +44,62 @@ const workAuthorizationLabels: Record<string, string> = Object.fromEntries(
 );
 
 /**
+ * The wording an ATS uses to let a candidate say nothing. These questions are
+ * voluntary by law and always offer one, so an unanswered field is declined
+ * rather than asked about: a run must never stall on a question the candidate
+ * is entitled to skip.
+ */
+const declineOptions = [
+  "Decline to self identify",
+  "I don't wish to answer",
+  "I do not wish to answer",
+  "Prefer not to say",
+  "Prefer not to answer",
+  "Decline to answer",
+  "I don't wish to answer.",
+] as const;
+
+/** How a page words agreement, once the candidate has consented in general. */
+const agreementOptions = [
+  "Yes",
+  "I agree",
+  "Agree",
+  "I acknowledge",
+  "Acknowledge",
+  "Accept",
+  "I accept",
+] as const;
+
+/**
+ * A question that only records a permission, never a fact.
+ *
+ * Acknowledging a privacy notice and allowing contact are the boilerplate
+ * every ATS asks and no candidate wants relayed to them one message at a
+ * time. A claim about the candidate — where they worked, how long, how old
+ * they are — is never in here: answering one of those on their behalf would
+ * put a statement they never made on an employer's form.
+ */
+function consentQuestion(key: string) {
+  if (/worked|employed|employee|relative|referr|intern(ship)?\b/u.test(key)) {
+    return false;
+  }
+  return /acknowledg|consent|privacy|terms|policy|i agree|opt.?in|receive (communications|texts|messages)|sms|whatsapp|text message|contact you|contacted/u.test(
+    key
+  );
+}
+
+/** The four voluntary EEO fields, and which stored answer belongs to each. */
+function selfIdentificationKey(
+  key: string
+): keyof SelfIdentification | undefined {
+  if (/disab/u.test(key)) return "disabilityStatus";
+  if (/veteran/u.test(key)) return "veteranStatus";
+  if (/race|ethnic/u.test(key)) return "raceEthnicity";
+  if (/gender|\bsex\b/u.test(key)) return "gender";
+  return undefined;
+}
+
+/**
  * Deterministic mapping from a candidate profile onto visible form controls.
  * Unmapped required fields are returned for the bounded LLM helper — never a
  * screenshot loop.
@@ -52,6 +109,7 @@ export function mapProfileToFormFields(input: {
   identity: CandidateContactIdentity;
   profile: CandidateProfile;
   resumePath?: string;
+  selfIdentification?: SelfIdentification;
 }): { fills: MappedFill[]; unmapped: VisibleFormField[] } {
   const fills: MappedFill[] = [];
   const unmapped: VisibleFormField[] = [];
@@ -64,11 +122,16 @@ export function mapProfileToFormFields(input: {
       }
       continue;
     }
-    const value = valueForField(field, input.profile, input.identity);
+    const value = valueForField(
+      field,
+      input.profile,
+      input.identity,
+      input.selfIdentification ?? {}
+    );
     const resolved =
       value === undefined || value === ""
         ? undefined
-        : resolveAgainstOptions(field, value);
+        : resolveWithAlternatives(field, value);
     if (resolved !== undefined) {
       fills.push({
         alternatives: alternativesFor(field, value ?? resolved),
@@ -230,9 +293,16 @@ function workAuthorizationFromAnswer(
 function valueForField(
   field: VisibleFormField,
   profile: CandidateProfile,
-  identity: CandidateContactIdentity
+  identity: CandidateContactIdentity,
+  selfIdentification: SelfIdentification
 ): string | undefined {
   const key = normalize(field.label, field.name, field.type);
+  // Before anything else: the questions with a standing answer. Left to the
+  // generic matches below, "Applicant Privacy Acknowledgement" and "receive
+  // communications via SMS" fell through to nothing and stopped the run.
+  const eeoField = selfIdentificationKey(key);
+  if (eeoField) return selfIdentification[eeoField] ?? declineOptions[0];
+  if (consentQuestion(key)) return "Yes";
   // `normalize` turns "E-mail" into "e mail", so match both spellings. The
   // verified auth address wins; the profile one is the fallback for a
   // candidate who only ever texts and has no verified login email.
@@ -305,8 +375,36 @@ function alternativesFor(field: VisibleFormField, value: string) {
   if (/authoriz|work.?eligib|citizenship/u.test(key)) {
     for (const [, label] of workAuthorizationOptions) alternatives.add(label);
   }
+  // Every page words these differently and the scan often cannot read the
+  // options until the control is opened, so carry all of them.
+  if (selfIdentificationKey(key)) {
+    for (const option of declineOptions) alternatives.add(option);
+  }
+  if (consentQuestion(key)) {
+    for (const option of agreementOptions) alternatives.add(option);
+  }
   alternatives.delete(value);
   return alternatives.size > 0 ? [...alternatives] : undefined;
+}
+
+/**
+ * The first phrasing this control will accept.
+ *
+ * A page words the same answer its own way — "Decline to self identify" here,
+ * "I don't wish to answer" there, "I agree" where another says "Yes" — so the
+ * value alone often matches nothing and the field was reported as unanswerable
+ * when we knew the answer perfectly well. The alternatives are already
+ * assembled for the browser; the same list settles it here, where the options
+ * are known.
+ */
+function resolveWithAlternatives(field: VisibleFormField, value: string) {
+  const direct = resolveAgainstOptions(field, value);
+  if (direct !== undefined) return direct;
+  for (const alternative of alternativesFor(field, value) ?? []) {
+    const resolved = resolveAgainstOptions(field, alternative);
+    if (resolved !== undefined) return resolved;
+  }
+  return undefined;
 }
 
 /**

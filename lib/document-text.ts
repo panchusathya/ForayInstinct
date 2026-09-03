@@ -74,7 +74,7 @@ function uniqueUris(values: string[]) {
 
 /** PDF link targets: `/URI (https://…)` inside an annotation dictionary. */
 function extractPdfUris(bytes: Buffer) {
-  const sources = [bytes, ...inflatePdfStreams(bytes)];
+  const sources = [bytes, ...pdfContentStreams(bytes)];
   const uris: string[] = [];
   for (const source of sources) {
     const latin1 = source.toString("latin1");
@@ -138,46 +138,133 @@ function stripUnstorableCharacters(value: string) {
   return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, "");
 }
 
+/**
+ * Page text, taken from the operators that actually draw it.
+ *
+ * Reading every parenthesized literal in the file instead produced font
+ * names, `/Producer`, XMP metadata and outline titles, deduplicated through a
+ * Set that destroyed reading order — eight thousand characters of noise from
+ * which nothing could be extracted and no resume fact was ever recovered.
+ * Only `Tj`, `TJ`, `'` and `"` put glyphs on a page, and only inside a
+ * content stream, so those are the only literals worth having.
+ */
 function extractPdfText(bytes: Buffer) {
-  const streams = [bytes, ...inflatePdfStreams(bytes)];
-  const chunks: string[] = [];
-  for (const stream of streams) {
-    const latin1 = stream.toString("latin1");
-    for (const match of latin1.matchAll(/\((?:\\.|[^\\)]){2,}\)/gu)) {
-      const decoded = decodePdfString(match[0].slice(1, -1));
-      if (/[\p{L}\p{N}]/u.test(decoded)) chunks.push(decoded);
-    }
+  const lines: string[] = [];
+  for (const stream of pdfContentStreams(bytes)) {
+    const text = extractStreamText(stream.toString("latin1"));
+    if (text.trim()) lines.push(text);
   }
-  return [...new Set(chunks)].join(" ");
+  return lines.join("\n");
 }
 
-/** Extract Flate-compressed PDF content streams without trusting layout. */
-function inflatePdfStreams(bytes: Buffer) {
+/**
+ * One content stream's text, in the order it is drawn.
+ *
+ * A PDF writes a line as a run of show operators and moves the cursor between
+ * them, so the positioning operators are where the spaces and line breaks
+ * come from. Without them every word runs into the next and no regex or model
+ * can read the result.
+ */
+function extractStreamText(source: string) {
+  // A show operator's operand, followed by the operator itself: a literal for
+  // Tj/'/", or a bracketed array of literals and kerning numbers for TJ.
+  const shown =
+    /\((?:\\.|[^\\)])*\)\s*(Tj|'|")|\[((?:\((?:\\.|[^\\)])*\)|[^\]])*)\]\s*TJ|(T\*|Td|TD|ET)/gu;
+  let out = "";
+  for (const match of source.matchAll(shown)) {
+    if (match[3]) {
+      // A cursor move ends the run. ET closes the whole text object.
+      out += match[3] === "ET" ? "\n" : " ";
+      continue;
+    }
+    if (match[2] !== undefined) {
+      out += textArrayContent(match[2]);
+      continue;
+    }
+    out += decodePdfString(match[0].slice(1, match[0].lastIndexOf(")")));
+  }
+  return out;
+}
+
+/**
+ * A `TJ` array: literals to print, and numbers that nudge the cursor. A large
+ * negative nudge is how a PDF writes a space, so it is read as one.
+ */
+function textArrayContent(body: string) {
+  let out = "";
+  for (const part of body.matchAll(/\((?:\\.|[^\\)])*\)|-?\d+(?:\.\d+)?/gu)) {
+    const token = part[0];
+    if (token.startsWith("(")) {
+      out += decodePdfString(token.slice(1, -1));
+      continue;
+    }
+    if (Number(token) <= -100) out += " ";
+  }
+  return out;
+}
+
+/**
+ * Every content stream's bytes, decompressed where the PDF says they are.
+ *
+ * A stream that declares no filter is already plain, and one this module
+ * cannot decode contributes nothing rather than failing the read.
+ */
+function pdfContentStreams(bytes: Buffer) {
   const source = bytes.toString("latin1");
   const results: Buffer[] = [];
-  const streamPattern =
-    /<<[\s\S]{0,8000}?\/Filter\s*\/FlateDecode[\s\S]{0,8000}?>>\s*stream\r?\n/gu;
+  const streamPattern = /<<([\s\S]{0,8000}?)>>\s*stream\r?\n/gu;
   for (const match of source.matchAll(streamPattern)) {
     const start = match.index + match[0].length;
     const end = source.indexOf("endstream", start);
     if (end < start) continue;
     let payload = bytes.subarray(start, end);
     // PDF permits one newline immediately before endstream; it is not part of
-    // the deflate payload and breaks some otherwise-valid resumes.
+    // the payload and breaks some otherwise-valid resumes.
     if (payload.at(-1) === 10) payload = payload.subarray(0, -1);
     if (payload.at(-1) === 13) payload = payload.subarray(0, -1);
-    try {
-      results.push(inflateRawSync(payload));
-    } catch {
-      try {
-        // Some generators emit a zlib wrapper despite declaring FlateDecode.
-        results.push(inflateSync(payload));
-      } catch {
-        // One malformed stream must not discard text from the others.
-      }
+    const dictionary = match[1] ?? "";
+    if (!/\/Filter/u.test(dictionary)) {
+      results.push(payload);
+      continue;
     }
+    if (!/FlateDecode/u.test(dictionary)) continue;
+    const inflated = inflateStream(payload);
+    if (inflated) results.push(inflated);
   }
   return results;
+}
+
+/** A stream may carry a raw deflate payload or a zlib-wrapped one. */
+function inflateStream(payload: Buffer) {
+  try {
+    return inflateRawSync(payload);
+  } catch {
+    try {
+      // Some generators emit a zlib wrapper despite declaring FlateDecode.
+      return inflateSync(payload);
+    } catch {
+      return;
+    }
+  }
+}
+
+/**
+ * Whether text reads like something a person wrote.
+ *
+ * A PDF this module cannot decode still yields characters — glyph codes,
+ * operator fragments, punctuation — and a single three-letter run was enough
+ * to pass the old check, so junk was handed to the model as if it were a
+ * resume. Prose has many multi-letter words and is mostly letters and spaces.
+ */
+export function looksLikeProse(text: string) {
+  const trimmed = text.trim();
+  // Density, not length: a terse resume is still a resume, while a page of
+  // glyph codes is not prose however much of it there is.
+  if (trimmed.length < 24) return false;
+  const words = trimmed.match(/[\p{L}]{3,}/gu) ?? [];
+  if (words.length < 4) return false;
+  const readable = words.join("").length + (trimmed.match(/\s/gu)?.length ?? 0);
+  return readable / trimmed.length >= 0.55;
 }
 
 /**
