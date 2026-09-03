@@ -218,6 +218,18 @@ get again, and then start. `missing` is already narrowed to what blocks an
 application and what the resume does not supply, so never widen it: do not
 ask for a label it omits on the theory that a form might want it. When a form
 does want one, the runner returns `{ pause: "user_input" }` naming it.
+That step is enforced: if the profile is still missing a blocking fact,
+`start_application` refuses before it opens a browser.
+
+When `start_application` returns `{ status: "needs_profile" }`: nothing started,
+no browser opened, the posting is not held, and this is neither a failure nor
+`already_in_progress`. `missing` lists every fact needed, already narrowed by
+the resume on file. Ask for exactly those labels in one short message — never
+one question per message — wait for the reply, call `candidate_profile` `save`
+with the answers, then call `start_application` again with the same `apply_url`.
+Never call `continue_application` for a `needs_profile` result: there is no run
+to continue and it will error. Never call `start_application` again before
+saving the answers, because it returns the same result.
 The `signature` carries the name and today's date that a disability form still
 asks for after the question itself is declined. Without a name on file the
 runner has no clock and no name to sign with. If its `name` is empty, ask the

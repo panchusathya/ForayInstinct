@@ -7,6 +7,15 @@ import {
 
 export const applicationRunnerModel = "application-runner";
 
+/**
+ * A start refused because the stored profile cannot answer the form. Distinct
+ * from `waiting` on purpose: every instruction for a `user_input` pause tells
+ * the agent to call `continue_application`, which would throw here because no
+ * run exists to continue. The pause kind stays `user_input` so the channel
+ * still classifies it as an ordinary non-approval pause.
+ */
+export const needsProfileStatus = "needs_profile";
+
 export type { ApplicationPauseReason } from "@/lib/task-completion";
 
 export interface ApplicationRunInput {
@@ -32,6 +41,13 @@ export type ApplicationRunResult =
       existingExecutionId: string;
       message: string;
       status: typeof alreadyInProgressStatus;
+    }
+  | {
+      applyUrl: string;
+      message: string;
+      missing: string[];
+      pause: "user_input";
+      status: typeof needsProfileStatus;
     }
   | {
       applyUrl: string;

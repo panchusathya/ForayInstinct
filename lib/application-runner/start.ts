@@ -4,7 +4,11 @@ import {
   updateApplicationRun,
 } from "@/db/services/application-executions";
 import { claimApplicationLease } from "@/db/services/application-leases";
-import { executionId, safeApplyUrl } from "@/lib/application-execution";
+import {
+  applicationExecutionLog,
+  executionId,
+  safeApplyUrl,
+} from "@/lib/application-execution";
 import { alreadyInProgressStatus } from "@/lib/task-completion";
 import {
   alreadyInProgressMessage,
@@ -14,7 +18,12 @@ import {
   type ApplicationRunResult,
   isInlineWorkflow,
   liveRunStatuses,
+  needsProfileStatus,
 } from "@/lib/application-runner/types";
+import {
+  missingProfileFacts,
+  profileGateMessage,
+} from "@/lib/application-runner/profile-gate";
 import { runApplicationUntilPause } from "@/lib/application-runner/run";
 import { startApplicationWorkflow } from "@/lib/application-runner/workflow";
 import { applicationPauseMessage } from "@/lib/task-completion";
@@ -29,6 +38,25 @@ export async function startApplication(input: {
   const applyUrl = safeApplyUrl(input.applyUrl);
   if (applyUrl === "") {
     throw new Error("Application runner requires a posting apply_url.");
+  }
+  // Above both the execution row and the lease on purpose. Below the lease, the
+  // retry this result asks for would come back already_in_progress for the next
+  // twenty minutes; above both, a refused start leaves no rows at all.
+  const missing = await missingProfileFacts(input.scope);
+  if (missing.length > 0) {
+    applicationExecutionLog({
+      apply_url: applyUrl,
+      event: "runner.profile_gate",
+      missing: missing.join(", "),
+      status: needsProfileStatus,
+    });
+    return {
+      applyUrl,
+      message: profileGateMessage(missing, input.role),
+      missing,
+      pause: "user_input",
+      status: needsProfileStatus,
+    };
   }
   const callId = applicationCallId(applyUrl);
   const id = executionId(input.rootSessionId, callId);

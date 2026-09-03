@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
         }
     >
   >(),
+  readCandidateProfile: vi.fn<() => Promise<Record<string, unknown>>>(),
+  readOrImportDefaultResume:
+    vi.fn<() => Promise<Record<string, unknown> | undefined>>(),
   runApplicationUntilPause: vi.fn<() => Promise<Record<string, unknown>>>(),
   updateApplicationRun:
     vi.fn<
@@ -36,11 +39,39 @@ vi.mock("@/db/services/application-leases", () => ({
   claimApplicationLease: mocks.claimApplicationLease,
 }));
 
+vi.mock("@/db/services/candidate-profile", () => ({
+  readCandidateProfile: mocks.readCandidateProfile,
+}));
+
+vi.mock("@/db/services/default-resume", () => ({
+  readOrImportDefaultResume: mocks.readOrImportDefaultResume,
+}));
+
 vi.mock("@/lib/application-runner/run", () => ({
   runApplicationUntilPause: mocks.runApplicationUntilPause,
 }));
 
+import { emptyCandidateProfile } from "@/lib/candidate-profile";
 import { startApplication } from "@/lib/application-runner/start";
+
+/** Enough for `missingProfileFields` to report no blocking gap. */
+const completeProfile = {
+  ...emptyCandidateProfile,
+  legalFirstName: "Ada",
+  legalLastName: "Lovelace",
+  requiresSponsorshipNow: "no",
+  workAuthorization: "us_citizen",
+  workHistory: [
+    {
+      company: "Analytical Engines",
+      current: false,
+      description: "",
+      location: "",
+      startYear: 2015,
+      title: "Mathematician",
+    },
+  ],
+};
 
 const scope = { userId: "ada", workspaceId: "workspace:ada" };
 const applyUrl = "https://boards.example/acme/jobs/1";
@@ -58,6 +89,8 @@ beforeEach(() => {
   mocks.createApplicationExecution.mockResolvedValue(undefined);
   mocks.updateApplicationRun.mockResolvedValue(undefined);
   mocks.findApplicationRun.mockResolvedValue(undefined);
+  mocks.readCandidateProfile.mockResolvedValue(completeProfile);
+  mocks.readOrImportDefaultResume.mockResolvedValue(undefined);
   mocks.claimApplicationLease.mockResolvedValue({
     expiresAt: "2026-09-02T21:14:06.939Z",
     status: "acquired",
@@ -182,5 +215,88 @@ describe("startApplication", () => {
 
     expect(mocks.runApplicationUntilPause).not.toHaveBeenCalled();
     expect(result).toMatchObject({ status: "already_in_progress" });
+  });
+});
+
+describe("the profile gate", () => {
+  it("refuses an empty profile before it costs anything", async () => {
+    mocks.readCandidateProfile.mockResolvedValue({ ...emptyCandidateProfile });
+
+    const result = await startApplication(input);
+
+    expect(result).toMatchObject({ status: "needs_profile" });
+    // The whole point: no lease claimed, no execution row, no browser opened.
+    expect(mocks.createApplicationExecution).not.toHaveBeenCalled();
+    expect(mocks.claimApplicationLease).not.toHaveBeenCalled();
+    expect(mocks.runApplicationUntilPause).not.toHaveBeenCalled();
+  });
+
+  it("names every gap at once rather than one per message", async () => {
+    mocks.readCandidateProfile.mockResolvedValue({ ...emptyCandidateProfile });
+
+    const result = await startApplication(input);
+
+    const missing = "missing" in result ? result.missing : [];
+    expect(missing).toEqual([
+      "legal first name",
+      "legal last name",
+      "work authorization",
+      "sponsorship needed now",
+      "work history",
+    ]);
+    const message = "message" in result ? result.message : "";
+    for (const label of missing) expect(message).toContain(label);
+  });
+
+  it("narrows the ask to what a resume cannot carry", async () => {
+    mocks.readCandidateProfile.mockResolvedValue({ ...emptyCandidateProfile });
+    mocks.readOrImportDefaultResume.mockResolvedValue({ id: "resume-1" });
+
+    const result = await startApplication(input);
+
+    expect("missing" in result ? result.missing : []).toEqual([
+      "work authorization",
+      "sponsorship needed now",
+    ]);
+  });
+
+  it("treats an unreachable resume as one on file", async () => {
+    // The gate exists to skip a doomed run, not to invent a refusal when
+    // JuiceBox is down.
+    mocks.readCandidateProfile.mockResolvedValue({ ...emptyCandidateProfile });
+    mocks.readOrImportDefaultResume.mockRejectedValue(new Error("gateway"));
+
+    const result = await startApplication(input);
+
+    expect("missing" in result ? result.missing : []).toEqual([
+      "work authorization",
+      "sponsorship needed now",
+    ]);
+  });
+
+  it("starts as before when the profile cannot be read", async () => {
+    mocks.readCandidateProfile.mockRejectedValue(new Error("database"));
+    mocks.runApplicationUntilPause.mockResolvedValue({
+      applyUrl,
+      message: "Needs submission approval: Strategic Finance",
+      pause: "approval",
+    });
+
+    const result = await startApplication(input);
+
+    expect(mocks.claimApplicationLease).toHaveBeenCalled();
+    expect(result).toMatchObject({ status: "waiting" });
+  });
+
+  it("claims the lease when the profile is complete", async () => {
+    mocks.runApplicationUntilPause.mockResolvedValue({
+      applyUrl,
+      message: "Needs submission approval: Strategic Finance",
+      pause: "approval",
+    });
+
+    await startApplication(input);
+
+    expect(mocks.claimApplicationLease).toHaveBeenCalled();
   });
 });

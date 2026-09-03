@@ -22,6 +22,7 @@ const databases: PGlite[] = [];
 afterEach(async () => {
   vi.doUnmock("@/db");
   vi.doUnmock("@/lib/application-runner/run");
+  vi.doUnmock("@/db/services/default-resume");
   vi.resetModules();
   await Promise.all(databases.splice(0).map((database) => database.close()));
 });
@@ -85,7 +86,7 @@ describe("application runner", () => {
   });
 
   it("refuses a second start_application while the lease is held", async () => {
-    const startApplication = await setupStart();
+    const { startApplication } = await setupStart();
     const alice = { userId: "alice", workspaceId: "workspace:alice" };
     const applyUrl = "https://jobs.example/role/1";
     const first = await startApplication({
@@ -106,6 +107,48 @@ describe("application runner", () => {
     expect(second).toMatchObject({
       applyUrl,
       status: alreadyInProgressStatus,
+    });
+  });
+
+  it("leaves no lease behind when the profile gate refuses a start", async () => {
+    // The deadlock this gate is most at risk of: refuse above the lease, or the
+    // retry it asks for comes back already_in_progress for twenty minutes.
+    const { ensureScope, saveCandidateProfile, startApplication } =
+      await setupStart();
+    const bob = { userId: "bob", workspaceId: "workspace:bob" };
+    await ensureScope(bob);
+    const applyUrl = "https://jobs.example/role/2";
+    const start = () =>
+      startApplication({
+        applyUrl,
+        company: "Example",
+        role: "Analyst",
+        rootSessionId: "root-2",
+        scope: bob,
+      });
+
+    expect(await start()).toMatchObject({ status: "needs_profile" });
+
+    await saveCandidateProfile(bob, {
+      legalFirstName: "Grace",
+      legalLastName: "Hopper",
+      requiresSponsorshipNow: "no",
+      workAuthorization: "us_citizen",
+      workHistory: [
+        {
+          company: "US Navy",
+          current: false,
+          description: "",
+          location: "",
+          startYear: 2018,
+          title: "Rear Admiral",
+        },
+      ],
+    });
+
+    expect(await start()).toMatchObject({
+      pause: "approval",
+      status: "waiting",
     });
   });
 
@@ -166,6 +209,11 @@ async function setupStart() {
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
   const database = pgliteDatabase as unknown as typeof db;
   vi.doMock("@/db", () => ({ ...schema, db: database }));
+  // The profile gate would otherwise refuse this start before any lease is
+  // claimed, quietly turning a lease-contention test into a profile test.
+  vi.doMock("@/db/services/default-resume", () => ({
+    readOrImportDefaultResume: () => Promise.resolve(undefined),
+  }));
   // An inline start drives the fill itself, so stub the browser-backed step and
   // leave this case to the lease contention it is actually about.
   vi.doMock("@/lib/application-runner/run", () => ({
@@ -177,12 +225,34 @@ async function setupStart() {
       }),
   }));
 
-  const [scope, runner] = await Promise.all([
+  const [scope, profiles, runner] = await Promise.all([
     import("@/db/services/scope"),
+    import("@/db/services/candidate-profile"),
     import("@/lib/application-runner/start"),
   ]);
-  await scope.ensureScope({ userId: "alice", workspaceId: "workspace:alice" });
-  return runner.startApplication;
+  const alice = { userId: "alice", workspaceId: "workspace:alice" };
+  await scope.ensureScope(alice);
+  await profiles.saveCandidateProfile(alice, {
+    legalFirstName: "Ada",
+    legalLastName: "Lovelace",
+    requiresSponsorshipNow: "no",
+    workAuthorization: "us_citizen",
+    workHistory: [
+      {
+        company: "Analytical Engines",
+        current: false,
+        description: "",
+        location: "",
+        startYear: 2015,
+        title: "Mathematician",
+      },
+    ],
+  });
+  return {
+    ensureScope: scope.ensureScope,
+    saveCandidateProfile: profiles.saveCandidateProfile,
+    startApplication: runner.startApplication,
+  };
 }
 
 async function applyMigration(database: PGlite, name: string) {
