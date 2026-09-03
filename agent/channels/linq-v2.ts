@@ -53,6 +53,10 @@ import {
   normalizeTaskStatus,
 } from "@/lib/task-completion";
 import { linkCandidate, recordConversationMessage } from "@/lib/goforay/bridge";
+import { withTimeout } from "@/lib/with-timeout";
+
+/** How long any one optional inbound step may take before it is abandoned. */
+const INBOUND_STEP_TIMEOUT_MS = 5_000;
 import { saveCandidateDocument } from "@/db/services/candidate-documents";
 import { inferCandidateDocumentKind } from "@/lib/candidate-documents";
 import { Client } from "eve/client";
@@ -622,7 +626,14 @@ async function dispatchLinqJobCardTapback(event: ReactionEvent) {
   }).catch(() => undefined);
 
   try {
-    await rollOverIdleLinqSession(thread);
+    // Bounded for the same reason as the message path: this runs inside the
+    // reaction webhook, and an idle reset that never settles would spend the
+    // whole function budget before the application is ever started.
+    await withTimeout(
+      () => rollOverIdleLinqSession(thread),
+      INBOUND_STEP_TIMEOUT_MS,
+      "kept" as const
+    );
     const session = await send(
       {
         context: [
@@ -672,56 +683,105 @@ function linqAdapterConfig(): Parameters<typeof createLinqAdapter>[0] {
   );
 }
 
+/**
+ * Times one inbound step and records it.
+ *
+ * The webhook runs the candidate's whole turn, so when it died at the
+ * five-minute function limit the log simply stopped, naming nothing. Each
+ * step now reports its own duration: the last line before a timeout is the
+ * step that hung. Names and milliseconds only, never message text.
+ */
+async function inboundStep<T>(
+  name: string,
+  messageId: string,
+  work: () => Promise<T>
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await work();
+  } finally {
+    console.info("[linq-inbound] step", {
+      duration_ms: Date.now() - startedAt,
+      message_id: messageId,
+      step: name,
+    });
+  }
+}
+
 async function dispatchLinqMessage(thread: Thread, message: Message) {
   if (message.author.isBot) return;
 
-  const replyTarget = await resolveLinqReplyTarget(message, thread);
-  const inbound = await prepareInboundMessage(message, thread, replyTarget);
+  const replyTarget = await inboundStep("reply_target", message.id, () =>
+    resolveLinqReplyTarget(message, thread)
+  );
+  const inbound = await inboundStep("prepare", message.id, () =>
+    prepareInboundMessage(message, thread, replyTarget)
+  );
 
   // A worker can capture the review and then fail before its parent emits a
   // result. Channel lifecycle recovery cannot post in that case when a cold
   // webhook has not yet restored the serialized thread. The inbound webhook
   // always has the real thread, so flush the newest pending review here before
   // the next model call has a chance to fail.
-  await deliverSubmissionScreenshot(
-    thread,
-    inbound.scope,
-    `linq:inbound:${message.id}:review-recovery`,
-    {}
+  await inboundStep("review_recovery", message.id, () =>
+    deliverSubmissionScreenshot(
+      thread,
+      inbound.scope,
+      `linq:inbound:${message.id}:review-recovery`,
+      {}
+    )
   );
 
   const restartQuery = applicationRestartQuery(message.text);
   if (restartQuery) {
-    const restart = await restartTrackedApplication(
-      thread,
-      inbound,
-      restartQuery
+    const restart = await inboundStep("restart", message.id, () =>
+      restartTrackedApplication(thread, inbound, restartQuery)
     );
     if (restart) return;
   }
 
-  try {
-    await bot.getAdapter("linq").markRead(thread.id, message.id);
-  } catch {
-    // Read receipts are optional and must not interrupt the candidate turn.
-  }
+  // Read receipts, tapbacks, and the idle reset are courtesies. Bounded so a
+  // provider that stops answering cannot spend the turn's whole budget on one.
+  await inboundStep("mark_read", message.id, () =>
+    withTimeout(
+      async () => {
+        await bot.getAdapter("linq").markRead(thread.id, message.id);
+      },
+      INBOUND_STEP_TIMEOUT_MS,
+      undefined
+    )
+  );
 
   if (isApplicationRequest(message.text)) {
-    await reactToLinqMessage(thread, message.id, "👍");
+    await inboundStep("reaction", message.id, () =>
+      withTimeout(
+        () => reactToLinqMessage(thread, message.id, "👍"),
+        INBOUND_STEP_TIMEOUT_MS,
+        undefined
+      )
+    );
   }
 
   // A long-quiet thread gets a fresh session: less history to re-read on
   // every call, and the current deployment's instructions.
-  await rollOverIdleLinqSession(thread);
-  const session = await send(
-    {
-      context: inbound.context,
-      // Persist attachments before this turn and place their extracted text in
-      // workspace context. Passing the provider's raw PDF URL to the model
-      // gateway makes every configured provider reject the request.
-      message: message.text || "The candidate attached a file.",
-    },
-    { auth: inbound.auth, thread }
+  await inboundStep("rollover", message.id, () =>
+    withTimeout(
+      () => rollOverIdleLinqSession(thread),
+      INBOUND_STEP_TIMEOUT_MS,
+      "kept" as const
+    )
+  );
+  const session = await inboundStep("send", message.id, () =>
+    send(
+      {
+        context: inbound.context,
+        // Persist attachments before this turn and place their extracted text
+        // in workspace context. Passing the provider's raw PDF URL to the
+        // model gateway makes every configured provider reject the request.
+        message: message.text || "The candidate attached a file.",
+      },
+      { auth: inbound.auth, thread }
+    )
   );
   await rememberLinqSessionActivity(thread, session);
 }
@@ -810,24 +870,26 @@ async function prepareInboundMessage(
   }
   await rememberLinqRoleSearchThread(scope, thread.id, phoneNumber);
   if (phoneNumber) {
-    try {
-      await linkCandidate({
-        scope,
-        name: verifiedUser?.name ?? "",
-        identities: [
-          { kind: "phone", value: phoneNumber, verified: true },
-          ...(verifiedUser?.emailVerified && verifiedUser.email
-            ? [
-                {
-                  kind: "email" as const,
-                  value: verifiedUser.email,
-                  verified: true as const,
-                },
-              ]
-            : []),
-        ],
-      });
-    } catch (error) {
+    // Refreshing the CRM pointer is not on the candidate's critical path:
+    // nothing below reads the result, and awaited here a slow JuiceBox held
+    // the inbound webhook until the function timed out and the message was
+    // lost. Started and not awaited, like the conversation mirror below.
+    void linkCandidate({
+      scope,
+      name: verifiedUser?.name ?? "",
+      identities: [
+        { kind: "phone", value: phoneNumber, verified: true },
+        ...(verifiedUser?.emailVerified && verifiedUser.email
+          ? [
+              {
+                kind: "email" as const,
+                value: verifiedUser.email,
+                verified: true as const,
+              },
+            ]
+          : []),
+      ],
+    }).catch((error: unknown) => {
       // A missing or ambiguous CRM candidate must not block a normal text, but
       // it must not be invisible either: swallowed silently, a permanently
       // broken link looks identical to a candidate who simply never linked.
@@ -835,7 +897,7 @@ async function prepareInboundMessage(
         message: error instanceof Error ? error.message : String(error),
         workspaceId: scope.workspaceId,
       });
-    }
+    });
   }
   const importedResumes = await importLinqResumes(message, scope);
   const body = messageText(message);

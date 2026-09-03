@@ -28,6 +28,19 @@ import {
 
 const issuer = "goforay-openinstinct";
 const juiceboxAudience = "juicebox";
+
+/**
+ * Every call out to JuiceBox is bounded.
+ *
+ * None of these used to carry a signal, and one of them runs on the inbound
+ * webhook for every text a candidate sends. An upstream that accepted the
+ * connection and then went quiet held that request until Vercel killed the
+ * function at five minutes, and the candidate's message was dropped with no
+ * reply and no retry. A slow dependency may cost a feature; it may never cost
+ * the turn.
+ */
+const INBOUND_BRIDGE_TIMEOUT_MS = 5_000;
+const BRIDGE_TIMEOUT_MS = 15_000;
 const openInstinctAudience = "openinstinct";
 
 interface Identity {
@@ -185,6 +198,7 @@ export async function linkCandidate({
     `${apiUrl}/v1/internal/openinstinct/identity-links`,
     {
       method: "POST",
+      signal: AbortSignal.timeout(INBOUND_BRIDGE_TIMEOUT_MS),
       headers: {
         Authorization: `Bearer ${createBridgeToken({
           audience: juiceboxAudience,
@@ -262,6 +276,7 @@ async function juiceboxRequest(
   );
   headers.set("Content-Type", "application/json");
   const response = await fetch(`${apiUrl}${path}`, {
+    signal: AbortSignal.timeout(BRIDGE_TIMEOUT_MS),
     ...init,
     headers,
   });
@@ -500,6 +515,7 @@ export async function applicationTaskDocument(
   const response = await fetch(
     `${apiUrl}/v1/internal/openinstinct/application-tasks/${taskId}/documents/${documentId}`,
     {
+      signal: AbortSignal.timeout(BRIDGE_TIMEOUT_MS),
       headers: {
         Authorization: `Bearer ${createBridgeToken({
           audience: juiceboxAudience,
@@ -537,6 +553,7 @@ export async function candidateDefaultResume(scope: AccessScope) {
   const response = await fetch(
     `${apiUrl}/v1/internal/openinstinct/resumes/default`,
     {
+      signal: AbortSignal.timeout(BRIDGE_TIMEOUT_MS),
       headers: {
         Authorization: `Bearer ${createBridgeToken({
           audience: juiceboxAudience,
@@ -666,6 +683,7 @@ async function syncConversationEvent(id: string) {
       `${apiUrl}/v1/internal/openinstinct/conversation-events`,
       {
         method: "POST",
+        signal: AbortSignal.timeout(BRIDGE_TIMEOUT_MS),
         headers: {
           Authorization: `Bearer ${createBridgeToken({
             audience: juiceboxAudience,
