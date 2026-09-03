@@ -385,3 +385,25 @@ describe("remembering an answer", () => {
     expect(profilePatchForAnswer(field("First Name"), "  ")).toBeUndefined();
   });
 });
+
+describe("reading a control's label", () => {
+  const script = readFileSync(
+    "lib/application-runner/playwright-scripts.ts",
+    "utf8"
+  );
+
+  it("resolves aria-labelledby, which is how a React form names a control", () => {
+    // Without this a custom control reads as unlabelled, and an unlabelled
+    // required field has no question to put to the candidate.
+    expect(script).toContain("aria-labelledby");
+    expect(script).toContain("document.getElementById(id)");
+  });
+
+  it("reads a label only from the control itself", () => {
+    // An ancestor lookup returns a neighbouring field's text, which then
+    // travels into every downstream decision as if the page had said it.
+    expect(script).not.toMatch(
+      /closest\("fieldset, \[role=group\], \[role=radiogroup\], div"\)/u
+    );
+  });
+});

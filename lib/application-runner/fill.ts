@@ -8,6 +8,7 @@ import {
 import { readOrImportDefaultResume } from "@/db/services/default-resume";
 import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoints";
 import { updateApplicationRun } from "@/db/services/application-executions";
+import { applicationExecutionLog } from "@/lib/application-execution";
 import { browserProvider } from "@/lib/browser";
 import { suggestUnmappedFills } from "@/lib/application-runner/ambiguous";
 import {
@@ -52,8 +53,29 @@ const visibleFieldSchema = z.object({
 });
 
 const emptyRequiredSchema = z.object({
-  empty: z.array(z.object({ label: z.string(), selector: z.string() })),
+  empty: z.array(
+    z.object({
+      label: z.string(),
+      nearby: z.string().default(""),
+      selector: z.string(),
+      tag: z.string().default(""),
+    })
+  ),
 });
+
+/**
+ * Whether a field carries wording a candidate could actually answer.
+ *
+ * A control with no label leaves the helper nothing to name, and it answered
+ * with the only string it had — our own CSS selector — which then reached the
+ * candidate as the question. Neither the helper nor the candidate should ever
+ * be handed one of these.
+ */
+function hasReadableLabel(label: string) {
+  const text = label.replace(/\s+/gu, " ").trim();
+  if (text.length < 2) return false;
+  return !/^[#.(]|\[name=|\)\[\d+\]$/u.test(text);
+}
 
 /**
  * Applies fills and returns the selectors the page refused.
@@ -196,10 +218,15 @@ export async function fillVisibleForm(
       code: setFileInputCode(fill.selector, fill.value),
     });
   }
-  if (mapped.unmapped.length > 0) {
+  // Only fields with wording worth showing a candidate. An unlabelled one has
+  // no question for the helper to name, and its selector must never become one.
+  const askable = mapped.unmapped.filter((field) =>
+    hasReadableLabel(field.label)
+  );
+  if (askable.length > 0) {
     const helper = await suggestUnmappedFills({
       answers: input.answers,
-      fields: mapped.unmapped,
+      fields: askable,
       profileSummary: [
         profile.legalFirstName,
         profile.legalLastName,
@@ -212,13 +239,13 @@ export async function fillVisibleForm(
     if (helper.fills.length > 0) {
       await applyFills(input.browserSessionId, helper.fills);
       await rememberAnswers({
-        fields: mapped.unmapped,
+        fields: askable,
         fills: helper.fills,
         profile,
         scope: input.scope,
       });
     }
-    if (helper.blocker) {
+    if (helper.blocker && hasReadableLabel(helper.blocker)) {
       return {
         applyUrl: input.applyUrl,
         message: applicationPauseMessage(
@@ -240,9 +267,24 @@ export async function fillVisibleForm(
   const stillEmpty = remaining?.empty ?? [];
   if (stillEmpty.length > 0) {
     const asked = stillEmpty
+      .filter((field) => hasReadableLabel(field.label))
       .map((field) => field.label.replace(/\s+/gu, " ").trim())
-      .filter(Boolean)
       .slice(0, 5);
+    const unreadable = stillEmpty.filter(
+      (field) => !hasReadableLabel(field.label)
+    );
+    for (const field of unreadable) {
+      // The selector alone says nothing. Record the shape and the surrounding
+      // form wording so an unreadable control can be identified from the logs.
+      applicationExecutionLog({
+        apply_url: input.applyUrl,
+        event: "runner.unlabelled_field",
+        execution_id: input.executionId,
+        nearby: field.nearby,
+        selector: field.selector,
+        tag: field.tag,
+      });
+    }
     await updateApplicationRun({
       executionId: input.executionId,
       pauseReason: "user_input",
@@ -252,9 +294,16 @@ export async function fillVisibleForm(
       applyUrl: input.applyUrl,
       message: applicationPauseMessage(
         "user_input",
-        asked.length > 0
-          ? `these required questions are still blank: ${asked.join("; ")}.`
-          : `${String(stillEmpty.length)} required questions are still blank.`
+        [
+          asked.length > 0
+            ? `these required questions are still blank: ${asked.join("; ")}`
+            : "",
+          unreadable.length > 0
+            ? `${String(unreadable.length)} required field${unreadable.length === 1 ? "" : "s"} on the form carry no label I can read, so I cannot say what ${unreadable.length === 1 ? "it is" : "they are"} asking`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("; ") + "."
       ),
       pause: "user_input",
     };

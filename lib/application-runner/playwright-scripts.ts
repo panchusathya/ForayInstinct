@@ -22,6 +22,20 @@ const domHelpers = `
    * decision as if the page had said it.
    */
   const ownLabel = (node) => {
+    // aria-labelledby names the label by id, so it is as precise as label[for]
+    // and is how a React-rendered control usually carries its question. Without
+    // it such a field reads as unlabelled and there is nothing to ask about.
+    const labelledBy = node.getAttribute("aria-labelledby");
+    if (labelledBy) {
+      const named = labelledBy
+        .split(/\\s+/)
+        .map((id) => document.getElementById(id))
+        .filter(Boolean)
+        .map((element) => (element.innerText || element.textContent || "").trim())
+        .filter(Boolean)
+        .join(" ");
+      if (named) return named;
+    }
     if (node.id) {
       const byFor = document.querySelector("label[for=" + JSON.stringify(node.id) + "]");
       if (byFor && byFor.innerText) return byFor.innerText.trim();
@@ -267,7 +281,14 @@ ${domHelpers}
         blank = String(node.value || "").trim() === "";
       }
       if (!blank) return [];
-      return [{ label: labelFor(node).slice(0, 200), selector: selectorFor(node, index) }];
+      const label = labelFor(node).slice(0, 200);
+      // When nothing labels the control there is no question to put to the
+      // candidate, so carry the surrounding form text instead. It is the
+      // employer's own wording, never anything the candidate typed, and it is
+      // what makes an unreadable field diagnosable without a screenshot.
+      const wrapper = label === "" ? node.closest("fieldset, [role=group], div") : undefined;
+      const nearby = wrapper ? (wrapper.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 120) : "";
+      return [{ label, nearby, selector: selectorFor(node, index), tag: (node.getAttribute("type") || node.tagName).toLowerCase() }];
     });
   }
 );

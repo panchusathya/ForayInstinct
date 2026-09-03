@@ -282,3 +282,67 @@ describe("submitApplication", () => {
     );
   });
 });
+
+describe("a field with no readable label", () => {
+  const unlabelledField = {
+    label: "",
+    name: "",
+    required: true,
+    selector: "(input)[10]",
+    tag: "input",
+    type: "text",
+  };
+
+  const run = () =>
+    fillVisibleForm({
+      applyUrl: "https://jobs.example/role/1",
+      browserSessionId: "browser-1",
+      company: "Example",
+      executionId: "exec-1",
+      role: "Analyst",
+      rootSessionId: "root-1",
+      scope: { userId: "alice", workspaceId: "workspace:alice" },
+    });
+
+  beforeEach(() => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { result: { loginWall: false }, success: true };
+      }
+      if (request.code.includes("const empty = await")) {
+        return {
+          result: {
+            empty: [
+              {
+                label: "",
+                nearby: "Do you have experience with dbt? Yes No",
+                selector: "(input)[10]",
+                tag: "text",
+              },
+            ],
+          },
+          success: true,
+        };
+      }
+      if (request.code.includes("const fields = await")) {
+        return { result: { fields: [unlabelledField] }, success: true };
+      }
+      return { result: { filled: [], skipped: [] }, success: true };
+    });
+  });
+
+  it("never puts a CSS selector to the candidate as a question", async () => {
+    // The candidate was asked "(input)[10]" — our own positional selector.
+    const result = await run();
+
+    const message = "message" in result ? result.message : "";
+    expect(message).not.toContain("(input)");
+    expect(message).toContain("no label I can read");
+  });
+
+  it("does not ask the helper about a field it cannot name", async () => {
+    await run();
+
+    expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+});
