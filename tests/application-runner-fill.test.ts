@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   stageFile: vi.fn<() => Promise<void>>(),
   updateApplicationRun: vi.fn<() => Promise<void>>(),
   saveCandidateProfile: vi.fn<() => Promise<{ stored: boolean }>>(),
+  selfIdentification: vi.fn<() => Promise<Record<string, string>>>(),
 }));
 
 vi.mock("@/lib/model-config", () => ({
@@ -53,6 +54,10 @@ vi.mock("@/db/services/candidate-profile", () => ({
 
 vi.mock("@/db/services/default-resume", () => ({
   readOrImportDefaultResume: mocks.resume,
+}));
+
+vi.mock("@/db/services/self-identification", () => ({
+  readSelfIdentification: mocks.selfIdentification,
 }));
 
 vi.mock("@/lib/application-runner/vault", () => ({
@@ -90,6 +95,7 @@ beforeEach(() => {
     phone: "",
   });
   mocks.resume.mockResolvedValue(undefined);
+  mocks.selfIdentification.mockResolvedValue({});
   mocks.checkpoint.mockResolvedValue(undefined);
   mocks.stageFile.mockResolvedValue(undefined);
   mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {

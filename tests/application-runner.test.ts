@@ -602,3 +602,105 @@ describe("a now-or-future sponsorship answer", () => {
     });
   });
 });
+
+describe("the boilerplate every ATS asks", () => {
+  const control = (label: string, options?: string[]): VisibleFormField => ({
+    label,
+    name: "",
+    ...(options ? { options } : {}),
+    required: true,
+    selector: `#${label.replace(/\W+/gu, "-").toLowerCase()}`,
+    tag: "combobox",
+    type: "text",
+  });
+
+  const map = (
+    fields: VisibleFormField[],
+    selfIdentification: Record<string, string> = {}
+  ) =>
+    mapProfileToFormFields({
+      fields,
+      identity: { name: "Ada Lovelace" },
+      profile: emptyCandidateProfile,
+      selfIdentification,
+    });
+
+  it("declines a voluntary question rather than stalling the run", () => {
+    // These are optional by law and always offer a decline, so asking the
+    // candidate mid-fill spends a round trip on a question they may skip.
+    const fields = [
+      control("Gender", ["Male", "Female", "Decline to self identify"]),
+      control("Race / Ethnicity", ["Asian", "I don't wish to answer"]),
+      control("Veteran Status", ["Yes", "Prefer not to say"]),
+      control("Disability Status", ["Yes", "No", "I do not wish to answer"]),
+    ];
+
+    const { fills, unmapped } = map(fields);
+
+    expect(unmapped).toEqual([]);
+    expect(fills.map((fill) => fill.value)).toEqual([
+      "Decline to self identify",
+      "I don't wish to answer",
+      "Prefer not to say",
+      "I do not wish to answer",
+    ]);
+  });
+
+  it("uses the candidate's own answer once they have given one", () => {
+    const { fills } = map([control("Gender", ["Male", "Female", "Decline"])], {
+      gender: "Female",
+    });
+
+    expect(fills[0]?.value).toBe("Female");
+  });
+
+  it("agrees to an acknowledgement and to being contacted", () => {
+    const fields = [
+      control("Applicant Privacy Acknowledgement *", ["Yes", "No"]),
+      control(
+        "Would you like to receive communications via SMS and/or WhatsApp?",
+        ["Yes", "No"]
+      ),
+      control("I agree to the terms", ["I agree", "I disagree"]),
+    ];
+
+    const { fills, unmapped } = map(fields);
+
+    expect(unmapped).toEqual([]);
+    expect(fills.map((fill) => fill.value)).toEqual(["Yes", "Yes", "I agree"]);
+  });
+
+  it("never answers a question about the candidate on their behalf", () => {
+    // A permission is the candidate's standing instruction. A claim about
+    // where they worked would be a statement they never made, on an
+    // employer's form, under their name.
+    const fields = [
+      control("Have you worked at DoorDash?", ["Yes", "No"]),
+      control("Are you a current or former employee?", ["Yes", "No"]),
+      control("How did you hear about this role?", ["Referral", "Other"]),
+    ];
+
+    const { fills, unmapped } = map(fields);
+
+    expect(fills).toEqual([]);
+    expect(unmapped).toHaveLength(3);
+  });
+});
+
+describe("a select-like widget's inner input", () => {
+  const scripts = readFileSync(
+    "lib/application-runner/playwright-scripts.ts",
+    "utf8"
+  );
+
+  it("is skipped by both scans, whatever shape it takes", () => {
+    // Ten unlabelled required controls came from one react-select-based form:
+    // plain inputs with aria-autocomplete and a generated id, carrying no
+    // role at all, so the role-only guard never saw them.
+    expect(scripts).toContain('node.hasAttribute("aria-autocomplete")');
+    expect(scripts).toContain('/^react-select/.test(node.id || "")');
+    expect(
+      scripts.match(/if \(isComboboxInner\(node\)\) return \[\];/gu)
+    ).toHaveLength(2);
+  });
+});

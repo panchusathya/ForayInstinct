@@ -57,6 +57,19 @@ const domHelpers = `
   const isRequired = (node) => node.required === true
     || node.getAttribute("aria-required") === "true"
     || /\\*/.test(ownLabel(node).slice(0, 200));
+  /**
+   * Whether this node is the editable interior of a select-like widget rather
+   * than the widget itself.
+   */
+  const isComboboxInner = (node) => {
+    const owner = node.closest("[role=combobox], [role=listbox]");
+    if (owner && owner !== node) return true;
+    if (node.tagName.toLowerCase() !== "input") return false;
+    if (node.hasAttribute("aria-autocomplete")) return true;
+    if (/^react-select/.test(node.id || "")) return true;
+    const wrapper = node.parentElement && node.parentElement.parentElement;
+    return Boolean(wrapper && wrapper.querySelector("[role=combobox], [role=listbox]"));
+  };
 `;
 
 /**
@@ -97,9 +110,11 @@ ${domHelpers}
       if (type === "hidden" || type === "submit" || type === "button" || type === "image") return [];
       // A combobox's inner typeahead input is part of the wrapper already
       // collected, not a field of its own. Counted separately it becomes a
-      // required control with no label and nothing to ask about.
-      const owner = node.closest("[role=combobox], [role=listbox]");
-      if (owner && owner !== node) return [];
+      // required control with no label and nothing to ask about. The role is
+      // only one shape this takes: a react-select renders a plain input with
+      // aria-autocomplete and a generated id, and a form built that way left
+      // ten unlabelled required controls nobody could answer.
+      if (isComboboxInner(node)) return [];
 
       // One entry per radio group, not per radio.
       if (type === "radio") {
@@ -297,9 +312,11 @@ ${domHelpers}
       if (type === "hidden" || type === "submit" || type === "button" || type === "image") return [];
       // A combobox's inner typeahead input is part of the wrapper already
       // collected, not a field of its own. Counted separately it becomes a
-      // required control with no label and nothing to ask about.
-      const owner = node.closest("[role=combobox], [role=listbox]");
-      if (owner && owner !== node) return [];
+      // required control with no label and nothing to ask about. The role is
+      // only one shape this takes: a react-select renders a plain input with
+      // aria-autocomplete and a generated id, and a form built that way left
+      // ten unlabelled required controls nobody could answer.
+      if (isComboboxInner(node)) return [];
       if (!isRequired(node)) return [];
       let blank;
       if (type === "radio") {

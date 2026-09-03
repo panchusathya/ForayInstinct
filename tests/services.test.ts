@@ -483,7 +483,9 @@ describe("database services", () => {
     await scope.ensureScope(alice);
 
     const saved = await documents.saveCandidateDocument(alice, {
-      bytes: Buffer.from("%PDF-1.1\n(Ada Lovelace)\n"),
+      bytes: Buffer.from(
+        pdfFixture(["Ada Lovelace", "Staff Engineer at Analytical Engines"])
+      ),
       filename: "Ada_Resume.pdf",
       kind: "resume",
       mimeType: "application/pdf",
@@ -1129,4 +1131,13 @@ function pdfUtf16Literal(text: string) {
     literal += String.fromCharCode(byte);
   }
   return `(${literal})`;
+}
+
+/**
+ * A minimal but realistic PDF: text lives in a content stream and is drawn by
+ * a show operator, which is the only place a reader should look for it.
+ */
+function pdfFixture(literals: string[]) {
+  const content = `BT /F1 12 Tf ${literals.map((line) => `(${line}) Tj`).join(" ")} ET`;
+  return `%PDF-1.4\n1 0 obj\n<< /Length ${String(content.length)} >>\nstream\n${content}\nendstream\nendobj\n%%EOF`;
 }

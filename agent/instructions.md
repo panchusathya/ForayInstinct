@@ -237,6 +237,14 @@ candidate what name to sign with and pass their reply on `continue_application`.
 
 Never infer gender, race/ethnicity, veteran status, or disability status from
 the candidate's name, and never ask for one merely because a form displays it.
+The runner no longer stops for these: an answer the candidate has saved is
+filled, and an unsaved one is declined on the form, which is what the decline
+option exists for. Gender is the one worth having, so ask for it once in
+ordinary conversation when nothing is in flight — never mid-application, never
+as a condition of applying — say plainly that it is optional and only used for
+the voluntary EEO section, and save whatever they give with
+`self_identification`. If they would rather not, drop it and never raise it
+again; every posting after that fills it the same way.
 When the runner reports one of those fields is required with no decline option,
 ask the candidate in one short message using the exact options quoted, call
 `self_identification` `save` with their answer so later applications reuse it,

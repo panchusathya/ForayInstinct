@@ -6,6 +6,7 @@ import {
   saveCandidateProfile,
 } from "@/db/services/candidate-profile";
 import { readOrImportDefaultResume } from "@/db/services/default-resume";
+import { readSelfIdentification } from "@/db/services/self-identification";
 import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoints";
 import { updateApplicationRun } from "@/db/services/application-executions";
 import { applicationExecutionLog } from "@/lib/application-execution";
@@ -280,9 +281,12 @@ export async function fillVisibleForm(
   const bySelector = new Map(
     fields.map((field) => [field.selector, field] as const)
   );
-  const [profile, identity] = await Promise.all([
+  const [profile, identity, selfIdentification] = await Promise.all([
     readCandidateProfile(input.scope),
     readCandidateContactIdentity(input.scope),
+    // Voluntary EEO answers. Unset ones are declined on the form rather than
+    // asked about, which is what these questions offer a decline option for.
+    readSelfIdentification(input.scope).catch(() => ({})),
   ]);
   const resume = await stageResume(input).catch(() => undefined);
   const mapped = mapProfileToFormFields({
@@ -290,6 +294,7 @@ export async function fillVisibleForm(
     identity,
     profile,
     resumePath: resume?.path,
+    selfIdentification,
   });
 
   // The candidate's answers first. They outrank the profile for the control

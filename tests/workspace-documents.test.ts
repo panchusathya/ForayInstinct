@@ -38,7 +38,9 @@ describe("candidate documents", () => {
     ).toBe("Staff engineer in Austin");
     expect(
       extractDocumentText(
-        Buffer.from("%PDF-1.1\n(Ada Lovelace)\n(Staff Engineer)\n"),
+        Buffer.from(
+          pdfFixture(["Ada Lovelace", "Staff Engineer at Analytical Engines"])
+        ),
         "application/pdf",
         "ada.pdf"
       )
@@ -85,7 +87,10 @@ describe("candidate documents", () => {
   it("resolves octal escapes in PDF strings", () => {
     expect(
       extractDocumentText(
-        Buffer.from("%PDF-1.1\n(Ada \\050Lovelace\\051)\n", "latin1"),
+        Buffer.from(
+          pdfFixture(["Ada \\050Lovelace\\051 wrote the first algorithm"]),
+          "latin1"
+        ),
         "application/pdf",
         "ada.pdf"
       )
@@ -185,4 +190,13 @@ function corruptDocxFixture() {
   header.writeUInt32LE(payload.byteLength, 18);
   header.writeUInt16LE(name.byteLength, 26);
   return Buffer.concat([header, name, payload]);
+}
+
+/**
+ * A minimal but realistic PDF: text lives in a content stream and is drawn by
+ * a show operator, which is the only place a reader should look for it.
+ */
+function pdfFixture(literals: string[]) {
+  const content = `BT /F1 12 Tf ${literals.map((line) => `(${line}) Tj`).join(" ")} ET`;
+  return `%PDF-1.4\n1 0 obj\n<< /Length ${String(content.length)} >>\nstream\n${content}\nendstream\nendobj\n%%EOF`;
 }

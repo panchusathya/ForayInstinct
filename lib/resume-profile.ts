@@ -6,7 +6,11 @@ import {
   type CandidateProfilePatch,
   profilePatchOf,
 } from "@/lib/candidate-profile";
-import { extractDocumentText, extractDocumentUris } from "@/lib/document-text";
+import {
+  extractDocumentText,
+  extractDocumentUris,
+  looksLikeProse,
+} from "@/lib/document-text";
 
 /**
  * A stored resume as the extractor sees it. `extractedText` is what the
@@ -72,17 +76,18 @@ const linkedInPattern =
  */
 export function resumeText(source: ResumeSource): string {
   const stored = source.extractedText?.trim() ?? "";
-  const text =
-    stored !== "" || !source.bytes
-      ? stored
-      : extractDocumentText(
-          source.bytes,
-          source.mimeType ?? "",
-          source.filename ?? ""
-        ).trim();
-  // An extractor fed a scanned or encoded PDF returns glyph codes and
-  // punctuation. That is not a resume anyone can read facts off.
-  return /[a-z]{3,}/iu.test(text) ? text : "";
+  if (looksLikeProse(stored)) return stored;
+  // The stored text was extracted once, at upload, by whatever the extractor
+  // did that day. When it reads as noise the bytes are re-read here, which
+  // repairs a document stored before the extractor was fixed without asking
+  // the candidate to upload it again.
+  if (!source.bytes) return "";
+  const fresh = extractDocumentText(
+    source.bytes,
+    source.mimeType ?? "",
+    source.filename ?? ""
+  ).trim();
+  return looksLikeProse(fresh) ? fresh : "";
 }
 
 /**

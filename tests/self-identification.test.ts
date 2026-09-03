@@ -125,6 +125,14 @@ describe("voluntary self-identification", () => {
     expect(instructions).toContain(
       "call `continue_application` with their answer to finish the"
     );
+    // The runner declines an unsaved voluntary field instead of stopping, so
+    // the only one worth asking for is asked away from an application.
+    expect(coordinatorText()).toContain(
+      "an unsaved one is declined on the form"
+    );
+    expect(coordinatorText()).toContain(
+      "ask for it once in ordinary conversation when nothing is in flight"
+    );
     expect(instructions).toContain("Never turn that question into a takeover");
     // The disability form's signature block needs a name and a date the
     // worker cannot produce on its own.
