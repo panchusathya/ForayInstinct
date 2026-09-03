@@ -15,6 +15,7 @@ import {
   extractProfileFromResume,
   type ResumeSource,
   resumeText,
+  resumeUris,
 } from "@/lib/resume-profile";
 import { applicationPauseMessage } from "@/lib/task-completion";
 
@@ -66,8 +67,8 @@ export async function missingProfileFacts(
  * form, so the candidate was asked for their own name field by field.
  *
  * Two reads, priced differently. The contact facts — an email address, a
- * LinkedIn URL — are regexes over the stored text and run whenever either is
- * missing. The model read, for names and history, runs only while one of
+ * LinkedIn URL — are regexes over the document's text and its link targets,
+ * and run whenever either is missing. The model read, for names and history, runs only while one of
  * those is missing, because a resume that lacks a city would otherwise cost a
  * model call on every start with nothing to show for it. Neither overwrites a
  * value already on the profile, and anything that goes wrong returns the
@@ -90,7 +91,8 @@ async function adoptResumeFacts(
   if (!wantsContact && !wantsModel) return stored;
   try {
     const text = resumeText(resume);
-    if (text === "") {
+    const uris = resumeUris(resume);
+    if (text === "" && uris.length === 0) {
       applicationExecutionLog({
         event: "runner.resume_profile",
         extracted: "no text",
@@ -98,18 +100,24 @@ async function adoptResumeFacts(
       });
       return stored;
     }
+    // The whole document, not just its text: the address behind a hyperlink is
+    // exactly the fact that kept being asked for.
     const extracted = wantsModel
-      ? await extractProfileFromResume({ extractedText: text })
-      : contactFactsPatch(text);
+      ? await extractProfileFromResume(resume)
+      : contactFactsPatch(resume);
     const patch = extracted ? onlyUnset(stored, extracted) : {};
-    // Field names only, never their values. Without this there is no way to
-    // tell a model that failed from a resume that said nothing from a patch
-    // correctly skipped because the candidate had already answered.
+    // Field names and sizes, never values. Without this there is no telling a
+    // model that failed from a resume that said nothing from a patch correctly
+    // skipped because the candidate had already answered — and no telling a
+    // read that had nothing to read from one that read plenty and recognized
+    // none of it.
     applicationExecutionLog({
       event: "runner.resume_profile",
       extracted: extracted ? Object.keys(extracted).join(", ") : "none",
       read: wantsModel ? "model" : "regex",
       stored: Object.keys(patch).join(", ") || "none",
+      text_length: text.length,
+      uri_count: uris.length,
     });
     if (Object.keys(patch).length === 0) return stored;
     const saved = await saveCandidateProfile(scope, patch);

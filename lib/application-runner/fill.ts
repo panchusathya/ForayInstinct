@@ -493,6 +493,25 @@ export async function submitApplication(
     input.browserSessionId
   ).catch(() => undefined);
   const submitted = probe?.submitted === true;
+  const complaint = (click?.errors ?? [])
+    .map((error) => error.replace(/\s+/gu, " ").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  // The one question that matters most about a run — did the application
+  // actually go in — was the only transition that wrote no log line. It was
+  // answerable from a checkpoint row and nowhere else, so nobody reading the
+  // logs, the candidate included, could tell a submitted application from a
+  // refused one. The page's own words, never the candidate's values.
+  applicationExecutionLog({
+    apply_url: input.applyUrl,
+    clicked: click?.clicked === true,
+    errors: complaint.join(" | ") || "none",
+    event: "runner.submit",
+    execution_id: input.executionId,
+    navigated: click?.navigated === true,
+    status: submitted ? "completed" : "blocked",
+    submitted,
+  });
   await recordBrowserRunCheckpoint(input.scope, input.browserSessionId, {
     action: "submit",
     executionId: input.executionId,
@@ -517,10 +536,6 @@ export async function submitApplication(
     pauseReason: "user_input",
     status: "waiting",
   });
-  const complaint = (click?.errors ?? [])
-    .map((error) => error.replace(/\s+/gu, " ").trim())
-    .filter(Boolean)
-    .slice(0, 3);
   return {
     applyUrl: input.applyUrl,
     message: applicationPauseMessage(
