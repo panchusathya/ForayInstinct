@@ -29,6 +29,93 @@ export function extractDocumentText(
   return "";
 }
 
+/**
+ * The URLs a document links to, which its text does not contain.
+ *
+ * A resume almost always shows its LinkedIn as the word "LinkedIn" with the
+ * address behind the hyperlink. Text extraction reads the visible word and
+ * loses the target, so the profile ended up asking a candidate to type a URL
+ * their own resume was carrying. Link targets live outside the text: in a
+ * PDF's annotation dictionaries, and in a DOCX's relationship file.
+ */
+export function extractDocumentUris(
+  bytes: Buffer,
+  mimeType: string,
+  filename: string
+): string[] {
+  const name = filename.toLowerCase();
+  try {
+    if (
+      mimeType ===
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      name.endsWith(".docx")
+    ) {
+      return uniqueUris(extractDocxUris(bytes));
+    }
+    if (mimeType === "application/pdf" || name.endsWith(".pdf")) {
+      return uniqueUris(extractPdfUris(bytes));
+    }
+  } catch {
+    // A malformed document still yields its text; links are a bonus.
+  }
+  return [];
+}
+
+function uniqueUris(values: string[]) {
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = stripUnstorableCharacters(value).trim();
+    // Only absolute web links. A mailto: or an internal anchor is not a
+    // profile, and a relative target cannot be resolved from here.
+    if (/^https?:\/\/[^\s]+$/iu.test(trimmed)) seen.add(trimmed);
+  }
+  return [...seen].slice(0, 50);
+}
+
+/** PDF link targets: `/URI (https://…)` inside an annotation dictionary. */
+function extractPdfUris(bytes: Buffer) {
+  const sources = [bytes, ...inflatePdfStreams(bytes)];
+  const uris: string[] = [];
+  for (const source of sources) {
+    const latin1 = source.toString("latin1");
+    for (const match of latin1.matchAll(/\/URI\s*\((?:\\.|[^\\)])*\)/gu)) {
+      const literal = match[0].slice(match[0].indexOf("(") + 1, -1);
+      uris.push(decodePdfString(literal));
+    }
+  }
+  return uris;
+}
+
+/** DOCX link targets: external relationships in the document's rels part. */
+function extractDocxUris(bytes: Buffer) {
+  const xml = zipEntry(bytes, "word/_rels/document.xml.rels");
+  if (!xml) return [];
+  const text = xml.toString("utf8");
+  const uris: string[] = [];
+  for (const match of text.matchAll(
+    /Target="([^"]+)"[^>]*TargetMode="External"/gu
+  )) {
+    if (match[1]) uris.push(decodeXmlEntities(match[1]));
+  }
+  for (const match of text.matchAll(
+    /TargetMode="External"[^>]*Target="([^"]+)"/gu
+  )) {
+    if (match[1]) uris.push(decodeXmlEntities(match[1]));
+  }
+  return uris;
+}
+
+function decodeXmlEntities(value: string) {
+  return value
+    .replace(/&amp;/gu, "&")
+    .replace(/&lt;/gu, "<")
+    .replace(/&gt;/gu, ">")
+    .replace(/&quot;/gu, '"')
+    .replace(/&#(\d+);/gu, (_, code: string) =>
+      String.fromCharCode(Number(code))
+    );
+}
+
 function clipExtractedText(value: string) {
   const normalized = stripUnstorableCharacters(value)
     .replace(/\s+/gu, " ")

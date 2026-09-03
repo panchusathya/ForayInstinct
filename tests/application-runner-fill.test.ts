@@ -271,6 +271,31 @@ describe("submitApplication", () => {
     );
   });
 
+  it("records what the page did, so a submission is never in doubt", async () => {
+    // The one transition that mattered most wrote no log line, so a submitted
+    // application and a refused one read identically afterwards.
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    mocks.executePlaywright.mockResolvedValue({
+      result: {
+        clicked: true,
+        errors: ["This field is required."],
+        navigated: false,
+      },
+      success: true,
+    });
+    mocks.inspect.mockResolvedValue({ submitted: false });
+
+    await submit();
+
+    const logged = info.mock.calls.map((call) => JSON.stringify(call));
+    const submitLine = logged.find((line) => line.includes("runner.submit"));
+    expect(submitLine).toContain('"status":"blocked"');
+    expect(submitLine).toContain('"submitted":false');
+    expect(submitLine).toContain('"clicked":true');
+    expect(submitLine).toContain("This field is required.");
+    info.mockRestore();
+  });
+
   it("reports done once the posting confirms it", async () => {
     mocks.executePlaywright.mockResolvedValue({
       result: { clicked: true, errors: [], navigated: true },

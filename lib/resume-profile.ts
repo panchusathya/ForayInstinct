@@ -6,7 +6,7 @@ import {
   type CandidateProfilePatch,
   profilePatchOf,
 } from "@/lib/candidate-profile";
-import { extractDocumentText } from "@/lib/document-text";
+import { extractDocumentText, extractDocumentUris } from "@/lib/document-text";
 
 /**
  * A stored resume as the extractor sees it. `extractedText` is what the
@@ -86,6 +86,28 @@ export function resumeText(source: ResumeSource): string {
 }
 
 /**
+ * The links a resume carries but does not print.
+ *
+ * A resume usually shows its LinkedIn as the word "LinkedIn" with the address
+ * behind the hyperlink, so the extracted text has the label and not the URL.
+ * Reading the link targets is what stops a candidate being asked to type an
+ * address their own resume already carries.
+ */
+export function resumeUris(source: ResumeSource): string[] {
+  if (!source.bytes) return [];
+  return extractDocumentUris(
+    source.bytes,
+    source.mimeType ?? "",
+    source.filename ?? ""
+  );
+}
+
+/** Everything a regex may search: the printed text plus the link targets. */
+function factsMaterial(source: ResumeSource) {
+  return [resumeText(source), ...resumeUris(source)].join("\n").trim();
+}
+
+/**
  * The facts a resume states in a shape a regex can find exactly. These never
  * go through a model: an address or a profile URL is either on the page or it
  * is not, and a model can only make one up.
@@ -104,9 +126,9 @@ export function resumeContactFacts(text: string): {
 
 /** The regex facts alone as a profile patch, for a read that needs no model. */
 export function contactFactsPatch(
-  text: string
+  source: ResumeSource
 ): CandidateProfilePatch | undefined {
-  return toProfilePatch(resumeContactFacts(text));
+  return toProfilePatch(resumeContactFacts(factsMaterial(source)));
 }
 
 /**
@@ -126,11 +148,20 @@ export async function extractProfileFromResume(
   source: ResumeSource
 ): Promise<CandidateProfilePatch | undefined> {
   const text = resumeText(source);
-  if (text === "") return undefined;
-  const exact = resumeContactFacts(text);
+  const uris = resumeUris(source);
+  if (text === "" && uris.length === 0) return undefined;
+  // The link targets win over anything the model reports, and are given to it
+  // as well so it can attribute them.
+  const exact = resumeContactFacts(factsMaterial(source));
   const { text: reply } = await generateText({
     model: chatLanguageModel,
-    prompt: `${instructions}\n\nResume text:\n${text}`,
+    prompt: [
+      instructions,
+      "",
+      "Resume text:",
+      text,
+      ...(uris.length > 0 ? ["", "Links in the document:", ...uris] : []),
+    ].join("\n"),
   });
   const parsed = extractedSchema.safeParse(parseJsonObject(reply));
   return toProfilePatch({ ...(parsed.success ? parsed.data : {}), ...exact });
