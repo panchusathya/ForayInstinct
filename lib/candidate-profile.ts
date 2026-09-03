@@ -123,7 +123,13 @@ export type CandidateProfilePatch = z.infer<typeof candidateProfilePatchSchema>;
 export function profilePatchOf(
   input: Record<string, unknown>
 ): CandidateProfilePatch | undefined {
-  const provided = new Set(Object.keys(input));
+  // A key carrying `undefined` was not stated either: the patch schema would
+  // hand it the default, and that default would then clear a stored answer.
+  const provided = new Set(
+    Object.entries(input)
+      .filter(([, value]) => value !== undefined)
+      .map(([key]) => key)
+  );
   if (provided.size === 0) return undefined;
   const parsed = candidateProfilePatchSchema.safeParse(input);
   if (!parsed.success) return undefined;

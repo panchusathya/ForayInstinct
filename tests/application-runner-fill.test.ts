@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   checkpoint: vi.fn<() => Promise<void>>(),
   stageFile: vi.fn<() => Promise<void>>(),
   updateApplicationRun: vi.fn<() => Promise<void>>(),
+  saveCandidateProfile: vi.fn<() => Promise<{ stored: boolean }>>(),
 }));
 
 vi.mock("@/lib/model-config", () => ({
@@ -47,6 +48,7 @@ vi.mock("@/agent/subagents/worker/lib/post-action-browser-state", () => ({
 vi.mock("@/db/services/candidate-profile", () => ({
   readCandidateProfile: mocks.profile,
   readCandidateContactIdentity: mocks.identity,
+  saveCandidateProfile: mocks.saveCandidateProfile,
 }));
 
 vi.mock("@/db/services/default-resume", () => ({
@@ -344,5 +346,240 @@ describe("a field with no readable label", () => {
     await run();
 
     expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+});
+
+describe("the candidate's answers, keyed by question", () => {
+  const workAuth = {
+    label: "Are you authorized to work for any employer in the U.S?*",
+    name: "question_1",
+    required: true,
+    selector: "#work-auth",
+    tag: "combobox",
+    type: "text",
+  };
+  const sponsorship = {
+    label:
+      "Will you now or in the future require sponsorship for employment visa status?*",
+    name: "question_2",
+    required: true,
+    selector: "#sponsorship",
+    tag: "combobox",
+    type: "text",
+  };
+
+  const run = (answered?: Record<string, string>) =>
+    fillVisibleForm({
+      answered,
+      applyUrl: "https://jobs.example/role/1",
+      browserSessionId: "browser-1",
+      company: "Example",
+      executionId: "exec-1",
+      role: "Analyst",
+      rootSessionId: "root-1",
+      scope: { userId: "alice", workspaceId: "workspace:alice" },
+    });
+
+  beforeEach(() => {
+    mocks.saveCandidateProfile.mockResolvedValue({ stored: true });
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { result: { loginWall: false }, success: true };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        return { result: { fields: [workAuth, sponsorship] }, success: true };
+      }
+      return { result: { filled: [], skipped: [] }, success: true };
+    });
+  });
+
+  it("fills the named control and keeps the fact, with no model in between", async () => {
+    // The loop the candidate lived through: they answered, the answer reached
+    // only the helper for one pass, the next round re-derived from the profile
+    // and asked again.
+    const result = await run({
+      [workAuth.label]: "Yes",
+      [sponsorship.label]: "No",
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(mocks.generateText).not.toHaveBeenCalled();
+    const fillCode = mocks.executePlaywright.mock.calls
+      .map((call) => call[1].code)
+      .find((code) => code.includes("const fills = "));
+    expect(fillCode).toContain("#work-auth");
+    expect(fillCode).toContain("#sponsorship");
+    expect(mocks.saveCandidateProfile).toHaveBeenCalledWith(
+      { userId: "alice", workspaceId: "workspace:alice" },
+      {
+        requiresSponsorshipFuture: "no",
+        requiresSponsorshipNow: "no",
+        workAuthorization: "us_visa_no_sponsorship",
+      }
+    );
+  });
+
+  it("overrides a stored profile value the page refused", async () => {
+    mocks.profile.mockResolvedValue({
+      ...emptyCandidateProfile,
+      legalFirstName: "Ada",
+      legalLastName: "Lovelace",
+      workAuthorization: "other",
+    });
+
+    await run({ [workAuth.label]: "U.S. Citizen" });
+
+    expect(mocks.saveCandidateProfile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ workAuthorization: "us_citizen" })
+    );
+  });
+
+  it("hands an answer whose question is gone to the helper as text", async () => {
+    mocks.profile.mockResolvedValue({
+      ...emptyCandidateProfile,
+      legalFirstName: "Ada",
+      legalLastName: "Lovelace",
+      workAuthorization: "us_citizen",
+      requiresSponsorshipNow: "no",
+    });
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { result: { loginWall: false }, success: true };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        return {
+          result: {
+            fields: [
+              {
+                label: "Favorite color",
+                name: "color",
+                required: true,
+                selector: "#color",
+                tag: "input",
+                type: "text",
+              },
+            ],
+          },
+          success: true,
+        };
+      }
+      return { result: { filled: [], skipped: [] }, success: true };
+    });
+    mocks.generateText.mockResolvedValue({
+      text: JSON.stringify({ fills: [{ selector: "#color", value: "blue" }] }),
+    });
+
+    await run({ "What is your favourite colour": "blue" });
+
+    const prompt = mocks.generateText.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).toContain("What is your favourite colour: blue");
+    // The helper now sees the whole profile, not four strings.
+    expect(prompt).toContain("Work authorization: us_citizen");
+  });
+});
+
+describe("a control that refuses every phrasing", () => {
+  const workAuth = {
+    label: "Are you authorized to work for any employer in the U.S?*",
+    name: "question_1",
+    required: true,
+    selector: "#work-auth",
+    tag: "combobox",
+    type: "text",
+  };
+
+  beforeEach(() => {
+    mocks.profile.mockResolvedValue({
+      ...emptyCandidateProfile,
+      legalFirstName: "Ada",
+      legalLastName: "Lovelace",
+      workAuthorization: "other",
+    });
+    mocks.generateText.mockResolvedValue({
+      text: JSON.stringify({ blockers: [workAuth.label], fills: [] }),
+    });
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { result: { loginWall: false }, success: true };
+      }
+      if (request.code.includes("const empty = await")) {
+        return {
+          result: {
+            empty: [{ label: workAuth.label, selector: workAuth.selector }],
+          },
+          success: true,
+        };
+      }
+      if (request.code.includes("const fields = await")) {
+        return { result: { fields: [workAuth] }, success: true };
+      }
+      return {
+        result: {
+          filled: [],
+          offered: { selector: "#work-auth", options: ["Yes", "No"] },
+          skipped: [{ reason: "no-option", selector: "#work-auth" }],
+        },
+        success: true,
+      };
+    });
+  });
+
+  it("asks the question once, carrying the page's own choices", async () => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { result: { loginWall: false }, success: true };
+      }
+      if (request.code.includes("const empty = await")) {
+        return {
+          result: {
+            empty: [{ label: workAuth.label, selector: workAuth.selector }],
+          },
+          success: true,
+        };
+      }
+      if (request.code.includes("const fields = await")) {
+        return { result: { fields: [workAuth] }, success: true };
+      }
+      return {
+        result: {
+          filled: [],
+          offered: [{ options: ["Yes", "No"], selector: "#work-auth" }],
+          skipped: [{ reason: "no-option", selector: "#work-auth" }],
+        },
+        success: true,
+      };
+    });
+
+    const result = await fillVisibleForm({
+      applyUrl: "https://jobs.example/role/1",
+      browserSessionId: "browser-1",
+      company: "Example",
+      executionId: "exec-1",
+      role: "Analyst",
+      rootSessionId: "root-1",
+      scope: { userId: "alice", workspaceId: "workspace:alice" },
+    });
+
+    expect(result).toMatchObject({
+      pause: "user_input",
+      questions: [
+        {
+          label: "Are you authorized to work for any employer in the U.S?*",
+          options: ["Yes", "No"],
+        },
+      ],
+    });
+    expect("message" in result ? result.message : "").toContain("Yes / No");
+    // The refused control went back to the helper with the real options, so
+    // the model was consulted about it exactly once.
+    const prompt = mocks.generateText.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).toContain('"options":["Yes","No"]');
   });
 });

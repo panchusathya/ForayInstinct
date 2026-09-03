@@ -22,6 +22,18 @@ describe("worker input bubbling", () => {
       "call `continue_application` with that `apply_url` and their answers"
     );
     expect(instructions).toContain('pause: "user_input"');
+    // Every blank question goes to the candidate at once and comes back keyed
+    // by its label, so the runner can place each answer without a model and
+    // the coordinator never fills the gap from memory or restarts the run.
+    expect(instructions).toContain(
+      "ask every one of them in a single short message"
+    );
+    expect(instructions).toContain(
+      "put each reply in `answered` keyed by the exact `label`"
+    );
+    expect(instructions).toContain(
+      "never call `start_application` again for a posting whose run is waiting"
+    );
     expect(browserSkill).toContain("native `final_output` with `failure`");
     expect(browserSkill).toContain("End the turn immediately");
   });

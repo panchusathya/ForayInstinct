@@ -15,6 +15,7 @@ import type { AccessScope } from "@/lib/access-scope";
 import { pauseKindFromOutput } from "@/lib/task-completion";
 
 export async function continueApplication(input: {
+  answered?: Record<string, string>;
   answers?: string;
   applyUrl: string;
   approved?: boolean;
@@ -26,8 +27,13 @@ export async function continueApplication(input: {
   if (!run) {
     throw new Error("No application run found for that posting URL.");
   }
+  const answered =
+    input.answered && Object.keys(input.answered).length > 0
+      ? input.answered
+      : undefined;
   await resumeApplicationHook(run.id, {
     action: "continue",
+    answered,
     answers: input.answers,
     approved: input.approved,
     otp: input.otp,
@@ -52,11 +58,12 @@ export async function continueApplication(input: {
       scope: input.scope,
     });
   }
-  if (run.browserSessionId && (input.answers || input.otp)) {
+  if (run.browserSessionId && (input.answers || input.otp || answered)) {
     return runApplicationUntilPause({
       applyUrl,
       company: run.company,
       executionId: run.id,
+      ...(answered ? { resumeAnswered: answered } : {}),
       resumeAnswers: [input.answers, input.otp].filter(Boolean).join("\n"),
       role: run.role,
       rootSessionId: run.rootSessionId,

@@ -10,7 +10,12 @@ import {
   type CandidateProfilePatch,
   missingProfileFields,
 } from "@/lib/candidate-profile";
-import { extractProfileFromResume } from "@/lib/resume-profile";
+import {
+  contactFactsPatch,
+  extractProfileFromResume,
+  type ResumeSource,
+  resumeText,
+} from "@/lib/resume-profile";
 import { applicationPauseMessage } from "@/lib/task-completion";
 
 /**
@@ -60,23 +65,42 @@ export async function missingProfileFacts(
  * suppressed the questions at intake and then could not answer them at the
  * form, so the candidate was asked for their own name field by field.
  *
- * Runs only when something blocking is actually missing, never overwrites a
- * value already on the profile, and returns the stored profile untouched if
- * anything goes wrong — a model call must not decide whether an application
- * can start.
+ * Two reads, priced differently. The contact facts — an email address, a
+ * LinkedIn URL — are regexes over the stored text and run whenever either is
+ * missing. The model read, for names and history, runs only while one of
+ * those is missing, because a resume that lacks a city would otherwise cost a
+ * model call on every start with nothing to show for it. Neither overwrites a
+ * value already on the profile, and anything that goes wrong returns the
+ * stored profile untouched — a model call must not decide whether an
+ * application can start.
  */
 async function adoptResumeFacts(
   scope: AccessScope,
   stored: CandidateProfile,
-  resume: { bytes: Buffer; mimeType: string } | undefined
+  resume: ResumeSource | undefined
 ) {
   if (!resume) return stored;
-  if (missingProfileFields(stored).length === 0) return stored;
+  const wantsContact =
+    stored.contactEmail === "" ||
+    !stored.links.some((link) => /linkedin/iu.test(link.label + link.url));
+  const wantsModel =
+    stored.legalFirstName === "" ||
+    stored.legalLastName === "" ||
+    stored.workHistory.length === 0;
+  if (!wantsContact && !wantsModel) return stored;
   try {
-    const extracted = await extractProfileFromResume({
-      bytes: resume.bytes,
-      mimeType: resume.mimeType,
-    });
+    const text = resumeText(resume);
+    if (text === "") {
+      applicationExecutionLog({
+        event: "runner.resume_profile",
+        extracted: "no text",
+        stored: "none",
+      });
+      return stored;
+    }
+    const extracted = wantsModel
+      ? await extractProfileFromResume({ extractedText: text })
+      : contactFactsPatch(text);
     const patch = extracted ? onlyUnset(stored, extracted) : {};
     // Field names only, never their values. Without this there is no way to
     // tell a model that failed from a resume that said nothing from a patch
@@ -84,6 +108,7 @@ async function adoptResumeFacts(
     applicationExecutionLog({
       event: "runner.resume_profile",
       extracted: extracted ? Object.keys(extracted).join(", ") : "none",
+      read: wantsModel ? "model" : "regex",
       stored: Object.keys(patch).join(", ") || "none",
     });
     if (Object.keys(patch).length === 0) return stored;
@@ -98,11 +123,22 @@ async function adoptResumeFacts(
   }
 }
 
-/** The candidate's own entries always win over anything read off a resume. */
+/**
+ * The candidate's own entries always win over anything read off a resume.
+ * Links are the one list that merges: a LinkedIn URL found on the resume joins
+ * the links the candidate typed rather than being dropped because they typed
+ * any at all.
+ */
 function onlyUnset(stored: CandidateProfile, patch: CandidateProfilePatch) {
   const current: Record<string, unknown> = { ...stored };
   const kept: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(patch)) {
+  const { links, ...rest } = patch;
+  if (links) {
+    const known = new Set(stored.links.map((link) => link.url.toLowerCase()));
+    const added = links.filter((link) => !known.has(link.url.toLowerCase()));
+    if (added.length > 0) kept.links = [...stored.links, ...added];
+  }
+  for (const [key, value] of Object.entries(rest)) {
     const existing = current[key];
     const alreadySet = Array.isArray(existing)
       ? existing.length > 0

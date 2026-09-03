@@ -10,6 +10,7 @@ import { env } from "@/lib/env";
 
 export interface ApplicationHookPayload {
   action?: "cancel" | "continue";
+  answered?: Record<string, string>;
   answers?: string;
   approved?: boolean;
   otp?: string;
@@ -33,6 +34,7 @@ export async function fillApplicationWorkflow(input: ApplicationRunInput) {
       applyUrl: current.applyUrl,
       company: current.company,
       executionId: current.executionId,
+      ...(payload.answered ? { resumeAnswered: payload.answered } : {}),
       resumeAnswers: [payload.answers, payload.otp].filter(Boolean).join("\n"),
       role: current.role,
       rootSessionId: current.rootSessionId,

@@ -125,7 +125,15 @@ export function profilePatchForAnswer(
   }
   if (/sponsor/u.test(key)) {
     const answered = yesNoFromAnswer(value);
-    return answered ? { requiresSponsorshipNow: answered } : undefined;
+    if (!answered) return undefined;
+    // "Now or in the future" is one question over two facts. A no settles
+    // both; a yes only says the future one, since it may not be needed now.
+    if (/future/u.test(key)) {
+      return answered === "no"
+        ? { requiresSponsorshipFuture: "no", requiresSponsorshipNow: "no" }
+        : { requiresSponsorshipFuture: "yes" };
+    }
+    return { requiresSponsorshipNow: answered };
   }
   if (/relocat/u.test(key)) {
     const answered = yesNoFromAnswer(value);
@@ -142,6 +150,54 @@ export function profilePatchForAnswer(
     return Number.isFinite(amount) ? { salaryMin: amount } : undefined;
   }
   return undefined;
+}
+
+/**
+ * The control a question was about, found again by its label.
+ *
+ * A pause names questions by label because that is the one thing that
+ * survives a re-scan: selectors are positional when a control has no id, and
+ * a page re-render shifts them. Both sides are normalized the same way, so a
+ * trailing asterisk or a stray space does not lose the match.
+ */
+export function matchFieldByLabel(
+  fields: VisibleFormField[],
+  question: string
+): VisibleFormField | undefined {
+  const wanted = normalize(question);
+  if (wanted === "") return undefined;
+  const exact = fields.find((field) => normalize(field.label) === wanted);
+  if (exact) return exact;
+  const loose = fields.filter((field) => {
+    const label = normalize(field.label);
+    return (
+      label.length >= 4 && (label.includes(wanted) || wanted.includes(label))
+    );
+  });
+  return loose.length === 1 ? loose[0] : undefined;
+}
+
+/**
+ * The candidate's answer to a question, as a fill for that control.
+ *
+ * The answer is matched against the control's options where they were read
+ * at scan time, and carries every other phrasing that means the same thing,
+ * so a Yes to "authorized to work" lands on a control that only offers those
+ * two words. When nothing resolves, the answer itself is tried: the page then
+ * reports what it would accept instead.
+ */
+export function fillForAnswer(
+  field: VisibleFormField,
+  answer: string
+): MappedFill | undefined {
+  const value = answer.trim();
+  if (value === "") return undefined;
+  const resolved = resolveAgainstOptions(field, value) ?? value;
+  return {
+    alternatives: alternativesFor(field, value),
+    selector: field.selector,
+    value: resolved,
+  };
 }
 
 function yesNoFromAnswer(value: string): "yes" | "no" | undefined {
