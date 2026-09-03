@@ -692,3 +692,58 @@ const legacyAuthSchema = `
   CREATE INDEX "verification_identifier_idx"
     ON "verification" (identifier);
 `;
+
+/** The journal entries, as untyped rows — this asserts their shape, not trusts it. */
+async function journalEntries(): Promise<
+  { readonly tag: string; readonly when: number }[]
+> {
+  const parsed: unknown = JSON.parse(
+    await readFile(
+      new URL("../db/migrations/meta/_journal.json", import.meta.url),
+      "utf8"
+    )
+  );
+  const rows: unknown[] =
+    typeof parsed === "object" &&
+    parsed !== null &&
+    "entries" in parsed &&
+    Array.isArray(parsed.entries)
+      ? (parsed.entries as unknown[])
+      : [];
+  return rows.map((row) => {
+    const record: Record<string, unknown> = Object.assign({}, row);
+    const tag = record.tag;
+    return {
+      tag: typeof tag === "string" ? tag : "",
+      when: Number(record.when),
+    };
+  });
+}
+
+describe("the migration journal", () => {
+  it("orders every entry after the one before it", async () => {
+    // Drizzle applies only entries newer than the last one already applied, so
+    // a migration stamped earlier than its predecessor is skipped in silence:
+    // db:migrate reports success, the column never appears, and the deployed
+    // code queries a schema that does not exist. That took the agent down.
+    const entries = await journalEntries();
+    expect(entries.length).toBeGreaterThan(0);
+
+    const outOfOrder = entries.filter(
+      (entry, index) =>
+        index > 0 && entry.when <= (entries[index - 1]?.when ?? 0)
+    );
+    expect(outOfOrder.map((entry) => entry.tag)).toEqual([]);
+  });
+
+  it("has a file on disk for every entry it claims", async () => {
+    for (const entry of await journalEntries()) {
+      await expect(
+        readFile(
+          new URL(`../db/migrations/${entry.tag}.sql`, import.meta.url),
+          "utf8"
+        )
+      ).resolves.toBeTypeOf("string");
+    }
+  });
+});
