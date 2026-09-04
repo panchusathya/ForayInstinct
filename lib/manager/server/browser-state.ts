@@ -2,6 +2,7 @@ import {
   storageStateSchema,
   type GatewayStorageState,
 } from "@/lib/browser/contract";
+import { sanitizeStorageState } from "@/lib/browser/storage-state";
 import {
   deleteSecret,
   readSecret,
@@ -29,7 +30,9 @@ export async function readWorkspaceBrowserState(
   });
   if (raw === undefined) return undefined;
   try {
-    return storageStateSchema.parse(JSON.parse(raw));
+    // What a browser will refuse is known before it is asked; a stale or
+    // malformed cookie in this blob otherwise fails every session it seeds.
+    return sanitizeStorageState(storageStateSchema.parse(JSON.parse(raw)));
   } catch {
     // A malformed blob must not block creating a browser; drop it.
     await clearWorkspaceBrowserState(scope).catch(() => undefined);

@@ -739,6 +739,7 @@ async function attachResume(
   const attachResultSchema = z.object({
     filename: z.string().optional(),
     found: z.string().optional(),
+    inventory: z.array(z.string()).optional(),
     ok: z.boolean(),
     reason: z.string().optional(),
     shown: z.boolean().optional(),
@@ -799,8 +800,11 @@ async function attachResume(
     applicationExecutionLog({
       event: "runner.resume_attach_failed",
       execution_id: input.executionId,
+      found: attached?.found ?? "",
+      inventory: (attached?.inventory ?? []).slice(0, 6).join(" | "),
       reason: reason.slice(0, 300),
       selector: fill?.selector ?? "",
+      via: attached?.via ?? "",
     });
     await updateApplicationRun({
       executionId: input.executionId,
