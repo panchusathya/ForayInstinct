@@ -25,8 +25,8 @@ import {
   clickSubmitCode,
   collectEmptyRequiredFieldsCode,
   collectVisibleFieldsCode,
+  attachFileCode,
   detectLoginWallCode,
-  setFileInputCode,
 } from "@/lib/application-runner/playwright-scripts";
 import { tryFillLoginFromVault } from "@/lib/application-runner/vault";
 import type {
@@ -221,6 +221,18 @@ function answeredFills(
   return { fills, leftover, patch };
 }
 
+/**
+ * What to call a file slot when asking for it. The page's label when it has
+ * one a candidate could read; failing that, a resume slot is called Resume
+ * rather than dropped, because the one file control a form almost always has
+ * is the one a candidate has to be told about.
+ */
+function fileQuestionLabel(field: VisibleFormField) {
+  const label = tidyLabel(field.label);
+  if (hasReadableLabel(label)) return label;
+  return /resume|\bcv\b|curriculum/iu.test(field.name) ? "Resume" : "";
+}
+
 /** Candidate-facing text for one question, with the page's choices if any. */
 function describeQuestion(question: RunnerQuestion) {
   const options = question.options?.filter(Boolean).slice(0, 8) ?? [];
@@ -246,6 +258,10 @@ async function blankRequiredPause(
   input: ApplicationRunInput & {
     browserSessionId: string;
     knownOptions?: (selector: string) => string[];
+    /** File controls the workspace has nothing for, by label. */
+    missingFiles?: string[];
+    /** Whether those are empty because no resume is on file at all. */
+    noResume?: boolean;
   }
 ): Promise<FillStepResult | undefined> {
   const remaining = await parseResult(
@@ -254,9 +270,19 @@ async function blankRequiredPause(
     emptyRequiredSchema
   );
   const stillEmpty = remaining?.empty ?? [];
-  if (stillEmpty.length === 0) return undefined;
+  const missingFiles = input.missingFiles ?? [];
+  if (stillEmpty.length === 0 && missingFiles.length === 0) return undefined;
   const questions: RunnerQuestion[] = [];
   const labels = new Set<string>();
+  // The file slots first: a page rarely marks its upload control required in
+  // the DOM, so the scan below would not list them, and a form without its
+  // resume is exactly the incomplete form this pause exists to catch.
+  for (const label of missingFiles) {
+    const key = label.toLowerCase();
+    if (labels.has(key)) continue;
+    labels.add(key);
+    questions.push({ label });
+  }
   for (const field of stillEmpty) {
     if (!hasReadableLabel(field.label)) continue;
     const label = tidyLabel(field.label);
@@ -293,6 +319,9 @@ async function blankRequiredPause(
       [
         questions.length > 0
           ? `these required questions are still blank: ${questions.map(describeQuestion).join("; ")}`
+          : "",
+        missingFiles.length > 0 && input.noResume
+          ? `no resume is on file, so ${missingFiles.join("; ")} cannot be filled until a PDF or DOCX resume is attached`
           : "",
         unreadable.length > 0
           ? `${String(unreadable.length)} required ${unreadable.length === 1 ? "field carries" : "fields carry"} no label I can read, so I cannot say what ${unreadable.length === 1 ? "it is" : "they are"} asking`
@@ -373,7 +402,7 @@ export async function fillVisibleForm(
     // asked about, which is what these questions offer a decline option for.
     readSelfIdentification(input.scope).catch(() => ({})),
   ]);
-  const resume = await stageResume(input).catch(() => undefined);
+  const resume = await stageResume(input);
   const mapped = mapProfileToFormFields({
     fields,
     identity,
@@ -381,6 +410,15 @@ export async function fillVisibleForm(
     resumePath: resume?.path,
     selfIdentification,
   });
+  // A file control nothing can fill is a question for the candidate, never
+  // for the helper: a model cannot produce a file, and the fill script skips
+  // file inputs anyway, so one routed there was silently dropped and the form
+  // reached submit without its resume. It is asked below with everything else
+  // still blank, in the page's words, whether or not the page marks it required.
+  const missingFiles = mapped.unmapped
+    .filter((field) => field.tag === "file")
+    .map((field) => fileQuestionLabel(field))
+    .filter((label) => label !== "");
 
   // The candidate's answers first. They outrank the profile for the control
   // they name — the profile's value is what the page just refused — and they
@@ -396,19 +434,17 @@ export async function fillVisibleForm(
     );
   }
 
+  const fileFills = mapped.fills.filter((row) => row.value === resume?.path);
   const report = await applyFills(input.browserSessionId, [
     ...mapped.fills.filter(
       (fill) =>
-        !fill.value.startsWith("/tmp/") && !answeredSelectors.has(fill.selector)
+        !fileFills.includes(fill) && !answeredSelectors.has(fill.selector)
     ),
     ...answered.fills,
   ]);
-  for (const fill of mapped.fills.filter((row) =>
-    row.value.startsWith("/tmp/")
-  )) {
-    await browserProvider.executePlaywright(input.browserSessionId, {
-      code: setFileInputCode(fill.selector, fill.value),
-    });
+  if (resume) {
+    const attached = await attachResume(input, resume, fileFills, bySelector);
+    if (attached) return attached;
   }
 
   // A control that refused every phrasing is a question again, now carrying
@@ -432,6 +468,7 @@ export async function fillVisibleForm(
   // Only fields with wording worth showing a candidate. An unlabelled one has
   // no question for the helper to name, and its selector must never become one.
   const askable = [...mapped.unmapped, ...refused].filter((field) => {
+    if (field.tag === "file") return false;
     if (
       answeredSelectors.has(field.selector) &&
       !refusedOptions.has(field.selector)
@@ -466,6 +503,8 @@ export async function fillVisibleForm(
     ...input,
     knownOptions: (selector) =>
       refusedOptions.get(selector) ?? bySelector.get(selector)?.options ?? [],
+    missingFiles,
+    noResume: resume === undefined,
   });
   if (blank) return blank;
   await recordBrowserRunCheckpoint(input.scope, input.browserSessionId, {
@@ -593,18 +632,191 @@ export async function submitApplication(
   };
 }
 
+/**
+ * The largest resume whose bytes also travel inside the attach script. The
+ * staged path is always tried first; the bytes are the fallback for a path
+ * the browser cannot read, and a file this size is well past any resume.
+ */
+const maxInlineResumeBytes = 4 * 1024 * 1024;
+
+interface StagedResume {
+  bytes: Buffer;
+  filename: string;
+  mimeType: string;
+  /** The browser-local path the file goes by; the mapper's name for it. */
+  path: string;
+  /** Whether the bytes actually reached that path. */
+  staged: boolean;
+}
+
+/**
+ * Brings the default resume to the browser, and says so either way.
+ *
+ * Every failure here used to be swallowed into "no resume", which the mapper
+ * treated as a form with no resume slot: nothing attached, nothing asked,
+ * nothing logged, and the ATS refused the submit. A read that fails is logged
+ * and treated as no resume; a staging that fails keeps the bytes, so the
+ * attach can still place them through the script itself.
+ */
 async function stageResume(
   input: ApplicationRunInput & { browserSessionId: string }
-) {
-  const document = await readOrImportDefaultResume(input.scope);
-  if (!document) return undefined;
+): Promise<StagedResume | undefined> {
+  let document;
+  try {
+    document = await readOrImportDefaultResume(input.scope);
+  } catch (error) {
+    applicationExecutionLog({
+      error: error instanceof Error ? error.message : "unknown",
+      event: "runner.resume_read_failed",
+      execution_id: input.executionId,
+    });
+    return undefined;
+  }
+  if (!document) {
+    applicationExecutionLog({
+      event: "runner.resume_missing",
+      execution_id: input.executionId,
+    });
+    return undefined;
+  }
   const filename = document.filename.replace(/[^\w.-]+/gu, "_");
   const path = `/tmp/goforay-default-resume-${filename}`;
-  await browserProvider.stageFile(input.browserSessionId, {
+  const staged: StagedResume = {
     bytes: document.bytes,
+    filename,
+    mimeType: document.mimeType,
     path,
+    staged: false,
+  };
+  try {
+    await browserProvider.stageFile(input.browserSessionId, {
+      bytes: document.bytes,
+      path,
+    });
+    staged.staged = true;
+  } catch (error) {
+    applicationExecutionLog({
+      error: error instanceof Error ? error.message : "unknown",
+      event: "runner.resume_stage_failed",
+      execution_id: input.executionId,
+    });
+  }
+  // Shape and size only, never contents.
+  applicationExecutionLog({
+    byte_size: document.bytes.byteLength,
+    event: "runner.resume_staged",
+    execution_id: input.executionId,
+    extension: filename.split(".").pop() ?? "",
+    path: staged.staged ? "ok" : "unavailable",
   });
-  return { path };
+  return staged;
+}
+
+/**
+ * Puts the resume on the form and refuses to move on until it is there.
+ *
+ * Runs whenever a resume is on file, whether or not the scan mapped a control
+ * to it: the script finds a resume slot the scan missed by its own wording. A
+ * page with no file input at all is simply not one that takes a resume. Any
+ * other failure is a pause, in plain words and with the reason, because the
+ * alternative is a submit the ATS refuses for a file the candidate already
+ * gave us.
+ */
+async function attachResume(
+  input: ApplicationRunInput & { browserSessionId: string },
+  resume: StagedResume,
+  fileFills: MappedFill[],
+  fields: Map<string, VisibleFormField>
+): Promise<FillStepResult | undefined> {
+  const payload =
+    resume.bytes.byteLength <= maxInlineResumeBytes
+      ? {
+          base64: resume.bytes.toString("base64"),
+          mimeType: resume.mimeType,
+          name: resume.filename,
+        }
+      : undefined;
+  const attachResultSchema = z.object({
+    filename: z.string().optional(),
+    found: z.string().optional(),
+    ok: z.boolean(),
+    reason: z.string().optional(),
+    shown: z.boolean().optional(),
+    via: z.string().optional(),
+  });
+  const targets = fileFills.length > 0 ? fileFills : [undefined];
+  for (const fill of targets) {
+    const selector = fill ? { selector: fill.selector } : {};
+    const path = resume.staged ? { path: resume.path } : {};
+    let attached: z.infer<typeof attachResultSchema> | undefined;
+    try {
+      attached = await parseResult(
+        input.browserSessionId,
+        attachFileCode({
+          ...(payload ? { payload } : {}),
+          ...path,
+          ...selector,
+        }),
+        attachResultSchema
+      );
+    } catch (error) {
+      // A script carrying the bytes can be too large for the provider to take
+      // at all. That is not the page's answer, so try once more with the
+      // staged path alone before calling it a failure.
+      const message = error instanceof Error ? error.message : "unknown";
+      attached =
+        payload && resume.staged
+          ? await parseResult(
+              input.browserSessionId,
+              attachFileCode({ ...path, ...selector }),
+              attachResultSchema
+            ).catch(() => undefined)
+          : undefined;
+      attached ??= { ok: false, reason: message.slice(0, 200) };
+    }
+    const label = fill ? tidyLabel(fields.get(fill.selector)?.label ?? "") : "";
+    if (attached?.ok) {
+      applicationExecutionLog({
+        event: "runner.resume_attached",
+        execution_id: input.executionId,
+        found: attached.found ?? "",
+        selector: fill?.selector ?? "",
+        shown: attached.shown === true,
+        via: attached.via ?? "",
+      });
+      continue;
+    }
+    const reason = attached?.reason ?? "the browser returned nothing";
+    // No file input anywhere is a form that does not take a resume, which is
+    // no failure. A slot that exists and would not take the file is.
+    if (reason === "missing" && !fill) {
+      applicationExecutionLog({
+        event: "runner.resume_no_slot",
+        execution_id: input.executionId,
+      });
+      return undefined;
+    }
+    applicationExecutionLog({
+      event: "runner.resume_attach_failed",
+      execution_id: input.executionId,
+      reason: reason.slice(0, 300),
+      selector: fill?.selector ?? "",
+    });
+    await updateApplicationRun({
+      executionId: input.executionId,
+      pauseReason: "user_input",
+      status: "waiting",
+    });
+    return {
+      applyUrl: input.applyUrl,
+      message: applicationPauseMessage(
+        "user_input",
+        `the resume on file could not be attached to ${label || "the form's file control"} on ${input.applyUrl}: ${reason}. The file itself is fine; do not ask the candidate for it again.`
+      ),
+      pause: "user_input",
+    };
+  }
+  return undefined;
 }
 
 async function parseResult<T extends z.ZodType>(

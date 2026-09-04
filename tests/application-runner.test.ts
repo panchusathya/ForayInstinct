@@ -885,12 +885,65 @@ describe("a Greenhouse form, as the DoorDash run saw it", () => {
       "lib/application-runner/playwright-scripts.ts",
       "utf8"
     );
+    // Even one the page hides from assistive technology: the aria-hidden rule
+    // is for react-select's decoy inputs, and the DoorDash form's resume slot
+    // vanished from both scans under it.
     expect(scripts).toContain(
-      "const candidateFacing = (node) => !assistiveHidden(node) && (isFileInput(node) || visible(node));"
+      "const candidateFacing = (node) => isFileInput(node) || (!assistiveHidden(node) && visible(node));"
     );
     expect(scripts).toContain(
       "blank = !(node.files && node.files.length > 0);"
     );
+  });
+
+  it("reports a resume slot it has no resume for, even one the DOM calls optional", () => {
+    // Greenhouse validates the upload in script and puts the asterisk in a
+    // label the input is not tied to, so `required` reads false. Dropping the
+    // slot here is how the form reached submit and was refused for it.
+    const { fills, unmapped } = mapProfileToFormFields({
+      fields: [
+        {
+          label: "",
+          name: "resume",
+          required: false,
+          selector: "#resume",
+          tag: "file",
+          type: "file",
+        },
+        {
+          label: "Cover Letter",
+          name: "cover_letter",
+          required: false,
+          selector: "#cover_letter",
+          tag: "file",
+          type: "file",
+        },
+      ],
+      identity,
+      profile,
+    });
+    expect(fills).toEqual([]);
+    expect(unmapped.map((field) => field.selector)).toEqual(["#resume"]);
+  });
+
+  it("finds the slot itself and proves the file landed", () => {
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    const attach = scripts.slice(
+      scripts.indexOf("export const attachFileCode")
+    );
+    // A scanned selector that is gone falls back to the page's own wording,
+    // then to a lone file input.
+    expect(attach).toContain('page.locator("input[type=file]")');
+    // The staged path first, the bytes when the path cannot be read.
+    expect(attach.indexOf('attach("path"')).toBeLessThan(
+      attach.indexOf('attach("payload"')
+    );
+    expect(attach).toContain('Buffer.from(payload.base64, "base64")');
+    // The control's own word, never the call's.
+    expect(attach).toContain("node.files ? node.files.length : 0");
   });
 });
 

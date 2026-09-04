@@ -18,10 +18,16 @@ const mocks = vi.hoisted(() => ({
   inspect: vi.fn<() => Promise<Record<string, unknown>>>(),
   profile: vi.fn<() => Promise<unknown>>(),
   identity: vi.fn<() => Promise<unknown>>(),
-  resume: vi.fn<() => Promise<undefined>>(),
+  resume: vi.fn<() => Promise<unknown>>(),
   vault: vi.fn<() => Promise<{ filled: boolean; origin: string }>>(),
   checkpoint: vi.fn<() => Promise<void>>(),
-  stageFile: vi.fn<() => Promise<void>>(),
+  stageFile:
+    vi.fn<
+      (
+        _sessionId: string,
+        _file: { bytes: Uint8Array; path: string }
+      ) => Promise<void>
+    >(),
   updateApplicationRun: vi.fn<() => Promise<void>>(),
   saveCandidateProfile: vi.fn<() => Promise<{ stored: boolean }>>(),
   selfIdentification: vi.fn<() => Promise<Record<string, string>>>(),
@@ -677,5 +683,171 @@ describe("a control that refuses every phrasing", () => {
     // the model was consulted about it exactly once.
     const prompt = mocks.generateText.mock.calls[0]?.[0]?.prompt ?? "";
     expect(prompt).toContain('"options":["Yes","No"]');
+  });
+});
+
+describe("attaching the resume", () => {
+  const resumeField = {
+    label: "Resume/CV*",
+    name: "resume",
+    required: false,
+    selector: "#resume",
+    tag: "file",
+    type: "file",
+  };
+  const run = () =>
+    fillVisibleForm({
+      applyUrl: "https://jobs.example/role/1",
+      browserSessionId: "browser-1",
+      company: "Example",
+      executionId: "exec-1",
+      role: "Analyst",
+      rootSessionId: "root-1",
+      scope: { userId: "alice", workspaceId: "workspace:alice" },
+    });
+  const attachCalls = () =>
+    mocks.executePlaywright.mock.calls
+      .map((call) => call[1].code)
+      .filter((code) => code.includes("const stagedPath ="));
+  const pageWithResumeSlot = (
+    attach: () => { ok: boolean; reason?: string; via?: string }
+  ) => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { success: true, result: { loginWall: false } };
+      }
+      if (request.code.includes("const stagedPath =")) {
+        return { result: attach(), success: true };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        return {
+          result: {
+            fields: [
+              {
+                label: "Email",
+                name: "email",
+                required: true,
+                selector: "#email",
+                tag: "input",
+                type: "email",
+              },
+              resumeField,
+            ],
+          },
+          success: true,
+        };
+      }
+      return { result: { filled: ["#email"], skipped: [] }, success: true };
+    });
+  };
+
+  beforeEach(() => {
+    mocks.resume.mockResolvedValue({
+      bytes: Buffer.from("%PDF-1.4 resume"),
+      filename: "Ada Lovelace.pdf",
+      mimeType: "application/pdf",
+    });
+    mocks.generateText.mockResolvedValue({
+      text: JSON.stringify({ fills: [] }),
+    });
+  });
+
+  it("stages the file, attaches it to the scanned slot, and reads the result", async () => {
+    pageWithResumeSlot(() => ({ ok: true, via: "path" }));
+    expect(await run()).toEqual({ continue: true });
+    const [sessionId, file] = mocks.stageFile.mock.calls[0] ?? [];
+    expect(sessionId).toBe("browser-1");
+    expect(file?.path).toBe("/tmp/goforay-default-resume-Ada_Lovelace.pdf");
+    expect(Buffer.from(file?.bytes ?? []).toString()).toBe("%PDF-1.4 resume");
+    const [code] = attachCalls();
+    expect(code).toContain('"#resume"');
+    expect(code).toContain("/tmp/goforay-default-resume-Ada_Lovelace.pdf");
+    // The bytes ride along for the fallback, never a Buffer reference.
+    expect(code).toContain(Buffer.from("%PDF-1.4 resume").toString("base64"));
+    // The helper never sees a file control.
+    const prompt = mocks.generateText.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).not.toContain("Resume/CV");
+  });
+
+  it("still attaches by payload when staging the path failed", async () => {
+    // A stage that threw used to read as no resume at all, and the slot was
+    // dropped without a word.
+    mocks.stageFile.mockRejectedValue(new Error("fs unavailable"));
+    pageWithResumeSlot(() => ({ ok: true, via: "payload" }));
+    expect(await run()).toEqual({ continue: true });
+    const [code] = attachCalls();
+    expect(code).toContain('const stagedPath = ""');
+    expect(code).toContain(Buffer.from("%PDF-1.4 resume").toString("base64"));
+  });
+
+  it("pauses with the reason when the slot refuses the file, and never asks for a new upload", async () => {
+    pageWithResumeSlot(() => ({
+      ok: false,
+      reason: "path: ENOENT: no such file | payload: rejected",
+    }));
+    const result = await run();
+    expect(result).toMatchObject({ pause: "user_input" });
+    expect("message" in result ? result.message : "").toMatch(
+      /could not be attached to Resume\/CV\*.*ENOENT.*do not ask the candidate for it again/u
+    );
+    expect(mocks.updateApplicationRun).toHaveBeenCalledWith({
+      executionId: "exec-1",
+      pauseReason: "user_input",
+      status: "waiting",
+    });
+  });
+
+  it("looks for a resume slot the scan missed, and accepts a form with none", async () => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { success: true, result: { loginWall: false } };
+      }
+      if (request.code.includes("const stagedPath =")) {
+        return { result: { ok: false, reason: "missing" }, success: true };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        return {
+          result: {
+            fields: [
+              {
+                label: "Email",
+                name: "email",
+                required: true,
+                selector: "#email",
+                tag: "input",
+                type: "email",
+              },
+            ],
+          },
+          success: true,
+        };
+      }
+      return { result: { filled: ["#email"], skipped: [] }, success: true };
+    });
+    expect(await run()).toEqual({ continue: true });
+    const [code] = attachCalls();
+    expect(code).toContain('const scanned = ""');
+  });
+
+  it("asks for the resume when none is on file and the form has a slot for one", async () => {
+    mocks.resume.mockResolvedValue(undefined);
+    pageWithResumeSlot(() => ({ ok: true }));
+    const result = await run();
+    expect(attachCalls()).toEqual([]);
+    expect(result).toMatchObject({
+      pause: "user_input",
+      questions: [{ label: "Resume/CV*" }],
+    });
+    expect("message" in result ? result.message : "").toMatch(
+      /no resume is on file/u
+    );
+    const prompt = mocks.generateText.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).not.toContain("Resume/CV");
   });
 });
