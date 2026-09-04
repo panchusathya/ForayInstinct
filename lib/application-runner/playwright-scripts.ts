@@ -23,11 +23,17 @@ const domHelpers = `
   /**
    * A file input is nearly always hidden behind a styled button, and
    * setInputFiles works on it regardless, so it is the one control collected
-   * whether or not it is drawn.
+   * whether or not it is drawn — and whether or not the page hides it from
+   * assistive technology. The aria-hidden rule exists for react-select's
+   * decoy required inputs; a file input is never one of those, and an ATS that
+   * hides its real upload control behind an Attach button routinely marks it
+   * aria-hidden too. Skipping it here is how a resume slot vanished from both
+   * scans: nothing attached to it, nothing reported it blank, and the submit
+   * came back "Resume/CV is required".
    */
   const isFileInput = (node) => node.tagName.toLowerCase() === "input"
     && String(node.getAttribute("type") || "").toLowerCase() === "file";
-  const candidateFacing = (node) => !assistiveHidden(node) && (isFileInput(node) || visible(node));
+  const candidateFacing = (node) => isFileInput(node) || (!assistiveHidden(node) && visible(node));
   const selectorFor = (node, index) => {
     if (node.id) return "#" + CSS.escape(node.id);
     const name = node.getAttribute("name");
@@ -433,11 +439,103 @@ ${domHelpers}
 return { empty, href: page.url() };
 `;
 
-export const setFileInputCode = (selector: string, path: string) => `
-const locator = page.locator(${JSON.stringify(selector)}).first();
-if (await locator.count() === 0) return { ok: false, reason: "missing" };
-await locator.setInputFiles(${JSON.stringify(path)});
-return { ok: true };
+/**
+ * Puts the resume on the page's file control and proves it landed.
+ *
+ * The old script set the path on the scanned selector and returned; its
+ * result was never read. Any one of three silent failures — a control the scan
+ * missed, a staged path the browser's Playwright could not open, a page that
+ * cleared the input — left the form without a resume and nothing in the log,
+ * and the candidate found out from the ATS's own "Resume/CV is required".
+ *
+ * So this finds the control itself when the scanned selector is gone (any
+ * file input whose wording says resume, else the only file input there is),
+ * tries the staged path first, falls back to the file's own bytes when the
+ * path cannot be read, and reads `files` back before claiming success. The
+ * bytes travel base64-encoded inside the script and are decoded in the
+ * browser VM; nothing about their contents is returned.
+ */
+export const attachFileCode = (input: {
+  /** Base64 file bytes for when the staged path is unreadable. */
+  payload?: { base64: string; mimeType: string; name: string };
+  /** The staged browser-local path, when staging succeeded. */
+  path?: string;
+  /** The control the scan mapped the file to, if it saw one. */
+  selector?: string;
+}) => `
+const wanted = /resume|\\bcv\\b|curriculum/i;
+const scanned = ${JSON.stringify(input.selector ?? "")};
+const stagedPath = ${JSON.stringify(input.path ?? "")};
+const payload = ${JSON.stringify(input.payload ?? null)};
+// What the control itself says it is for, then what the markup around it
+// says. Kept apart: a wrapper's text can mention the resume next to a cover
+// letter slot, so it only decides when no input names itself.
+const describe = (node) => {
+  const byFor = node.id && document.querySelector("label[for=" + JSON.stringify(node.id) + "]");
+  const own = node.closest("label");
+  const wrapper = node.closest("fieldset, [role=group], div");
+  const tidy = (parts) => parts.filter(Boolean).join(" ").replace(/\\s+/g, " ").slice(0, 400);
+  return {
+    own: tidy([node.id, node.getAttribute("name"), node.getAttribute("aria-label"),
+      byFor && byFor.innerText, own && own.innerText]),
+    nearby: tidy([wrapper && wrapper.innerText]),
+  };
+};
+let locator = scanned ? page.locator(scanned).first() : undefined;
+let found = "scanned";
+if (!locator || (await locator.count()) === 0
+    || String(await locator.getAttribute("type").catch(() => "")).toLowerCase() !== "file") {
+  // The scan's selector is gone or was not a file input: look for the control
+  // by what the page says it is for, then settle for a lone file input.
+  const inputs = page.locator("input[type=file]");
+  const total = await inputs.count();
+  const described = [];
+  for (let i = 0; i < total; i += 1) described.push(await inputs.nth(i).evaluate(describe));
+  locator = undefined;
+  const byOwn = described.findIndex((text) => wanted.test(text.own));
+  const byNearby = described.findIndex((text) => wanted.test(text.nearby));
+  if (byOwn >= 0) { locator = inputs.nth(byOwn); found = "by-own-wording"; }
+  else if (byNearby >= 0) { locator = inputs.nth(byNearby); found = "by-nearby-wording"; }
+  else if (total === 1) { locator = inputs.first(); found = "only-file-input"; }
+  if (!locator) return { ok: false, reason: "missing", fileInputs: total };
+}
+const attempts = [];
+const attach = async (via, files) => {
+  try {
+    await locator.setInputFiles(files);
+    return true;
+  } catch (error) {
+    attempts.push(via + ": " + String(error && error.message || error).slice(0, 160));
+    return false;
+  }
+};
+let via = "";
+if (stagedPath && await attach("path", stagedPath)) via = "path";
+if (!via && payload && await attach("payload", {
+  name: payload.name,
+  mimeType: payload.mimeType,
+  buffer: Buffer.from(payload.base64, "base64"),
+})) via = "payload";
+if (!via) return { ok: false, reason: attempts.join(" | ") || "no file to attach", found };
+// The page's own word, not the call's: a control can accept the call and
+// hold nothing.
+const landed = await locator.evaluate((node) => ({
+  count: node.files ? node.files.length : 0,
+  name: node.files && node.files[0] ? node.files[0].name : "",
+}));
+if (landed.count === 0) return { ok: false, reason: "the control holds no file after setInputFiles", found, via };
+// An ATS uploads the file in the background and shows its name when done.
+// Give that a moment so a submit that follows is not refused mid-upload.
+const deadline = Date.now() + 6000;
+let shown = false;
+while (!shown && Date.now() < deadline) {
+  await page.waitForTimeout(300);
+  shown = await page.locator("body").innerText().then(
+    (text) => landed.name !== "" && text.includes(landed.name),
+    () => false
+  );
+}
+return { ok: true, found, via, filename: landed.name, shown };
 `;
 
 export const detectLoginWallCode = `

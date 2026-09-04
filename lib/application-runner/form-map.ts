@@ -154,7 +154,12 @@ export function mapProfileToFormFields(input: {
       const wantsResume = asksForResume(field) || fileFields.length === 1;
       if (input.resumePath && wantsResume) {
         fills.push({ selector: field.selector, value: input.resumePath });
-      } else if (field.required) {
+      } else if (field.required || wantsResume) {
+        // A resume slot is unmapped whether or not the DOM marks it required:
+        // an ATS validates the upload in script and shows the asterisk in a
+        // label the input may not be tied to, so `required` reads false, and
+        // the slot used to drop out here without a word until the submit was
+        // refused for it.
         unmapped.push(field);
       }
       continue;
