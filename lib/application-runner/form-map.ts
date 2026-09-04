@@ -125,9 +125,15 @@ function asksForRegion(key: string) {
   );
 }
 
-/** Whether a file control is asking for the resume, by its own wording. */
+/**
+ * Whether a file control is asking for the resume, by its own wording: its
+ * label, its name, and its id (the selector), since an ATS that ties no label
+ * to its upload input still tends to call the input itself `resume`.
+ */
 function asksForResume(field: VisibleFormField) {
-  return /resume|\bcv\b|curriculum/u.test(normalize(field.label, field.name));
+  return /resume|\bcv\b|curriculum/u.test(
+    normalize(field.label, field.name, field.selector)
+  );
 }
 
 /**

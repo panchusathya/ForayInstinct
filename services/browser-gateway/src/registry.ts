@@ -161,7 +161,27 @@ export class SessionRegistry implements GatewaySessions {
         const cookieParams = cookies as unknown as Parameters<
           BrowserContext["addCookies"]
         >[0];
-        await context.addCookies(cookieParams);
+        // One at a time: Chromium refuses a whole batch when any cookie in
+        // it is excluded ("Overriding ... cookies is forbidden"), and a saved
+        // sign-in state is never worth failing the session over. A cookie
+        // the browser will not take is dropped and named, nothing more.
+        const refused: string[] = [];
+        for (const cookie of cookieParams) {
+          try {
+            await context.addCookies([cookie]);
+          } catch {
+            refused.push(cookie.name);
+          }
+        }
+        if (refused.length > 0) {
+          console.warn(
+            "[browser-gateway] skipped cookies the browser refused",
+            {
+              count: refused.length,
+              names: refused.slice(0, 12).join(", "),
+            }
+          );
+        }
       }
       // Playwright cannot inject localStorage into a live context post-hoc,
       // so seed it lazily: every new document whose origin matches gets the

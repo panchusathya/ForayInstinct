@@ -519,23 +519,41 @@ if (!via && payload && await attach("payload", {
 if (!via) return { ok: false, reason: attempts.join(" | ") || "no file to attach", found };
 // The page's own word, not the call's: a control can accept the call and
 // hold nothing.
-const landed = await locator.evaluate((node) => ({
-  count: node.files ? node.files.length : 0,
-  name: node.files && node.files[0] ? node.files[0].name : "",
-}));
-if (landed.count === 0) return { ok: false, reason: "the control holds no file after setInputFiles", found, via };
-// An ATS uploads the file in the background and shows its name when done.
-// Give that a moment so a submit that follows is not refused mid-upload.
+// The page's own word, not the call's. Either the control still holds the
+// file, or the page has taken it: an ATS that uploads on change tends to
+// clear the input straight after so the same file can be chosen again, and
+// then shows the file's name once the upload lands. Reading the files list alone
+// there called a successful attach a failure. Give the upload a moment, so a
+// submit that follows is not refused mid-upload either.
+const expected = payload ? payload.name : stagedPath.split("/").pop() || "";
+const stem = expected.replace(/\\.[^.]+$/, "");
+const check = async () => {
+  const held = await locator.evaluate((node) => ({
+    count: node.files ? node.files.length : 0,
+    name: node.files && node.files[0] ? node.files[0].name : "",
+  })).catch(() => ({ count: 0, name: "" }));
+  const text = await page.locator("body").innerText().catch(() => "");
+  const shown = expected !== "" && (text.includes(expected) || (stem.length > 3 && text.includes(stem)));
+  return { held: held.count > 0, name: held.name || expected, shown };
+};
 const deadline = Date.now() + 6000;
-let shown = false;
-while (!shown && Date.now() < deadline) {
+let state = await check();
+while (!state.shown && Date.now() < deadline) {
   await page.waitForTimeout(300);
-  shown = await page.locator("body").innerText().then(
-    (text) => landed.name !== "" && text.includes(landed.name),
-    () => false
-  );
+  state = await check();
 }
-return { ok: true, found, via, filename: landed.name, shown };
+if (!state.held && !state.shown) {
+  // Name the file inputs the page has, by their own wording only, so the
+  // next reader of the log can see which control this was and what it was
+  // labelled. Never the file, never a value.
+  const inventory = await page.$$eval("input[type=file]", (nodes) => nodes.map((node) => {
+    const byFor = node.id && document.querySelector("label[for=" + JSON.stringify(node.id) + "]");
+    return [node.id, node.getAttribute("name"), byFor && byFor.innerText]
+      .filter(Boolean).join(" ").replace(/\\s+/g, " ").slice(0, 80);
+  }));
+  return { ok: false, reason: "the control holds no file and the page shows no upload after setInputFiles", found, via, inventory };
+}
+return { ok: true, found, via, filename: state.name, shown: state.shown };
 `;
 
 export const detectLoginWallCode = `

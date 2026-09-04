@@ -2,7 +2,9 @@ import { createBrowserSession } from "@/db/services/browsers";
 import { attachBrowserToApplicationExecution } from "@/db/services/application-executions";
 import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoints";
 import type { AccessScope } from "@/lib/access-scope";
+import { applicationExecutionLog } from "@/lib/application-execution";
 import { browserProvider, isGatewayProvider } from "@/lib/browser";
+import { isCookieSeedFailure } from "@/lib/browser/storage-state";
 import {
   isResolvedWorkdayRoute,
   isWorkdayApplicationUrl,
@@ -14,6 +16,7 @@ import {
   workdayRouteTimeoutSec,
 } from "@/agent/subagents/worker/lib/workday-router";
 import {
+  clearWorkspaceBrowserState,
   readWorkspaceBrowserState,
   saveWorkspaceBrowserState,
 } from "@/lib/manager/server/browser-state";
@@ -36,14 +39,33 @@ export async function openApplicationBrowser(input: {
           input.signal
         ),
       };
-  const browser = await browserProvider.createSession(
-    {
-      startUrl: isWorkday ? undefined : input.applyUrl,
-      timeoutSeconds: browserTimeoutFloorSeconds,
-      ...persistence,
-    },
-    input.signal
-  );
+  const session = {
+    startUrl: isWorkday ? undefined : input.applyUrl,
+    timeoutSeconds: browserTimeoutFloorSeconds,
+  };
+  let browser;
+  try {
+    browser = await browserProvider.createSession(
+      { ...session, ...persistence },
+      input.signal
+    );
+  } catch (error) {
+    // The saved sign-in state is a convenience; the application is the job.
+    // A blob the browser refused to seed ("Overriding ... cookies is
+    // forbidden") killed every run for the workspace, DoorDash and Hightouch
+    // alike, at the moment the browser was opened. Drop it and open a clean
+    // browser: the state is rebuilt from whatever this session signs into.
+    if (!("storageState" in persistence) || !isCookieSeedFailure(error)) {
+      throw error;
+    }
+    applicationExecutionLog({
+      error: (error instanceof Error ? error.message : "unknown").slice(0, 300),
+      event: "browser.state_rejected",
+      execution_id: input.executionId,
+    });
+    await clearWorkspaceBrowserState(input.scope).catch(() => undefined);
+    browser = await browserProvider.createSession(session, input.signal);
+  }
   try {
     await createBrowserSession(input.scope, {
       createdAt: browser.created_at ?? new Date().toISOString(),

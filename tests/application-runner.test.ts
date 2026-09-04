@@ -926,6 +926,42 @@ describe("a Greenhouse form, as the DoorDash run saw it", () => {
     expect(unmapped.map((field) => field.selector)).toEqual(["#resume"]);
   });
 
+  it("recognizes a resume slot by its id when nothing else names it", () => {
+    // The DoorDash attach ran with no scanned selector: the slot's label was
+    // not tied to the input and its name was blank, so nothing but the id
+    // said what it was for, and a form with a cover-letter slot beside it had
+    // two file inputs and no rule to pick between them.
+    const { fills } = mapProfileToFormFields({
+      fields: [
+        {
+          label: "",
+          name: "",
+          required: false,
+          selector: "#resume-upload",
+          tag: "file",
+          type: "file",
+        },
+        {
+          label: "",
+          name: "",
+          required: false,
+          selector: "#cover-letter-upload",
+          tag: "file",
+          type: "file",
+        },
+      ],
+      identity,
+      profile,
+      resumePath: "/tmp/goforay-default-resume-ada.pdf",
+    });
+    expect(fills).toEqual([
+      {
+        selector: "#resume-upload",
+        value: "/tmp/goforay-default-resume-ada.pdf",
+      },
+    ]);
+  });
+
   it("finds the slot itself and proves the file landed", () => {
     const scripts = readFileSync(
       "lib/application-runner/playwright-scripts.ts",
@@ -942,8 +978,16 @@ describe("a Greenhouse form, as the DoorDash run saw it", () => {
       attach.indexOf('attach("payload"')
     );
     expect(attach).toContain('Buffer.from(payload.base64, "base64")');
-    // The control's own word, never the call's.
+    // The control's own word, never the call's: the file still held, or the
+    // page showing its name after taking it. An ATS that uploads on change
+    // clears the input straight after, and reading files alone called that
+    // success a failure on the DoorDash form.
     expect(attach).toContain("node.files ? node.files.length : 0");
+    expect(attach).toContain("text.includes(expected)");
+    expect(attach).toContain("if (!state.held && !state.shown)");
+    // A failure names the page's file inputs by their own wording so the log
+    // says which control this was, and never the file.
+    expect(attach).toContain('page.$$eval("input[type=file]"');
   });
 });
 
