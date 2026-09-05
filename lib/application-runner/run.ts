@@ -4,7 +4,9 @@ import { applicationExecutionLog } from "@/lib/application-execution";
 import { openApplicationBrowser } from "@/lib/application-runner/browser";
 import {
   captureApproval,
+  enterVerificationCode,
   fillVisibleForm,
+  submitApplication,
 } from "@/lib/application-runner/fill";
 import type { ApplicationRunInput } from "@/lib/application-runner/types";
 
@@ -22,6 +24,35 @@ export async function runApplicationUntilPause(input: ApplicationRunInput) {
           executionId: input.executionId,
           scope: input.scope,
         });
+  // A code arrives only after the candidate approved and the submit opened a
+  // verification step, so it is entered where the page left off, never by
+  // filling the form again: the fill's own probe would see the code dialog
+  // and hand the same pause straight back. With the code taken and nothing
+  // confirmed, the submit is what remains.
+  if (input.resumeOtp) {
+    const verified = await enterVerificationCode({
+      ...input,
+      browserSessionId: browser.session_id,
+      code: input.resumeOtp,
+    });
+    const outcome =
+      verified ??
+      (await submitApplication({
+        ...input,
+        browserSessionId: browser.session_id,
+      }));
+    if ("pause" in outcome) {
+      applicationExecutionLog({
+        apply_url: input.applyUrl,
+        detail: outcome.message.slice(0, 300),
+        event: "runner.paused",
+        execution_id: input.executionId,
+        pause_reason: outcome.pause,
+        status: "waiting",
+      });
+    }
+    return outcome;
+  }
   const filled = await fillVisibleForm({
     ...input,
     answered: input.resumeAnswered,

@@ -47,6 +47,28 @@ export async function continueApplication(input: {
       status: "waiting" as const,
     };
   }
+  // A verification code, however it was sent: the `otp` field, or a bare code
+  // typed as an answer while the run is waiting on one.
+  const typedOtp = input.otp?.trim();
+  const answeredOtp =
+    run.pauseReason === "email_otp" &&
+    input.answers &&
+    /^\s*[A-Za-z0-9][A-Za-z0-9 -]{2,14}[A-Za-z0-9]\s*$/u.test(input.answers)
+      ? input.answers.trim()
+      : undefined;
+  const otp =
+    typedOtp !== undefined && typedOtp !== "" ? typedOtp : answeredOtp;
+  if (otp && run.browserSessionId) {
+    return runApplicationUntilPause({
+      applyUrl,
+      company: run.company,
+      executionId: run.id,
+      resumeOtp: otp,
+      role: run.role,
+      rootSessionId: run.rootSessionId,
+      scope: input.scope,
+    });
+  }
   if (input.approved === true && run.browserSessionId) {
     // Answers first, approval second. Approval used to short-circuit straight
     // to the click, so replies sent in the same breath as a yes were dropped
@@ -78,13 +100,13 @@ export async function continueApplication(input: {
       scope: input.scope,
     });
   }
-  if (run.browserSessionId && (input.answers || input.otp || answered)) {
+  if (run.browserSessionId && (input.answers || answered)) {
     return runApplicationUntilPause({
       applyUrl,
       company: run.company,
       executionId: run.id,
       ...(answered ? { resumeAnswered: answered } : {}),
-      resumeAnswers: [input.answers, input.otp].filter(Boolean).join("\n"),
+      resumeAnswers: input.answers ?? "",
       role: run.role,
       rootSessionId: run.rootSessionId,
       scope: input.scope,

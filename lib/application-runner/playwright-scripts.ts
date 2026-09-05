@@ -498,6 +498,24 @@ const inventory = () => page.$$eval("input[type=file]", (nodes) => nodes.map((no
   return [node.id, node.getAttribute("name"), byFor && byFor.innerText]
     .filter(Boolean).join(" ").replace(/\\s+/g, " ").slice(0, 80);
 })).catch(() => []);
+// A slot that says it is for some other document is never the resume's by
+// default; only its own wording saying resume can make it so.
+const otherDocument = /cover ?letter|portfolio|transcript|writing ?sample|reference|certificat|other (?:file|document)/i;
+// The page's own word, not the call's. Either the control still holds the
+// file, or the page has taken it: an ATS that uploads on change tends to
+// clear the input straight after so the same file can be chosen again, and
+// then shows the file's name once the upload lands.
+const expected = payload ? payload.name : stagedPath.split("/").pop() || "";
+const stem = expected.replace(/\\.[^.]+$/, "");
+const shownOnPage = async () => {
+  const text = await page.locator("body").innerText(brief).catch(() => "");
+  return expected !== "" && (text.includes(expected) || (stem.length > 3 && text.includes(stem)));
+};
+// Every fill round runs this again. Once the page has taken the file it shows
+// the name and removes the input, and the next scan's lone file input is
+// whatever slot is left, which on Greenhouse is the cover letter. Attached
+// already is done, not a slot to go looking for.
+if (await shownOnPage()) return { ok: true, found: "already-attached", via: "already-attached", filename: expected, shown: true, attempts: [] };
 let locator = scanned ? page.locator(scanned).first() : undefined;
 let found = "scanned";
 if (!locator || (await locator.count()) === 0
@@ -512,26 +530,16 @@ if (!locator || (await locator.count()) === 0
   }
   locator = undefined;
   const byOwn = described.findIndex((text) => wanted.test(text.own));
-  const byNearby = described.findIndex((text) => wanted.test(text.nearby));
+  const byNearby = described.findIndex((text) => wanted.test(text.nearby) && !otherDocument.test(text.own));
   if (byOwn >= 0) { locator = inputs.nth(byOwn); found = "by-own-wording"; }
   else if (byNearby >= 0) { locator = inputs.nth(byNearby); found = "by-nearby-wording"; }
-  else if (total === 1) { locator = inputs.first(); found = "only-file-input"; }
+  else if (total === 1 && !otherDocument.test(described[0].own)) { locator = inputs.first(); found = "only-file-input"; }
   if (!locator) return { ok: false, reason: "missing", fileInputs: total };
 }
-// The page's own word, not the call's. Either the control still holds the
-// file, or the page has taken it: an ATS that uploads on change tends to
-// clear the input straight after so the same file can be chosen again, and
-// then shows the file's name once the upload lands.
-const expected = payload ? payload.name : stagedPath.split("/").pop() || "";
-const stem = expected.replace(/\\.[^.]+$/, "");
 const held = () => locator.evaluate((node) => ({
   count: node.files ? node.files.length : 0,
   name: node.files && node.files[0] ? node.files[0].name : "",
 }), undefined, brief).catch(() => ({ count: 0, name: "" }));
-const shownOnPage = async () => {
-  const text = await page.locator("body").innerText(brief).catch(() => "");
-  return expected !== "" && (text.includes(expected) || (stem.length > 3 && text.includes(stem)));
-};
 // Whether a route that the browser accepted actually left a file behind: a
 // path the browser's machine cannot see arrives as no file at all, without a
 // word of complaint, and the next route has to be tried.
@@ -602,6 +610,152 @@ while (!shown && Date.now() < deadline) {
 }
 const state = await held();
 return { ok: true, found, via, filename: state.name || expected, shown, attempts };
+`;
+
+/**
+ * Whether the page is asking for a verification code, and through which
+ * channel.
+ *
+ * The post-action probe trusts only `autocomplete=one-time-code`, which a
+ * hand-rolled verification dialog need not carry. This looks for a visible
+ * code-like input corroborated by the wording around it: an input alone is
+ * not enough (a zip code is numeric too), and wording alone is not enough
+ * (a posting can mention verification). Returns the page's words, never any
+ * value: the channel, how many boxes, the sentence that asked, and where the
+ * page says it sent the code.
+ */
+export const verificationCodeProbeCode = `
+const codeContext = /verif(?:y|ication)|one[- ]?time|security code|passcode|enter (?:the|your) code|code (?:we |was |has been )?sent|sent (?:you |a )?(?:code|email)|two[- ]?(?:factor|step)|authentication code|confirm your email/i;
+const found = await page.evaluate(() => {
+  const visible = (node) => {
+    const style = getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+  };
+  const codeContext = /verif(?:y|ication)|one[- ]?time|security code|passcode|enter (?:the|your) code|code (?:we |was |has been )?sent|sent (?:you |a )?(?:code|email)|two[- ]?(?:factor|step)|authentication code|confirm your email/i;
+  const codeLike = (node) => {
+    const attrs = ["autocomplete", "name", "id", "placeholder", "aria-label", "inputmode"]
+      .map((name) => node.getAttribute(name) || "").join(" ").toLowerCase();
+    return /one-time-code|otp|verif|passcode|\\bcode\\b|numeric|\\bpin\\b/.test(attrs);
+  };
+  const skip = new Set(["hidden", "submit", "button", "checkbox", "radio", "file", "email", "tel", "password", "search", "url"]);
+  const inputs = [...document.querySelectorAll("input")]
+    .filter((node) => visible(node) && !skip.has(String(node.type || "").toLowerCase()) && codeLike(node))
+    .filter((node) => {
+      const scope = node.closest("[role=dialog], dialog, form, section, main") || document.body;
+      return codeContext.test((scope.innerText || "").slice(0, 3000));
+    });
+  if (inputs.length === 0) return { present: false };
+  const scope = inputs[0].closest("[role=dialog], dialog, form, section, main") || document.body;
+  const text = (scope.innerText || "").replace(/\\s+/g, " ").trim();
+  const sentence = (text.match(/[^.!?]*(?:code|verif)[^.!?]*[.!?]?/i) || [""])[0].trim().slice(0, 200);
+  const channel = /\\b(?:sms|text message|phone|mobile)\\b/i.test(sentence) && !/e-?mail|inbox/i.test(sentence)
+    ? "sms"
+    : "email";
+  const selectorFor = (node, index) => {
+    if (node.id) return "#" + CSS.escape(node.id);
+    const name = node.getAttribute("name");
+    if (name) return "input[name=" + JSON.stringify(name) + "]";
+    return "input:nth-of-type(" + String(index + 1) + ")";
+  };
+  return {
+    present: true,
+    channel,
+    count: inputs.length,
+    boxes: inputs.every((node) => String(node.getAttribute("maxlength") || "") === "1"),
+    prompt: sentence,
+    selectors: inputs.map(selectorFor),
+  };
+});
+const source = /greenhouse/i.test(new URL(page.url()).hostname) ? "Greenhouse" : new URL(page.url()).hostname;
+return { ...found, hint: source, href: page.url() };
+`;
+
+/**
+ * Types a verification code into the page and moves the page on.
+ *
+ * One box or one box per character; a Verify/Confirm/Submit/Continue button
+ * in the same dialog or form, else Enter. Reports the page's own answer: the
+ * visible error text, whether a code box is still asked for, and whether the
+ * page now reads as a confirmation. The code itself never comes back.
+ */
+export const enterVerificationCodeCode = (code: string) => `
+const code = ${JSON.stringify(code)};
+const codeContext = /verif(?:y|ication)|one[- ]?time|security code|passcode|enter (?:the|your) code|code (?:we |was |has been )?sent|sent (?:you |a )?(?:code|email)|two[- ]?(?:factor|step)|authentication code|confirm your email/i;
+const boxes = page.locator("input:visible");
+const candidates = [];
+const total = await boxes.count();
+for (let i = 0; i < total; i += 1) {
+  const box = boxes.nth(i);
+  const info = await box.evaluate((node) => {
+    const attrs = ["autocomplete", "name", "id", "placeholder", "aria-label", "inputmode"]
+      .map((name) => node.getAttribute(name) || "").join(" ").toLowerCase();
+    const scope = node.closest("[role=dialog], dialog, form, section, main") || document.body;
+    return {
+      codeLike: /one-time-code|otp|verif|passcode|\\bcode\\b|numeric|\\bpin\\b/.test(attrs),
+      type: String(node.type || "").toLowerCase(),
+      context: (scope.innerText || "").slice(0, 3000),
+      single: String(node.getAttribute("maxlength") || "") === "1",
+    };
+  }, undefined, { timeout: 2000 }).catch(() => undefined);
+  if (!info || !info.codeLike) continue;
+  if (["hidden", "submit", "button", "checkbox", "radio", "file", "email", "tel", "password", "search", "url"].includes(info.type)) continue;
+  if (!codeContext.test(info.context)) continue;
+  candidates.push({ box, single: info.single });
+}
+if (candidates.length === 0) return { entered: false, clicked: false, confirmed: false, errors: [], remaining: 0, href: page.url() };
+let entered = false;
+try {
+  if (candidates.length > 1 && candidates.every((c) => c.single)) {
+    await candidates[0].box.click({ timeout: 4000 });
+    await page.keyboard.type(code, { delay: 40 });
+  } else {
+    await candidates[0].box.fill(code, { timeout: 4000 });
+  }
+  entered = true;
+} catch (error) {
+  return { entered: false, clicked: false, confirmed: false, errors: [String(error && error.message || error).slice(0, 200)], remaining: candidates.length, href: page.url() };
+}
+// The dialog's own button first, then any such button, then Enter.
+const scope = candidates[0].box.locator("xpath=ancestor::*[@role='dialog' or self::dialog or self::form][1]");
+const inScope = (await scope.count()) > 0 ? scope : page;
+const button = inScope.getByRole("button", { name: /verify|confirm|submit|continue|next|done/i }).filter({ visible: true }).first();
+let clicked = false;
+if ((await button.count()) > 0) {
+  clicked = await button.click({ timeout: 4000 }).then(() => true).catch(() => false);
+}
+if (!clicked) await page.keyboard.press("Enter").catch(() => undefined);
+await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => undefined);
+await page.waitForTimeout(500);
+const errors = await page.$$eval(
+  "[role=alert], [aria-invalid=true], .error, .field-error, [class*=error]",
+  (nodes) => nodes
+    .filter((node) => {
+      const style = getComputedStyle(node);
+      const box = node.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && box.height > 0;
+    })
+    .map((node) => (node.innerText || node.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim())
+    .filter((text) => text.length > 0 && text.length < 300)
+    .slice(0, 5)
+).catch(() => []);
+const after = await page.evaluate(() => {
+  const visible = (node) => {
+    const style = getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+  };
+  const remaining = [...document.querySelectorAll("input")].filter((node) => {
+    if (!visible(node)) return false;
+    const attrs = ["autocomplete", "name", "id", "placeholder", "aria-label", "inputmode"]
+      .map((name) => node.getAttribute(name) || "").join(" ").toLowerCase();
+    return /one-time-code|otp|verif|passcode|\\bcode\\b/.test(attrs);
+  }).length;
+  const text = (document.body.innerText || "").replace(/\\s+/g, " ");
+  const confirmed = /thank you for applying|application (?:has been |was )?(?:submitted|received)|we(?:'ve| have) received your application|successfully submitted/i.test(text);
+  return { remaining, confirmed };
+}).catch(() => ({ remaining: 0, confirmed: false }));
+return { entered, clicked, confirmed: after.confirmed, errors, remaining: after.remaining, href: page.url() };
 `;
 
 export const detectLoginWallCode = `

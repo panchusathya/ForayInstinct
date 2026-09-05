@@ -962,6 +962,29 @@ describe("a Greenhouse form, as the DoorDash run saw it", () => {
     ]);
   });
 
+  it("never hands the resume to a lone cover letter slot", () => {
+    // Round two on DoorDash: Greenhouse had swapped the resume input for the
+    // filename, the cover letter slot was the only file input left, and the
+    // lone-input rule put the resume there too.
+    const { fills, unmapped } = mapProfileToFormFields({
+      fields: [
+        {
+          label: "Attach",
+          name: "",
+          required: false,
+          selector: "#cover_letter",
+          tag: "file",
+          type: "file",
+        },
+      ],
+      identity,
+      profile,
+      resumePath: "/tmp/goforay-default-resume-ada.pdf",
+    });
+    expect(fills).toEqual([]);
+    expect(unmapped).toEqual([]);
+  });
+
   it("finds the slot itself and proves the file landed", () => {
     const scripts = readFileSync(
       "lib/application-runner/playwright-scripts.ts",
@@ -970,9 +993,15 @@ describe("a Greenhouse form, as the DoorDash run saw it", () => {
     const attach = scripts.slice(
       scripts.indexOf("export const attachFileCode")
     );
+    // Done is done: a page already showing the filename gets no second
+    // attach, and no search for whatever slot is left.
+    expect(attach.indexOf('found: "already-attached"')).toBeLessThan(
+      attach.indexOf('page.locator("input[type=file]")')
+    );
     // A scanned selector that is gone falls back to the page's own wording,
-    // then to a lone file input.
+    // then to a lone file input, never one that names another document.
     expect(attach).toContain('page.locator("input[type=file]")');
+    expect(attach).toContain("!otherDocument.test(described[0].own)");
     // The routes run in the caller's order, and each is checked against the
     // control before the next: a path the browser's machine cannot see is
     // accepted and attaches nothing, which is how the resume never reached

@@ -85,6 +85,7 @@ vi.mock("@/db/services/application-executions", () => ({
 }));
 
 import {
+  enterVerificationCode,
   fillVisibleForm,
   submitApplication,
 } from "@/lib/application-runner/fill";
@@ -809,6 +810,44 @@ describe("attaching the resume", () => {
     );
   });
 
+  it("makes no second attach on a round where the page already shows the file", async () => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { success: true, result: { loginWall: false } };
+      }
+      if (request.code.includes("const stagedPath =")) {
+        return {
+          result: { ok: true, via: "already-attached", shown: true },
+          success: true,
+        };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        return {
+          result: {
+            fields: [
+              {
+                ...resumeField,
+                label: "Attach",
+                name: "",
+                selector: "#cover_letter",
+              },
+            ],
+          },
+          success: true,
+        };
+      }
+      return { result: { filled: [], skipped: [] }, success: true };
+    });
+    expect(await run()).toEqual({ continue: true });
+    // The mapper offered no slot, so the script ran in search mode and the
+    // page's own word, the filename already shown, settled it.
+    const [code] = attachCalls();
+    expect(code).toContain('const scanned = ""');
+  });
+
   it("names a slot labelled only by its Attach button as the resume", async () => {
     mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
       if (request.code.includes("loginWall")) {
@@ -931,5 +970,121 @@ describe("attaching the resume", () => {
     );
     const prompt = mocks.generateText.mock.calls[0]?.[0]?.prompt ?? "";
     expect(prompt).not.toContain("Resume/CV");
+  });
+});
+
+describe("a verification step after the submit", () => {
+  const input = {
+    applyUrl: "https://job-boards.greenhouse.io/doordashusa/jobs/1",
+    browserSessionId: "browser-1",
+    company: "DoorDash",
+    executionId: "exec-1",
+    role: "Analyst",
+    rootSessionId: "root-1",
+    scope: { userId: "alice", workspaceId: "workspace:alice" },
+  };
+  const askingForCode = {
+    channel: "email",
+    count: 1,
+    hint: "Greenhouse",
+    present: true,
+    prompt: "We sent a verification code to your email.",
+  };
+  const page = (options: { asks: unknown; entered?: unknown }) => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (
+        request.code.includes("const codeContext =") &&
+        request.code.includes("const found = await")
+      ) {
+        return { result: options.asks, success: true };
+      }
+      if (request.code.includes("const code = ")) {
+        return { result: options.entered, success: true };
+      }
+      // The submit click.
+      return {
+        result: { clicked: true, errors: [], navigated: false },
+        success: true,
+      };
+    });
+  };
+
+  it("pauses for the emailed code instead of calling the submit refused", async () => {
+    // The DoorDash click came back clicked, no navigation, no errors, not
+    // submitted: Greenhouse had opened its emailed-code dialog. Reported as a
+    // failed submit, the agent had no reason to go to Gmail for the code.
+    page({ asks: askingForCode });
+    mocks.inspect.mockResolvedValue({ submitted: false });
+    const result = await submitApplication(input);
+    expect(result).toMatchObject({ pause: "email_otp" });
+    expect("message" in result ? result.message : "").toMatch(
+      /^Needs email OTP: Greenhouse is asking for the verification code it just emailed/u
+    );
+    expect(mocks.updateApplicationRun).toHaveBeenCalledWith({
+      executionId: "exec-1",
+      pauseReason: "email_otp",
+      status: "waiting",
+    });
+  });
+
+  it("finishes the application once the code is taken and the page confirms", async () => {
+    page({
+      asks: askingForCode,
+      entered: {
+        clicked: true,
+        confirmed: true,
+        entered: true,
+        errors: [],
+        remaining: 0,
+      },
+    });
+    mocks.inspect.mockResolvedValue({ submitted: false });
+    const result = await enterVerificationCode({ ...input, code: "482 913" });
+    expect(result).toMatchObject({ done: true });
+    const typed = mocks.executePlaywright.mock.calls.find((call) =>
+      call[1].code.includes("const code = ")
+    )?.[1].code;
+    // Whitespace stripped, and the code never reaches the log.
+    expect(typed).toContain('const code = "482913"');
+    expect(mocks.updateApplicationRun).toHaveBeenCalledWith({
+      executionId: "exec-1",
+      pauseReason: null,
+      status: "completed",
+    });
+  });
+
+  it("asks again, with the page's complaint, when the code is refused", async () => {
+    page({
+      asks: askingForCode,
+      entered: {
+        clicked: true,
+        confirmed: false,
+        entered: true,
+        errors: ["That code is incorrect."],
+        remaining: 1,
+      },
+    });
+    mocks.inspect.mockResolvedValue({ submitted: false });
+    const result = await enterVerificationCode({ ...input, code: "000000" });
+    expect(result).toMatchObject({ pause: "email_otp" });
+    expect(result && "message" in result ? result.message : "").toContain(
+      "The last code was not accepted: That code is incorrect."
+    );
+  });
+
+  it("does nothing when no code is being asked for", async () => {
+    page({ asks: { present: false } });
+    mocks.inspect.mockResolvedValue({ submitted: false });
+    expect(await enterVerificationCode({ ...input, code: "482913" })).toBe(
+      undefined
+    );
+    expect(
+      mocks.executePlaywright.mock.calls.some((call) =>
+        call[1].code.includes("const code = ")
+      )
+    ).toBe(false);
   });
 });

@@ -27,6 +27,8 @@ import {
   collectVisibleFieldsCode,
   attachFileCode,
   detectLoginWallCode,
+  enterVerificationCodeCode,
+  verificationCodeProbeCode,
 } from "@/lib/application-runner/playwright-scripts";
 import { tryFillLoginFromVault } from "@/lib/application-runner/vault";
 import type {
@@ -594,6 +596,14 @@ export async function submitApplication(
     input.browserSessionId
   ).catch(() => undefined);
   const submitted = probe?.submitted === true;
+  // A submit that opens a verification step is neither in nor refused. The
+  // DoorDash click came back "clicked, no navigation, no errors, not
+  // submitted" and was reported as a failed submit, when Greenhouse had put up
+  // its emailed-code dialog. That is a pause the agent knows how to resolve,
+  // from Gmail first and the candidate second, so it has to be named as one.
+  const verification = submitted
+    ? undefined
+    : await verificationAsked(input.browserSessionId, probe);
   // The page's visible error text, and failing that the browser's own verdict
   // on each control. A form can refuse a submit with no message rendered at
   // all, which is how a blocked submit reported "errors: none".
@@ -614,7 +624,11 @@ export async function submitApplication(
     event: "runner.submit",
     execution_id: input.executionId,
     navigated: click?.navigated === true,
-    status: submitted ? "completed" : "blocked",
+    status: submitted
+      ? "completed"
+      : verification
+        ? `verification_${verification.channel}`
+        : "blocked",
     submitted,
   });
   await recordBrowserRunCheckpoint(input.scope, input.browserSessionId, {
@@ -624,18 +638,8 @@ export async function submitApplication(
     phase: "submit",
     state: submitted ? "submission_observed" : "blocked",
   }).catch(() => undefined);
-  if (submitted) {
-    await updateApplicationRun({
-      executionId: input.executionId,
-      pauseReason: null,
-      status: "completed",
-    });
-    return {
-      applyUrl: input.applyUrl,
-      done: true,
-      message: `Submitted ${input.role} at ${input.applyUrl}.`,
-    };
-  }
+  if (submitted) return completeSubmission(input);
+  if (verification) return verificationPause(input, verification);
   await updateApplicationRun({
     executionId: input.executionId,
     pauseReason: "user_input",
@@ -653,6 +657,163 @@ export async function submitApplication(
     ),
     pause: "user_input",
   };
+}
+
+const verificationProbeSchema = z.object({
+  boxes: z.boolean().optional(),
+  channel: z.enum(["email", "sms"]).optional(),
+  count: z.number().optional(),
+  hint: z.string().optional(),
+  present: z.boolean(),
+  prompt: z.string().optional(),
+});
+
+interface VerificationAsk {
+  channel: "email" | "sms";
+  hint: string;
+  prompt: string;
+}
+
+/**
+ * Whether the page is now asking for a verification code, from either
+ * sensor: the post-action probe's `autocomplete=one-time-code` rule, or the
+ * broader look at a code-like input with verification wording around it.
+ */
+async function verificationAsked(
+  sessionId: string,
+  probe: Awaited<ReturnType<typeof inspectPostActionBrowserState>>
+): Promise<VerificationAsk | undefined> {
+  const asked = await parseResult(
+    sessionId,
+    verificationCodeProbeCode,
+    verificationProbeSchema,
+    "verification_probe"
+  );
+  if (asked?.present) {
+    return {
+      channel: asked.channel ?? "email",
+      hint: asked.hint ?? "the site",
+      prompt: asked.prompt ?? "",
+    };
+  }
+  if (probe?.emailOtp || probe?.smsOtp) {
+    return {
+      channel: probe.smsOtp && !probe.emailOtp ? "sms" : "email",
+      hint: probe.otpHint ?? "the site",
+      prompt: "",
+    };
+  }
+  return undefined;
+}
+
+/** The pause for a verification step, in the page's words and no more. */
+async function verificationPause(
+  input: ApplicationRunInput & { browserSessionId: string },
+  ask: VerificationAsk,
+  refused?: string
+): Promise<FillStepResult> {
+  const pause: ApplicationPauseReason =
+    ask.channel === "email" ? "email_otp" : "user_input";
+  await updateApplicationRun({
+    executionId: input.executionId,
+    pauseReason: pause,
+    status: "waiting",
+  });
+  const said = ask.prompt ? ` The page says: "${ask.prompt}"` : "";
+  return {
+    applyUrl: input.applyUrl,
+    message: applicationPauseMessage(
+      pause,
+      ask.channel === "email"
+        ? `${ask.hint} is asking for the verification code it just emailed the candidate before it will take the submit for ${input.applyUrl}.${said}${refused ? ` The last code was not accepted: ${refused}.` : ""} The form is complete and the browser is held open; enter the code with continue_application.`
+        : `${ask.hint} is asking for a verification code sent by SMS before it will take the submit for ${input.applyUrl}.${said}${refused ? ` The last code was not accepted: ${refused}.` : ""} The form is complete and the browser is held open.`
+    ),
+    pause,
+  };
+}
+
+async function completeSubmission(
+  input: ApplicationRunInput & { browserSessionId: string }
+): Promise<FillStepResult> {
+  await updateApplicationRun({
+    executionId: input.executionId,
+    pauseReason: null,
+    status: "completed",
+  });
+  return {
+    applyUrl: input.applyUrl,
+    done: true,
+    message: `Submitted ${input.role} at ${input.applyUrl}.`,
+  };
+}
+
+/**
+ * Enters a verification code the page asked for after the submit.
+ *
+ * Returns nothing when no code is being asked for, so the caller can carry on
+ * with the submit; otherwise the run's next state: done when the page
+ * confirms the application, or the same verification pause again, carrying
+ * the page's complaint, when the code was refused. The code is typed into the
+ * page and never logged or echoed.
+ */
+export async function enterVerificationCode(
+  input: ApplicationRunInput & { browserSessionId: string; code: string }
+): Promise<FillStepResult | undefined> {
+  const code = input.code.replace(/[\s-]+/gu, "");
+  if (code === "") return undefined;
+  const asked = await verificationAsked(input.browserSessionId, undefined);
+  if (!asked) return undefined;
+  const entered = await parseResult(
+    input.browserSessionId,
+    enterVerificationCodeCode(code),
+    z.object({
+      clicked: z.boolean(),
+      confirmed: z.boolean(),
+      entered: z.boolean(),
+      errors: z.array(z.string()).default([]),
+      href: z.string().optional(),
+      remaining: z.number().default(0),
+    }),
+    "enter_code"
+  );
+  const probe = await inspectPostActionBrowserState(
+    input.browserSessionId
+  ).catch(() => undefined);
+  const submitted =
+    probe?.submitted === true ||
+    (entered?.confirmed === true && entered.remaining === 0);
+  const complaint = (entered?.errors ?? []).join("; ").slice(0, 300);
+  // Outcome only: which channel, whether the code went in, what the page
+  // said, whether the application is now in. Never the code.
+  applicationExecutionLog({
+    apply_url: input.applyUrl,
+    channel: asked.channel,
+    clicked: entered?.clicked === true,
+    entered: entered?.entered === true,
+    errors: complaint || "none",
+    event: "runner.verification",
+    execution_id: input.executionId,
+    remaining: entered?.remaining ?? 0,
+    submitted,
+  });
+  await recordBrowserRunCheckpoint(input.scope, input.browserSessionId, {
+    action: "submit",
+    executionId: input.executionId,
+    page: input.applyUrl,
+    phase: "submit",
+    state: submitted ? "submission_observed" : "blocked",
+  }).catch(() => undefined);
+  if (submitted) return completeSubmission(input);
+  if (entered?.entered !== true || entered.remaining > 0 || complaint) {
+    return verificationPause(
+      input,
+      asked,
+      complaint || "the page still asks for a code"
+    );
+  }
+  // The code went in and the dialog closed, but nothing confirmed the
+  // application yet: the submit itself is what is left.
+  return undefined;
 }
 
 /**

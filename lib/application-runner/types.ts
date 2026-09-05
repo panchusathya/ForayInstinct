@@ -26,6 +26,8 @@ export interface ApplicationRunInput {
   resumeAnswered?: Record<string, string>;
   /** Free-text answers with no question attached; only the helper reads them. */
   resumeAnswers?: string;
+  /** A verification code the page asked for after the submit. */
+  resumeOtp?: string;
   role: string;
   rootSessionId: string;
   scope: AccessScope;
