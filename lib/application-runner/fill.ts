@@ -11,6 +11,12 @@ import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoint
 import { updateApplicationRun } from "@/db/services/application-executions";
 import { applicationExecutionLog } from "@/lib/application-execution";
 import { browserProvider } from "@/lib/browser";
+import {
+  forgetRunAnswers,
+  readRunAnswers,
+  rememberRunAnswers,
+} from "@/lib/manager/server/application-answers";
+import { rememberContactPhone } from "@/lib/manager/server/contact-phone";
 import { suggestUnmappedFills } from "@/lib/application-runner/ambiguous";
 import {
   fillForAnswer,
@@ -223,6 +229,14 @@ function answeredFills(
   return { fills, leftover, patch };
 }
 
+/** Whether a control asks for a phone number, by its wording or its type. */
+function isPhoneField(field: VisibleFormField) {
+  return (
+    field.type === "tel" ||
+    /phone|mobile|\btel\b/iu.test(`${field.label} ${field.name}`)
+  );
+}
+
 /**
  * What to call a file slot when asking for it. The page's label when it has
  * one a candidate could read; failing that, a resume slot is called Resume
@@ -319,6 +333,13 @@ async function blankRequiredPause(
   const unreadable = stillEmpty.filter(
     (field) => !hasReadableLabel(field.label)
   );
+  if (unreadable.length > 0) {
+    // Seven unlabelled required text inputs on Greenhouse were its code
+    // boxes. A page asking for a code is a verification pause, never a list
+    // of fields nobody can name.
+    const asked = await verificationAsked(input.browserSessionId, undefined);
+    if (asked) return verificationPause(input, asked);
+  }
   for (const field of unreadable) {
     // The selector alone says nothing. Record the shape and the surrounding
     // form wording so an unreadable control can be identified from the logs.
@@ -390,26 +411,12 @@ export async function fillVisibleForm(
   const probe = await inspectPostActionBrowserState(
     input.browserSessionId
   ).catch(() => undefined);
-  if (probe?.emailOtp) {
-    return {
-      applyUrl: input.applyUrl,
-      message: applicationPauseMessage(
-        "email_otp",
-        probe.otpHint ?? input.applyUrl
-      ),
-      pause: "email_otp",
-    };
-  }
-  if (probe?.smsOtp) {
-    return {
-      applyUrl: input.applyUrl,
-      message: applicationPauseMessage(
-        "user_input",
-        "SMS verification is required."
-      ),
-      pause: "user_input",
-    };
-  }
+  // A page asking for a verification code is not a form to fill. The code
+  // arrives through the run's continue and is entered before this runs; with
+  // none in hand, the pause names the step so the agent goes to Gmail first
+  // and the candidate second.
+  const asked = await verificationAsked(input.browserSessionId, probe);
+  if (asked) return verificationPause(input, asked);
   const collected = await parseResult(
     input.browserSessionId,
     collectVisibleFieldsCode,
@@ -448,7 +455,31 @@ export async function fillVisibleForm(
   // The candidate's answers first. They outrank the profile for the control
   // they name — the profile's value is what the page just refused — and they
   // are kept, so the same question is never asked on the next posting.
-  const answered = answeredFills(fields, input.answered ?? {}, profile);
+  // Everything the candidate has answered on this run so far, so a form
+  // filled again in a fresh browser after the last one died does not ask the
+  // same questions over. This round's answers win over remembered ones.
+  const remembered = await readRunAnswers(input.scope, input.executionId).catch(
+    () => ({})
+  );
+  const thisRound = input.answered ?? {};
+  if (Object.keys(thisRound).length > 0) {
+    await rememberRunAnswers(input.scope, input.executionId, thisRound).catch(
+      () => undefined
+    );
+  }
+  const answered = answeredFills(
+    fields,
+    { ...remembered, ...thisRound },
+    profile
+  );
+  // A phone number is identity, not profile, so profilePatchForAnswer leaves
+  // it alone. Kept here instead, so it is never asked for twice.
+  for (const [question, value] of Object.entries(thisRound)) {
+    const field = matchFieldByLabel(fields, question);
+    if (field && isPhoneField(field)) {
+      await rememberContactPhone(input.scope, value).catch(() => undefined);
+    }
+  }
   const answeredSelectors = new Set(
     answered.fills.map((fill) => fill.selector)
   );
@@ -740,6 +771,7 @@ async function completeSubmission(
     pauseReason: null,
     status: "completed",
   });
+  await forgetRunAnswers(input.scope, input.executionId).catch(() => undefined);
   return {
     applyUrl: input.applyUrl,
     done: true,

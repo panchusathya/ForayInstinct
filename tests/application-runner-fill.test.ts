@@ -34,6 +34,20 @@ const mocks = vi.hoisted(() => ({
   providerName: ((): { value: "gateway" | "kernel" } => ({
     value: "gateway",
   }))(),
+  readAnswers: vi.fn<() => Promise<Record<string, string>>>(),
+  rememberAnswers: vi.fn<() => Promise<void>>(),
+  forgetAnswers: vi.fn<() => Promise<void>>(),
+  rememberPhone: vi.fn<(_scope: unknown, _value: string) => Promise<void>>(),
+}));
+
+vi.mock("@/lib/manager/server/application-answers", () => ({
+  forgetRunAnswers: mocks.forgetAnswers,
+  readRunAnswers: mocks.readAnswers,
+  rememberRunAnswers: mocks.rememberAnswers,
+}));
+
+vi.mock("@/lib/manager/server/contact-phone", () => ({
+  rememberContactPhone: mocks.rememberPhone,
 }));
 
 vi.mock("@/lib/model-config", () => ({
@@ -109,6 +123,10 @@ beforeEach(() => {
   });
   mocks.resume.mockResolvedValue(undefined);
   mocks.selfIdentification.mockResolvedValue({});
+  mocks.readAnswers.mockResolvedValue({});
+  mocks.rememberAnswers.mockResolvedValue(undefined);
+  mocks.forgetAnswers.mockResolvedValue(undefined);
+  mocks.rememberPhone.mockResolvedValue(undefined);
   mocks.checkpoint.mockResolvedValue(undefined);
   mocks.stageFile.mockResolvedValue(undefined);
   mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
@@ -1086,5 +1104,132 @@ describe("a verification step after the submit", () => {
         call[1].code.includes("const code = ")
       )
     ).toBe(false);
+  });
+});
+
+describe("a code dialog made of boxes", () => {
+  const input = {
+    applyUrl: "https://job-boards.greenhouse.io/doordashusa/jobs/1",
+    browserSessionId: "browser-1",
+    company: "DoorDash",
+    executionId: "exec-1",
+    role: "Analyst",
+    rootSessionId: "root-1",
+    scope: { userId: "alice", workspaceId: "workspace:alice" },
+  };
+  const securityBoxes = Array.from({ length: 7 }, (_, index) => ({
+    label: "",
+    nearby: "",
+    selector: `#security-input-${String(index + 1)}`,
+    tag: "text",
+  }));
+
+  it("pauses for the code, never for seven fields nobody can name", async () => {
+    // Greenhouse's dialog is #security-input-1 .. 7, type=text, no label and
+    // no autocomplete. The blank scan saw seven unlabelled required fields and
+    // said so; the candidate had already pasted the code.
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { success: true, result: { loginWall: false } };
+      }
+      if (request.code.includes("const found = await page.evaluate")) {
+        return {
+          result: {
+            channel: "email",
+            count: 7,
+            hint: "Greenhouse",
+            present: true,
+            prompt: "Enter the code we sent to your email.",
+          },
+          success: true,
+        };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: securityBoxes }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        return { result: { fields: [] }, success: true };
+      }
+      return { result: { filled: [], skipped: [] }, success: true };
+    });
+    const result = await fillVisibleForm(input);
+    expect(result).toMatchObject({ pause: "email_otp" });
+    expect("message" in result ? result.message : "").not.toContain(
+      "carry no label"
+    );
+  });
+});
+
+describe("what a run remembers", () => {
+  const run = (answered?: Record<string, string>) =>
+    fillVisibleForm({
+      applyUrl: "https://jobs.example/role/1",
+      browserSessionId: "browser-1",
+      company: "Example",
+      executionId: "exec-1",
+      role: "Analyst",
+      rootSessionId: "root-1",
+      scope: { userId: "alice", workspaceId: "workspace:alice" },
+      ...(answered ? { answered } : {}),
+    });
+
+  it("re-applies the answers a candidate already gave on this run", async () => {
+    // The browser died between rounds and a fresh one was opened: the form
+    // came back from the top and asked "Have you worked at DoorDash?" again.
+    mocks.readAnswers.mockResolvedValue({ "Favorite color": "blue" });
+    expect(await run()).toEqual({ continue: true });
+    const codes = mocks.executePlaywright.mock.calls.map(
+      (call) => call[1].code
+    );
+    expect(codes.some((code) => code.includes('"#color"'))).toBe(true);
+    // Nothing left for the helper to guess at.
+    expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+
+  it("keeps this round's answers for the next round", async () => {
+    expect(await run({ "Favorite color": "green" })).toEqual({
+      continue: true,
+    });
+    expect(mocks.rememberAnswers).toHaveBeenCalledWith(
+      { userId: "alice", workspaceId: "workspace:alice" },
+      "exec-1",
+      { "Favorite color": "green" }
+    );
+  });
+
+  it("keeps a phone number the candidate typed, so it is never asked twice", async () => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { success: true, result: { loginWall: false } };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        return {
+          result: {
+            fields: [
+              {
+                label: "Phone*",
+                name: "phone",
+                required: true,
+                selector: "#phone",
+                tag: "input",
+                type: "tel",
+              },
+            ],
+          },
+          success: true,
+        };
+      }
+      return { result: { filled: ["#phone"], skipped: [] }, success: true };
+    });
+    expect(await run({ "Phone*": "(415) 555-0100" })).toEqual({
+      continue: true,
+    });
+    expect(mocks.rememberPhone).toHaveBeenCalledWith(
+      { userId: "alice", workspaceId: "workspace:alice" },
+      "(415) 555-0100"
+    );
   });
 });

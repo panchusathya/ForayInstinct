@@ -35,23 +35,32 @@ export async function runApplicationUntilPause(input: ApplicationRunInput) {
       browserSessionId: browser.session_id,
       code: input.resumeOtp,
     });
-    const outcome =
-      verified ??
-      (await submitApplication({
-        ...input,
-        browserSessionId: browser.session_id,
-      }));
-    if ("pause" in outcome) {
-      applicationExecutionLog({
-        apply_url: input.applyUrl,
-        detail: outcome.message.slice(0, 300),
-        event: "runner.paused",
-        execution_id: input.executionId,
-        pause_reason: outcome.pause,
-        status: "waiting",
-      });
+    // A code sent on its own, to a page no longer asking for one, means the
+    // dialog was already passed: the submit is what remains. A code that came
+    // as an ordinary answer, to a page not asking, was an ordinary answer
+    // after all and goes to the form below.
+    const codeOnly =
+      !input.resumeAnswers &&
+      Object.keys(input.resumeAnswered ?? {}).length === 0;
+    if (verified || codeOnly) {
+      const outcome =
+        verified ??
+        (await submitApplication({
+          ...input,
+          browserSessionId: browser.session_id,
+        }));
+      if ("pause" in outcome) {
+        applicationExecutionLog({
+          apply_url: input.applyUrl,
+          detail: outcome.message.slice(0, 300),
+          event: "runner.paused",
+          execution_id: input.executionId,
+          pause_reason: outcome.pause,
+          status: "waiting",
+        });
+      }
+      return outcome;
     }
-    return outcome;
   }
   const filled = await fillVisibleForm({
     ...input,

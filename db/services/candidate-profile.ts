@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
 import { accessScopeForPhone } from "@/lib/access-scope";
+import { readContactPhone } from "@/lib/manager/server/contact-phone";
 import { candidateProfiles, db, user } from "@/db";
 import {
   candidateProfilePatchSchema,
@@ -85,20 +86,30 @@ export async function saveCandidateProfile(
   }
 }
 
-/** Verified email/phone from the Better Auth user row, plus display name. */
+/**
+ * Verified email/phone from the Better Auth user row, plus display name.
+ *
+ * The phone falls back to the number the candidate texts from, or gave to a
+ * form, kept by `rememberContactPhone`: an iMessage-only candidate has no
+ * web account row, and without this had no phone anywhere.
+ */
 export async function readCandidateContactIdentity(
   scope: AccessScope
 ): Promise<CandidateContactIdentity> {
   const row =
     (await lookupAuthUserById(authUserId(scope.userId))) ??
     (await lookupAuthUserByPhoneScope(scope.userId));
-  if (row === undefined) return { name: "" };
+  const verifiedPhone =
+    row?.phoneNumberVerified === true && row.phoneNumber
+      ? row.phoneNumber
+      : undefined;
+  const phone =
+    verifiedPhone ?? (await readContactPhone(scope).catch(() => undefined));
+  if (row === undefined) return { name: "", ...(phone ? { phone } : {}) };
   return {
     name: row.name.trim(),
     ...(row.emailVerified && row.email ? { email: row.email } : {}),
-    ...(row.phoneNumberVerified === true && row.phoneNumber
-      ? { phone: row.phoneNumber }
-      : {}),
+    ...(phone ? { phone } : {}),
   };
 }
 

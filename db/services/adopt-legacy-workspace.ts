@@ -292,5 +292,10 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
 }
 
 function isSecretNamespace(value: string): value is SecretNamespace {
-  return value === "vault" || value === "browser-state";
+  return (
+    value === "vault" ||
+    value === "browser-state" ||
+    value === "contact" ||
+    value === "application-answers"
+  );
 }

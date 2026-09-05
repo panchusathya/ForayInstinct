@@ -2,7 +2,17 @@ import { and, eq } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
 import { db, encryptedSecrets } from "@/db";
 
-export type SecretNamespace = "browser-state" | "vault";
+/**
+ * `contact` holds the candidate's own phone number; `application-answers`
+ * holds one run's answers by question, so a form filled again in a fresh
+ * browser does not ask them over. Both are personal data, so they live with
+ * the other encrypted per-workspace values rather than in plain columns.
+ */
+export type SecretNamespace =
+  | "application-answers"
+  | "browser-state"
+  | "contact"
+  | "vault";
 
 export async function writeEncryptedSecret(
   scope: AccessScope,

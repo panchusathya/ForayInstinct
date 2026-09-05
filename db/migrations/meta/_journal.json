@@ -169,6 +169,13 @@
       "when": 1788476600000,
       "tag": "0023_little_sentinels",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788476700000,
+      "tag": "0024_contact_and_answers_namespaces",
+      "breakpoints": true
     }
   ]
 }
