@@ -973,18 +973,28 @@ describe("a Greenhouse form, as the DoorDash run saw it", () => {
     // A scanned selector that is gone falls back to the page's own wording,
     // then to a lone file input.
     expect(attach).toContain('page.locator("input[type=file]")');
-    // The staged path first, the bytes when the path cannot be read.
-    expect(attach.indexOf('attach("path"')).toBeLessThan(
-      attach.indexOf('attach("payload"')
-    );
+    // The routes run in the caller's order, and each is checked against the
+    // control before the next: a path the browser's machine cannot see is
+    // accepted and attaches nothing, which is how the resume never reached
+    // DoorDash through the gateway.
+    expect(attach).toContain("for (const method of order)");
     expect(attach).toContain('Buffer.from(payload.base64, "base64")');
+    expect(attach).toContain("accepted but the control holds no file");
+    // A last route with no Playwright file plumbing at all.
+    expect(attach).toContain("new DataTransfer()");
+    expect(attach).toContain(
+      'node.dispatchEvent(new Event("change", { bubbles: true }))'
+    );
+    // Every remote call carries its own timeout, so a hung browser returns a
+    // reason instead of the gateway's silent thirty-second kill.
+    expect(attach).toContain("{ timeout: 8000 }");
+    expect(attach).toContain("const brief = { timeout: 2000 };");
     // The control's own word, never the call's: the file still held, or the
     // page showing its name after taking it. An ATS that uploads on change
     // clears the input straight after, and reading files alone called that
     // success a failure on the DoorDash form.
     expect(attach).toContain("node.files ? node.files.length : 0");
     expect(attach).toContain("text.includes(expected)");
-    expect(attach).toContain("if (!state.held && !state.shown)");
     // A failure names the page's file inputs by their own wording so the log
     // says which control this was, and never the file.
     expect(attach).toContain('page.$$eval("input[type=file]"');

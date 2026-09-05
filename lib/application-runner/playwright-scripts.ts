@@ -442,21 +442,29 @@ return { empty, href: page.url() };
 /**
  * Puts the resume on the page's file control and proves it landed.
  *
- * The old script set the path on the scanned selector and returned; its
- * result was never read. Any one of three silent failures — a control the scan
- * missed, a staged path the browser's Playwright could not open, a page that
- * cleared the input — left the form without a resume and nothing in the log,
- * and the candidate found out from the ATS's own "Resume/CV is required".
+ * Three ways in, tried in the caller's order and each checked against the
+ * control before the next is tried:
  *
- * So this finds the control itself when the scanned selector is gone (any
- * file input whose wording says resume, else the only file input there is),
- * tries the staged path first, falls back to the file's own bytes when the
- * path cannot be read, and reads `files` back before claiming success. The
- * bytes travel base64-encoded inside the script and are decoded in the
- * browser VM; nothing about their contents is returned.
+ * - `path`: the staged file by its path. Right only where the Playwright code
+ *   runs on the browser's own machine (Kernel). Over a plain CDP connection
+ *   (the Brightdata gateway) Chromium resolves the path on *its* machine, the
+ *   file is not there, and the call returns cleanly having attached nothing.
+ *   That is the whole story of the resume that never reached DoorDash.
+ * - `payload`: the bytes themselves; Playwright builds the File inside the
+ *   page, so no filesystem is involved. Right on the gateway.
+ * - `dom`: last resort with no Playwright file plumbing at all: a File built
+ *   in the page from the base64, handed to the input through a DataTransfer,
+ *   and announced with input and change events.
+ *
+ * Every remote call carries its own short timeout, so a hung browser produces
+ * a caught error and a returned result rather than a gateway timeout with
+ * nothing in it. The bytes travel base64-encoded inside the script and are
+ * decoded in the browser VM; nothing about their contents is returned.
  */
 export const attachFileCode = (input: {
-  /** Base64 file bytes for when the staged path is unreadable. */
+  /** Which routes to try, first to last. */
+  order: ("path" | "payload")[];
+  /** Base64 file bytes, for the payload and dom routes. */
   payload?: { base64: string; mimeType: string; name: string };
   /** The staged browser-local path, when staging succeeded. */
   path?: string;
@@ -467,6 +475,9 @@ const wanted = /resume|\\bcv\\b|curriculum/i;
 const scanned = ${JSON.stringify(input.selector ?? "")};
 const stagedPath = ${JSON.stringify(input.path ?? "")};
 const payload = ${JSON.stringify(input.payload ?? null)};
+const order = ${JSON.stringify(input.order)};
+const brief = { timeout: 2000 };
+const describeError = (error) => String(error && error.message || error).replace(/\\s+/g, " ").slice(0, 160);
 // What the control itself says it is for, then what the markup around it
 // says. Kept apart: a wrapper's text can mention the resume next to a cover
 // letter slot, so it only decides when no input names itself.
@@ -481,16 +492,24 @@ const describe = (node) => {
     nearby: tidy([wrapper && wrapper.innerText]),
   };
 };
+// By their own wording only, so a failure names the control and never the file.
+const inventory = () => page.$$eval("input[type=file]", (nodes) => nodes.map((node) => {
+  const byFor = node.id && document.querySelector("label[for=" + JSON.stringify(node.id) + "]");
+  return [node.id, node.getAttribute("name"), byFor && byFor.innerText]
+    .filter(Boolean).join(" ").replace(/\\s+/g, " ").slice(0, 80);
+})).catch(() => []);
 let locator = scanned ? page.locator(scanned).first() : undefined;
 let found = "scanned";
 if (!locator || (await locator.count()) === 0
-    || String(await locator.getAttribute("type").catch(() => "")).toLowerCase() !== "file") {
+    || String(await locator.getAttribute("type", brief).catch(() => "")).toLowerCase() !== "file") {
   // The scan's selector is gone or was not a file input: look for the control
   // by what the page says it is for, then settle for a lone file input.
   const inputs = page.locator("input[type=file]");
   const total = await inputs.count();
   const described = [];
-  for (let i = 0; i < total; i += 1) described.push(await inputs.nth(i).evaluate(describe));
+  for (let i = 0; i < total; i += 1) {
+    described.push(await inputs.nth(i).evaluate(describe, undefined, brief).catch(() => ({ own: "", nearby: "" })));
+  }
   locator = undefined;
   const byOwn = described.findIndex((text) => wanted.test(text.own));
   const byNearby = described.findIndex((text) => wanted.test(text.nearby));
@@ -499,61 +518,90 @@ if (!locator || (await locator.count()) === 0
   else if (total === 1) { locator = inputs.first(); found = "only-file-input"; }
   if (!locator) return { ok: false, reason: "missing", fileInputs: total };
 }
-const attempts = [];
-const attach = async (via, files) => {
-  try {
-    await locator.setInputFiles(files);
-    return true;
-  } catch (error) {
-    attempts.push(via + ": " + String(error && error.message || error).slice(0, 160));
-    return false;
-  }
-};
-let via = "";
-if (stagedPath && await attach("path", stagedPath)) via = "path";
-if (!via && payload && await attach("payload", {
-  name: payload.name,
-  mimeType: payload.mimeType,
-  buffer: Buffer.from(payload.base64, "base64"),
-})) via = "payload";
-if (!via) return { ok: false, reason: attempts.join(" | ") || "no file to attach", found };
-// The page's own word, not the call's: a control can accept the call and
-// hold nothing.
 // The page's own word, not the call's. Either the control still holds the
 // file, or the page has taken it: an ATS that uploads on change tends to
 // clear the input straight after so the same file can be chosen again, and
-// then shows the file's name once the upload lands. Reading the files list alone
-// there called a successful attach a failure. Give the upload a moment, so a
-// submit that follows is not refused mid-upload either.
+// then shows the file's name once the upload lands.
 const expected = payload ? payload.name : stagedPath.split("/").pop() || "";
 const stem = expected.replace(/\\.[^.]+$/, "");
-const check = async () => {
-  const held = await locator.evaluate((node) => ({
-    count: node.files ? node.files.length : 0,
-    name: node.files && node.files[0] ? node.files[0].name : "",
-  })).catch(() => ({ count: 0, name: "" }));
-  const text = await page.locator("body").innerText().catch(() => "");
-  const shown = expected !== "" && (text.includes(expected) || (stem.length > 3 && text.includes(stem)));
-  return { held: held.count > 0, name: held.name || expected, shown };
+const held = () => locator.evaluate((node) => ({
+  count: node.files ? node.files.length : 0,
+  name: node.files && node.files[0] ? node.files[0].name : "",
+}), undefined, brief).catch(() => ({ count: 0, name: "" }));
+const shownOnPage = async () => {
+  const text = await page.locator("body").innerText(brief).catch(() => "");
+  return expected !== "" && (text.includes(expected) || (stem.length > 3 && text.includes(stem)));
 };
+// Whether a route that the browser accepted actually left a file behind: a
+// path the browser's machine cannot see arrives as no file at all, without a
+// word of complaint, and the next route has to be tried.
+const landed = async () => {
+  const until = Date.now() + 1500;
+  for (;;) {
+    if ((await held()).count > 0 || await shownOnPage()) return true;
+    if (Date.now() >= until) return false;
+    await page.waitForTimeout(250);
+  }
+};
+const attempts = [];
+const attach = async (via, files) => {
+  try {
+    await locator.setInputFiles(files, { timeout: 8000 });
+  } catch (error) {
+    attempts.push(via + ": " + describeError(error));
+    return false;
+  }
+  if (await landed()) return true;
+  attempts.push(via + ": accepted but the control holds no file");
+  return false;
+};
+const domAttach = async () => {
+  try {
+    await locator.evaluate((node, file) => {
+      const bytes = Uint8Array.from(atob(file.base64), (char) => char.charCodeAt(0));
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([bytes], file.name, { type: file.mimeType }));
+      node.files = transfer.files;
+      node.dispatchEvent(new Event("input", { bubbles: true }));
+      node.dispatchEvent(new Event("change", { bubbles: true }));
+    }, payload, { timeout: 8000 });
+  } catch (error) {
+    attempts.push("dom: " + describeError(error));
+    return false;
+  }
+  if (await landed()) return true;
+  attempts.push("dom: accepted but the control holds no file");
+  return false;
+};
+let via = "";
+for (const method of order) {
+  if (via) break;
+  if (method === "path" && stagedPath && await attach("path", stagedPath)) via = "path";
+  if (method === "payload" && payload && await attach("payload", {
+    name: payload.name,
+    mimeType: payload.mimeType,
+    buffer: Buffer.from(payload.base64, "base64"),
+  })) via = "payload";
+}
+if (!via && payload && await domAttach()) via = "dom";
+if (!via) {
+  return {
+    ok: false,
+    reason: attempts.join(" | ") || "no file to attach",
+    found,
+    inventory: await inventory(),
+  };
+}
+// Give a background upload a moment to land, so a submit that follows is not
+// refused mid-upload. The file is already on the control either way.
 const deadline = Date.now() + 6000;
-let state = await check();
-while (!state.shown && Date.now() < deadline) {
+let shown = await shownOnPage();
+while (!shown && Date.now() < deadline) {
   await page.waitForTimeout(300);
-  state = await check();
+  shown = await shownOnPage();
 }
-if (!state.held && !state.shown) {
-  // Name the file inputs the page has, by their own wording only, so the
-  // next reader of the log can see which control this was and what it was
-  // labelled. Never the file, never a value.
-  const inventory = await page.$$eval("input[type=file]", (nodes) => nodes.map((node) => {
-    const byFor = node.id && document.querySelector("label[for=" + JSON.stringify(node.id) + "]");
-    return [node.id, node.getAttribute("name"), byFor && byFor.innerText]
-      .filter(Boolean).join(" ").replace(/\\s+/g, " ").slice(0, 80);
-  }));
-  return { ok: false, reason: "the control holds no file and the page shows no upload after setInputFiles", found, via, inventory };
-}
-return { ok: true, found, via, filename: state.name, shown: state.shown };
+const state = await held();
+return { ok: true, found, via, filename: state.name || expected, shown, attempts };
 `;
 
 export const detectLoginWallCode = `

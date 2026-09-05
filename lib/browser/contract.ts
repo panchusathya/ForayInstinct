@@ -202,7 +202,13 @@ export const stageFileRequestSchema = z.object({
 });
 
 export const stageFileResponseSchema = z.object({
-  /** Gateway-local path; valid inside playwright code eval (`setInputFiles`). */
+  /**
+   * Gateway-local path. The browser runs at Brightdata, not on the gateway,
+   * and over a plain CDP connection Playwright hands `setInputFiles` a path
+   * for Chromium to open on *its* machine, so this path attaches nothing
+   * there. Attach bytes (`setInputFiles({ name, mimeType, buffer })`) on the
+   * gateway; the path is only right where the code runs beside the browser.
+   */
   path: z.string(),
 });
 

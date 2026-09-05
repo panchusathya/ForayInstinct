@@ -31,6 +31,9 @@ const mocks = vi.hoisted(() => ({
   updateApplicationRun: vi.fn<() => Promise<void>>(),
   saveCandidateProfile: vi.fn<() => Promise<{ stored: boolean }>>(),
   selfIdentification: vi.fn<() => Promise<Record<string, string>>>(),
+  providerName: ((): { value: "gateway" | "kernel" } => ({
+    value: "gateway",
+  }))(),
 }));
 
 vi.mock("@/lib/model-config", () => ({
@@ -40,6 +43,9 @@ vi.mock("@/lib/model-config", () => ({
 vi.mock("@/lib/browser", () => ({
   browserProvider: {
     executePlaywright: mocks.executePlaywright,
+    get name() {
+      return mocks.providerName.value;
+    },
     stageFile: mocks.stageFile,
   },
 }));
@@ -745,6 +751,7 @@ describe("attaching the resume", () => {
   };
 
   beforeEach(() => {
+    mocks.providerName.value = "gateway";
     mocks.resume.mockResolvedValue({
       bytes: Buffer.from("%PDF-1.4 resume"),
       filename: "Ada Lovelace.pdf",
@@ -753,6 +760,81 @@ describe("attaching the resume", () => {
     mocks.generateText.mockResolvedValue({
       text: JSON.stringify({ fills: [] }),
     });
+  });
+
+  it("sends the bytes first on the gateway, where a staged path attaches nothing", async () => {
+    // The gateway runs the script in its own process and the browser sits at
+    // Brightdata; Chromium resolves a path on its machine, finds nothing, and
+    // attaches nothing without a word. That is the DoorDash resume.
+    pageWithResumeSlot(() => ({ ok: true, via: "payload" }));
+    expect(await run()).toEqual({ continue: true });
+    const [code] = attachCalls();
+    expect(code).toContain('const order = ["payload","path"]');
+    const request = mocks.executePlaywright.mock.calls.find((call) =>
+      call[1].code.includes("const stagedPath =")
+    )?.[1];
+    expect(request).toMatchObject({ timeoutSec: 90 });
+  });
+
+  it("keeps the staged path first on Kernel, where the code runs beside the browser", async () => {
+    mocks.providerName.value = "kernel";
+    pageWithResumeSlot(() => ({ ok: true, via: "path" }));
+    expect(await run()).toEqual({ continue: true });
+    const [code] = attachCalls();
+    expect(code).toContain('const order = ["path","payload"]');
+  });
+
+  it("carries the browser's own error into the pause when the script dies", async () => {
+    // Run 3 on the gateway logged "the browser returned nothing": the script
+    // had timed out and the error text was thrown away with the result.
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { success: true, result: { loginWall: false } };
+      }
+      if (request.code.includes("const stagedPath =")) {
+        return { error: "Execution timed out after 30s", success: false };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        return { result: { fields: [resumeField] }, success: true };
+      }
+      return { result: { filled: [], skipped: [] }, success: true };
+    });
+    const result = await run();
+    expect(result).toMatchObject({ pause: "user_input" });
+    expect("message" in result ? result.message : "").toMatch(
+      /could not be attached to Resume\/CV\*.*Execution timed out after 30s/u
+    );
+  });
+
+  it("names a slot labelled only by its Attach button as the resume", async () => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { success: true, result: { loginWall: false } };
+      }
+      if (request.code.includes("const stagedPath =")) {
+        return {
+          result: { ok: false, reason: "path: refused" },
+          success: true,
+        };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        return {
+          result: { fields: [{ ...resumeField, label: "Attach" }] },
+          success: true,
+        };
+      }
+      return { result: { filled: [], skipped: [] }, success: true };
+    });
+    const result = await run();
+    expect("message" in result ? result.message : "").toMatch(
+      /could not be attached to Resume\/CV on/u
+    );
   });
 
   it("stages the file, attaches it to the scanned slot, and reads the result", async () => {

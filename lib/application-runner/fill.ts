@@ -228,9 +228,30 @@ function answeredFills(
  * is the one a candidate has to be told about.
  */
 function fileQuestionLabel(field: VisibleFormField) {
-  const label = tidyLabel(field.label);
+  const label = fileSlotName(field.label);
   if (hasReadableLabel(label)) return label;
-  return /resume|\bcv\b|curriculum/iu.test(field.name) ? "Resume" : "";
+  return /resume|\bcv\b|curriculum/iu.test(field.name + field.selector)
+    ? "Resume/CV"
+    : "";
+}
+
+/**
+ * A file input is often labelled by the button that opens it, so its label
+ * reads Attach or Upload: a verb, not a question. Told "could not be attached
+ * to Attach", nobody knows which control was meant. A bare verb is replaced
+ * by what the slot is for.
+ */
+function fileSlotName(label: string) {
+  const tidy = tidyLabel(label);
+  if (
+    tidy === "" ||
+    /^(?:attach|upload|browse|add|choose|select)(?: an?)?(?: file| files| document)?\W*$/iu.test(
+      tidy
+    )
+  ) {
+    return "Resume/CV";
+  }
+  return tidy;
 }
 
 /** Candidate-facing text for one question, with the page's choices if any. */
@@ -267,7 +288,8 @@ async function blankRequiredPause(
   const remaining = await parseResult(
     input.browserSessionId,
     collectEmptyRequiredFieldsCode,
-    emptyRequiredSchema
+    emptyRequiredSchema,
+    "blank_required"
   );
   const stillEmpty = remaining?.empty ?? [];
   const missingFiles = input.missingFiles ?? [];
@@ -389,7 +411,8 @@ export async function fillVisibleForm(
   const collected = await parseResult(
     input.browserSessionId,
     collectVisibleFieldsCode,
-    z.object({ fields: z.array(visibleFieldSchema) })
+    z.object({ fields: z.array(visibleFieldSchema) }),
+    "collect_fields"
   );
   const fields: VisibleFormField[] = collected?.fields ?? [];
   const bySelector = new Map(
@@ -745,37 +768,56 @@ async function attachResume(
     shown: z.boolean().optional(),
     via: z.string().optional(),
   });
+  // Where the Playwright code runs decides which route can work. On Kernel
+  // it runs on the browser's own machine, so the staged path is the cheap
+  // first choice. On the gateway it runs in the gateway's process and the
+  // browser is at Brightdata: a path is resolved there, where the file is not,
+  // and Chromium attaches nothing without complaint. The bytes go first.
+  const order: ("path" | "payload")[] =
+    browserProvider.name === "gateway"
+      ? ["payload", "path"]
+      : ["path", "payload"];
+  const script = { label: "attach_resume", timeoutSec: 90 };
   const targets = fileFills.length > 0 ? fileFills : [undefined];
   for (const fill of targets) {
     const selector = fill ? { selector: fill.selector } : {};
     const path = resume.staged ? { path: resume.path } : {};
     let attached: z.infer<typeof attachResultSchema> | undefined;
+    let failure: string | undefined;
     try {
-      attached = await parseResult(
+      const run = await runScript(
         input.browserSessionId,
         attachFileCode({
           ...(payload ? { payload } : {}),
           ...path,
           ...selector,
+          order,
         }),
-        attachResultSchema
+        attachResultSchema,
+        script
       );
+      attached = run.data;
+      failure = run.error;
     } catch (error) {
       // A script carrying the bytes can be too large for the provider to take
       // at all. That is not the page's answer, so try once more with the
       // staged path alone before calling it a failure.
       const message = error instanceof Error ? error.message : "unknown";
-      attached =
+      const retry =
         payload && resume.staged
-          ? await parseResult(
+          ? await runScript(
               input.browserSessionId,
-              attachFileCode({ ...path, ...selector }),
-              attachResultSchema
+              attachFileCode({ ...path, ...selector, order: ["path"] }),
+              attachResultSchema,
+              script
             ).catch(() => undefined)
           : undefined;
-      attached ??= { ok: false, reason: message.slice(0, 200) };
+      attached = retry?.data;
+      failure = retry?.error ?? message.slice(0, 200);
     }
-    const label = fill ? tidyLabel(fields.get(fill.selector)?.label ?? "") : "";
+    const label = fileSlotName(
+      fill ? (fields.get(fill.selector)?.label ?? "") : ""
+    );
     if (attached?.ok) {
       applicationExecutionLog({
         event: "runner.resume_attached",
@@ -787,7 +829,14 @@ async function attachResume(
       });
       continue;
     }
-    const reason = attached?.reason ?? "the browser returned nothing";
+    // The script's own verdict, else the error the browser raised running it.
+    // "Returned nothing" was all a run could say before, with the real reason,
+    // a gateway timeout or a thrown call, dropped on the floor.
+    const reason =
+      attached?.reason ??
+      (failure
+        ? `the browser failed running the attach: ${failure}`
+        : "the browser returned nothing");
     // No file input anywhere is a form that does not take a resume, which is
     // no failure. A slot that exists and would not take the file is.
     if (reason === "missing" && !fill) {
@@ -815,7 +864,7 @@ async function attachResume(
       applyUrl: input.applyUrl,
       message: applicationPauseMessage(
         "user_input",
-        `the resume on file could not be attached to ${label || "the form's file control"} on ${input.applyUrl}: ${reason}. The file itself is fine; do not ask the candidate for it again.`
+        `the resume on file could not be attached to ${label} on ${input.applyUrl}: ${reason}. The file itself is fine; do not ask the candidate for it again.`
       ),
       pause: "user_input",
     };
@@ -823,12 +872,53 @@ async function attachResume(
   return undefined;
 }
 
+/**
+ * Runs a script and keeps what went wrong.
+ *
+ * The provider answers every script with `success`, an `error` when the code
+ * threw or timed out, and a `result` otherwise. Reading only the result meant
+ * a failed script and a script that returned nothing were the same thing, and
+ * the attach that died on the gateway's timeout was logged as "the browser
+ * returned nothing". The error text is the browser's own, never a value the
+ * runner typed, so it is safe to carry and to log.
+ */
+async function runScript<T extends z.ZodType>(
+  sessionId: string,
+  code: string,
+  schema: T,
+  options: { label: string; timeoutSec?: number }
+): Promise<{ data?: z.infer<T>; error?: string }> {
+  const response = await browserProvider.executePlaywright(sessionId, {
+    code,
+    ...(options.timeoutSec === undefined
+      ? {}
+      : { timeoutSec: options.timeoutSec }),
+  });
+  const parsed = schema.safeParse(response.result);
+  if (parsed.success) return { data: parsed.data };
+  const error = (
+    response.error ??
+    (response.success
+      ? `the script returned ${response.result === undefined ? "nothing" : `an unexpected ${typeof response.result}`}`
+      : "the script failed without a message")
+  )
+    .replace(/\s+/gu, " ")
+    .slice(0, 300);
+  applicationExecutionLog({
+    error,
+    event: "runner.script_failed",
+    script: options.label,
+    success: response.success,
+  });
+  return { error };
+}
+
 async function parseResult<T extends z.ZodType>(
   sessionId: string,
   code: string,
-  schema: T
+  schema: T,
+  label = "unnamed"
 ): Promise<z.infer<T> | undefined> {
-  const response = await browserProvider.executePlaywright(sessionId, { code });
-  const parsed = schema.safeParse(response.result);
-  return parsed.success ? parsed.data : undefined;
+  const { data } = await runScript(sessionId, code, schema, { label });
+  return data;
 }
