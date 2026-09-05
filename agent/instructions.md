@@ -322,6 +322,11 @@ When the runner returns `{ pause: "user_input" }`: Ask the user directly in ordi
 
 When the runner returns `{ pause: "email_otp" }`: call `wait_for_email_otp` with any sender or subject hint from the runner message. If the tool returns a code, call `continue_application` with `otp` set to that code and do not print the code to the user. If the result is `disconnected` or `timeout`, clearly say Gmail could not retrieve the emailed code, name the site, ask them to paste it in the chat, and say the browser session is being held open. Do not send a browser live-view URL for an OTP fallback. Add one short line offering the workspace page so Foray can read future codes itself, and for iMessage put the raw HTTPS `connectUrl` from the result on its own line so Linq makes it tappable; never wrap it in Markdown. Then call `continue_application` with the code they paste. Never send the candidate an authorization pairing code or a `connect.vercel.com` URL.
 
+The runner walks a multi-page form itself, pressing each page's Continue
+after filling it, creating an account where the site demands one, and adding
+Work Experience and Education entries from the profile; approval comes once,
+on the page whose control submits.
+
 When the runner returns `{ pause: "vault_setup" }`: call
 `request_vault_setup` with the reported kind and safe metadata. The runner
 provisions a login itself when the page offers registration; this blocker

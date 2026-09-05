@@ -832,7 +832,7 @@ return { form: enough(after), fields: after.count, clicked: chosen.text, href: p
  * has more than fit: the control that advances a form is nearly always a
  * button, and a posting page can carry hundreds of links.
  */
-export const pageControlsLocator =
+const pageControlsLocator =
   "button, [role=button], input[type=submit], a[href]";
 
 export const collectPageControlsCode = `
@@ -916,6 +916,39 @@ const errors = await page.$$eval(
     .slice(0, 5)
 ).catch(() => []);
 return { clicked: true, errors, heading, href: page.url(), navigated: page.url() !== before };
+`;
+
+/**
+ * The Add controls of a form's repeating sections (Work Experience,
+ * Education), each with the heading and visible text of the section it
+ * belongs to. Indexes count the page-controls locator, so the click lands on
+ * the control this saw. The section text lets the caller tell an entry that
+ * is already on the page from one still to add.
+ */
+export const collectRepeaterSectionsCode = `
+const sections = await page.evaluate((locator) => {
+  ${domHelpers}
+  const text = (node) => (node.innerText || node.getAttribute("aria-label") || node.value || node.getAttribute("title") || "").replace(/\\s+/g, " ").trim();
+  const addWording = /^(?:\\+\\s*)?add(?:\\s+another|\\s+a|\\s+new)?(?:\\s+(?:work\\s+)?experience|\\s+education|\\s+job|\\s+position|\\s+employment|\\s+school|\\s+entry|\\s+row|\\s+more|\\s+degree)?$/i;
+  const isAdd = (node) => addWording.test(text(node)) || /^add\\b/i.test(node.getAttribute("aria-label") || "");
+  const headingOf = (container) => {
+    const node = [...container.querySelectorAll("h1, h2, h3, h4, legend, [role=heading]")].find(visible);
+    return node ? text(node).slice(0, 120) : "";
+  };
+  return [...document.querySelectorAll(locator)].flatMap((node, index) => {
+    if (!visible(node) || !isAdd(node)) return [];
+    let container = node.parentElement;
+    while (container && container !== document.body && headingOf(container) === "") container = container.parentElement;
+    const scope = container && container !== document.body ? container : node.parentElement || document.body;
+    return [{
+      content: text(scope).slice(0, 2000),
+      heading: headingOf(scope) || (node.getAttribute("aria-label") || "").slice(0, 120),
+      index,
+      text: text(node).slice(0, 60),
+    }];
+  });
+}, "${pageControlsLocator}");
+return { sections };
 `;
 
 /**

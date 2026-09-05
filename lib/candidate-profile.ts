@@ -355,6 +355,11 @@ function compensationLine(profile: CandidateProfile) {
   return `Compensation: ${currency} ${String(amount)}${period}`;
 }
 
+/** One work or education entry, worded as the profile summary words it. */
+export function formatProfileEntry(entry: WorkHistoryEntry | EducationEntry) {
+  return "company" in entry ? formatWorkHistory(entry) : formatEducation(entry);
+}
+
 function formatWorkHistory(entry: WorkHistoryEntry) {
   const dates = formatDateRange(entry);
   const header = [entry.title, entry.company, entry.location, dates]

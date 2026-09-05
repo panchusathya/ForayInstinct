@@ -94,6 +94,10 @@ vi.mock("@/db/services/self-identification", () => ({
   readSelfIdentification: mocks.selfIdentification,
 }));
 
+vi.mock("@/lib/application-runner/repeaters", () => ({
+  fillRepeaters: vi.fn<() => Promise<never[]>>(async () => []),
+}));
+
 vi.mock("@/lib/application-runner/account", () => ({
   loginWallSchema: z.object({ loginWall: z.boolean() }).loose(),
   passLoginWall: mocks.vault,

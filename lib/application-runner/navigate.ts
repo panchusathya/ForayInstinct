@@ -43,11 +43,11 @@ export type ClickOutcome = z.infer<typeof clickOutcomeSchema>;
  * one-page board it is the submit, and a description page's Apply was handled
  * before any of this runs.
  */
-export const submitControl =
+const submitControl =
   /^(?:submit(?: application| my application| now)?|send(?: my)? application|apply(?: now)?|finish|complete(?: my)? application)$/iu;
 
 /** The control that moves a multi-page form to its next page. */
-export const advanceControl =
+const advanceControl =
   /^(?:save (?:and|&) (?:continue|next)|continue|next(?: step| page| section)?|proceed|review(?: application| and submit| & submit)?|go to (?:next|review))$/iu;
 
 /**
@@ -55,7 +55,7 @@ export const advanceControl =
  * backwards, open something else, sign in, or touch attachments and sections
  * that other steps own. Checked before and after the model answers.
  */
-export const deniedControl =
+const deniedControl =
   /back|previous|cancel|sign ?in|log ?in|sign ?out|log ?out|sign ?up|register|create account|apply with|autofill|attach|upload|browse|\badd\b|remove|delete|edit|clear|dropbox|google ?drive|enter manually|skip|help|privacy|cookie|terms|menu|search|share|save (?:for later|draft|job|and exit)|withdraw|exit|close|dismiss/iu;
 
 export type NextStep =
@@ -67,7 +67,7 @@ export type NextStep =
   | { action: "stuck"; controls: string[]; via: "heuristic" | "model" };
 
 /** The forward controls a page offers, by the wording the page uses. */
-export function classifyControls(controls: PageControl[]) {
+function classifyControls(controls: PageControl[]) {
   const candidates = controls.filter(
     (control) => !control.disabled && !deniedControl.test(control.text)
   );
