@@ -1,7 +1,10 @@
 import { findApplicationRun } from "@/db/services/application-executions";
 import { updateApplicationRun } from "@/db/services/application-executions";
 import { applicationExecutionLog } from "@/lib/application-execution";
-import { openApplicationBrowser } from "@/lib/application-runner/browser";
+import {
+  closeApplicationBrowser,
+  openApplicationBrowser,
+} from "@/lib/application-runner/browser";
 import {
   captureApproval,
   enterVerificationCode,
@@ -9,6 +12,7 @@ import {
   submitApplication,
 } from "@/lib/application-runner/fill";
 import type { ApplicationRunInput } from "@/lib/application-runner/types";
+import { applicationPauseMessage } from "@/lib/task-completion";
 
 export async function runApplicationUntilPause(input: ApplicationRunInput) {
   const existing = await findApplicationRun({
@@ -16,7 +20,7 @@ export async function runApplicationUntilPause(input: ApplicationRunInput) {
     scope: input.scope,
   });
   const existingSessionId = existing?.browserSessionId;
-  const browser =
+  const browser: { session_id: string } =
     typeof existingSessionId === "string" && existingSessionId !== ""
       ? { session_id: existingSessionId }
       : await openApplicationBrowser({
@@ -62,12 +66,57 @@ export async function runApplicationUntilPause(input: ApplicationRunInput) {
       return outcome;
     }
   }
-  const filled = await fillVisibleForm({
+  let applyUrl = input.applyUrl;
+  let filled = await fillVisibleForm({
     ...input,
     answered: input.resumeAnswered,
     answers: input.resumeAnswers,
     browserSessionId: browser.session_id,
   });
+  if ("redirect" in filled) {
+    // The posting hands applicants to another site. The browser is pinned to
+    // one site and would die on the hop, so it is closed and a new one opened
+    // where the form is; the run keeps its posting, the fill gets the form.
+    applicationExecutionLog({
+      apply_url: input.applyUrl,
+      event: "runner.redirected",
+      execution_id: input.executionId,
+      to: filled.redirect.slice(0, 300),
+    });
+    await closeApplicationBrowser({
+      scope: input.scope,
+      sessionId: browser.session_id,
+    });
+    applyUrl = filled.redirect;
+    const reopened = await openApplicationBrowser({
+      applyUrl,
+      executionId: input.executionId,
+      scope: input.scope,
+    });
+    browser.session_id = reopened.session_id;
+    await updateApplicationRun({
+      browserSessionId: browser.session_id,
+      executionId: input.executionId,
+    });
+    filled = await fillVisibleForm({
+      ...input,
+      answered: input.resumeAnswered,
+      answers: input.resumeAnswers,
+      applyUrl,
+      browserSessionId: browser.session_id,
+    });
+  }
+  if ("redirect" in filled) {
+    // Twice is a chain, not a form. Say where it led and stop.
+    filled = {
+      applyUrl: input.applyUrl,
+      message: applicationPauseMessage(
+        "user_input",
+        `${input.applyUrl} sends applicants to ${applyUrl}, which sends them on again to ${filled.redirect}. Start the application from the page that carries the form.`
+      ),
+      pause: "user_input",
+    };
+  }
   if ("pause" in filled) {
     await updateApplicationRun({
       browserSessionId: browser.session_id,
