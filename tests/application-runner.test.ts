@@ -13,6 +13,7 @@ import {
   fillForAnswer,
   mapProfileToFormFields,
   matchFieldByLabel,
+  phoneRenderings,
   profilePatchForAnswer,
   type VisibleFormField,
 } from "@/lib/application-runner/form-map";
@@ -1027,6 +1028,67 @@ describe("a Greenhouse form, as the DoorDash run saw it", () => {
     // A failure names the page's file inputs by their own wording so the log
     // says which control this was, and never the file.
     expect(attach).toContain('page.$$eval("input[type=file]"');
+  });
+});
+
+describe("a phone number for a form", () => {
+  it("offers the national digits first and the stored international shape last", () => {
+    // The stored +1 shape is the one the DoorDash form refused: "Please enter
+    // a valid phone." The number the candidate typed by hand went through.
+    expect(phoneRenderings("+14155550100")).toEqual([
+      "4155550100",
+      "(415) 555-0100",
+      "+14155550100",
+    ]);
+    expect(phoneRenderings("(415) 555-0100")).toEqual([
+      "4155550100",
+      "(415) 555-0100",
+      "+14155550100",
+    ]);
+    expect(phoneRenderings("+442071234567")).toEqual([
+      "+442071234567",
+      "442071234567",
+    ]);
+  });
+
+  it("fills a tel control with the national digits and carries the other shapes", () => {
+    const identity = {
+      email: "ada@example.com",
+      name: "Ada",
+      phone: "+14155550100",
+    };
+    const profile: CandidateProfile = { ...emptyCandidateProfile };
+    const { fills } = mapProfileToFormFields({
+      fields: [
+        {
+          label: "Phone*",
+          name: "phone",
+          required: true,
+          selector: "#phone",
+          tag: "input",
+          type: "tel",
+        },
+      ],
+      identity,
+      profile,
+    });
+    expect(fills).toEqual([
+      {
+        alternatives: ["(415) 555-0100", "+14155550100"],
+        selector: "#phone",
+        value: "4155550100",
+      },
+    ]);
+  });
+
+  it("types a phone number keystroke by keystroke", () => {
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    expect(scripts).toContain(
+      "await locator.pressSequentially(fill.value, { delay: 20 });"
+    );
   });
 });
 

@@ -817,10 +817,64 @@ describe("Linq message delivery", () => {
           mimeType: "image/png",
         },
       ],
-      markdown: "",
+      markdown:
+        "submitted your application for staff engineer. here's the confirmation screen.",
     });
     expect(post).toHaveBeenNthCalledWith(2, {
       markdown: "applied to staff engineer at acme.",
+    });
+  });
+
+  it("posts the confirmation screen when the runner reports the application done", async () => {
+    // The runner's continue_application returns { done: true, status:
+    // "completed" }, not the old worker's { status: "success" }; the picture
+    // it captured of the confirmation page waited for the next inbound text.
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      [
+        {
+          applyUrl: "https://example.com/apply",
+          id: 7,
+          kind: "submitted",
+          mimeType: "image/png",
+          png: Buffer.from("png-bytes"),
+          role: "Associate, Finance",
+          sessionId: "browser-1",
+        },
+      ]
+    );
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+
+    await trackWorkerCancellation(
+      {
+        ...submittedApplicationResult(),
+        result: {
+          callId: "call-continue",
+          kind: "tool-result",
+          output: {
+            applyUrl: "https://example.com/apply",
+            done: true,
+            executionId: "exec-1",
+            message:
+              "Submitted Associate, Finance at https://example.com/apply.",
+            status: "completed",
+          },
+          toolName: "continue_application",
+        },
+      },
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(post).toHaveBeenCalledWith({
+      files: [
+        {
+          data: Buffer.from("png-bytes"),
+          filename: "application-submitted.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown:
+        "submitted your application for associate, finance. here's the confirmation screen.",
     });
   });
 
@@ -863,7 +917,8 @@ describe("Linq message delivery", () => {
           mimeType: "image/png",
         },
       ],
-      markdown: "",
+      markdown:
+        "submitted your application for staff engineer. here's the confirmation screen.",
     });
 
     // The coordinator can still complete on a later turn without posting the

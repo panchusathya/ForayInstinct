@@ -100,6 +100,7 @@ const workerResultSchema = z.object({
   output: z
     .object({
       applyUrl: z.string().optional(),
+      done: z.boolean().optional(),
       message: z.string().optional(),
       pause: z.string().optional(),
       status: z.string().optional(),
@@ -273,16 +274,22 @@ const { bot, channel, send } = chatSdkChannel({
       const workerResult = workerResultSchema.safeParse(event.result);
       if (workerResult.success) {
         const output = workerResult.data.output;
+        // The runner reports a finished application as `done` with a completed
+        // status; the old worker reported success. Either way the confirmation
+        // screen it captured is waiting to be posted.
         const submitted =
-          workerResult.data.toolName === "worker" &&
-          normalizeTaskStatus(output.status ?? "") === "success";
+          workerResult.data.toolName === "worker"
+            ? normalizeTaskStatus(output.status ?? "") === "success"
+            : output.done === true || output.status === "completed";
         // Classify by the structured pause enum. Leftover worker messages
         // still generate Needs prefixes from that enum, so prefix parsing is
         // only a fallback via pauseKindFromOutput.
         const pause = pauseKindFromOutput(output);
         const awaitingApproval = pause === "approval";
         const shouldDeliver =
-          workerResult.data.toolName === "worker" || awaitingApproval;
+          workerResult.data.toolName === "worker" ||
+          awaitingApproval ||
+          submitted;
         const caller =
           session.session.auth?.current ?? session.session.auth?.initiator;
         const scope = caller ? scopeFromPrincipal(caller) : undefined;
@@ -1226,7 +1233,7 @@ async function deliverSubmissionScreenshot(
       await thread.post({
         markdown: review
           ? reviewCaption(screenshot.role, reviewPage, reviewPages)
-          : "",
+          : submittedCaption(screenshot.role),
         files: [
           {
             data: screenshot.png,
@@ -1344,6 +1351,14 @@ function roleLabel(role: string | undefined) {
  * they go out, so the captions carry the naming, the ordering, and the ask by
  * themselves. Lowercase and em-dash-free to match the rest of the thread.
  */
+/** The line under the confirmation screen: the application is in. */
+function submittedCaption(role: string) {
+  const name = role.trim();
+  return name
+    ? `submitted your application for ${name.toLowerCase()}. here's the confirmation screen.`
+    : "your application is submitted. here's the confirmation screen.";
+}
+
 function reviewCaption(role: string, page: number, pages: number) {
   const name = role.trim();
   const subject = name

@@ -34,10 +34,17 @@ const mocks = vi.hoisted(() => ({
   providerName: ((): { value: "gateway" | "kernel" } => ({
     value: "gateway",
   }))(),
+  confirmation: vi.fn<() => Promise<boolean>>(),
+  review: vi.fn<() => Promise<number>>(),
   readAnswers: vi.fn<() => Promise<Record<string, string>>>(),
   rememberAnswers: vi.fn<() => Promise<void>>(),
   forgetAnswers: vi.fn<() => Promise<void>>(),
   rememberPhone: vi.fn<(_scope: unknown, _value: string) => Promise<void>>(),
+}));
+
+vi.mock("@/agent/subagents/worker/lib/browser-run-evidence", () => ({
+  recordSubmissionConfirmationEvidence: mocks.confirmation,
+  recordSubmissionReviewEvidence: mocks.review,
 }));
 
 vi.mock("@/lib/manager/server/application-answers", () => ({
@@ -123,6 +130,8 @@ beforeEach(() => {
   });
   mocks.resume.mockResolvedValue(undefined);
   mocks.selfIdentification.mockResolvedValue({});
+  mocks.confirmation.mockResolvedValue(true);
+  mocks.review.mockResolvedValue(1);
   mocks.readAnswers.mockResolvedValue({});
   mocks.rememberAnswers.mockResolvedValue(undefined);
   mocks.forgetAnswers.mockResolvedValue(undefined);
@@ -1231,5 +1240,123 @@ describe("what a run remembers", () => {
       { userId: "alice", workspaceId: "workspace:alice" },
       "(415) 555-0100"
     );
+  });
+});
+
+describe("a submit refused for the phone number", () => {
+  const input = {
+    applyUrl: "https://job-boards.greenhouse.io/doordashusa/jobs/1",
+    browserSessionId: "browser-1",
+    company: "DoorDash",
+    executionId: "exec-1",
+    role: "Analyst",
+    rootSessionId: "root-1",
+    scope: { userId: "alice", workspaceId: "workspace:alice" },
+  };
+  const phoneField = {
+    label: "Phone*",
+    name: "phone",
+    required: true,
+    selector: "#phone",
+    tag: "input",
+    type: "tel",
+  };
+
+  it("types the number in its next shape and clicks again", async () => {
+    // The stored +1 shape was refused three times with "Please enter a valid
+    // phone." while the candidate's own typing had gone through.
+    mocks.identity.mockResolvedValue({
+      email: "ada@example.com",
+      name: "Ada Lovelace",
+      phone: "+14155550100",
+    });
+    let clicks = 0;
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const found = await page.evaluate")) {
+        return { result: { present: false }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        return { result: { fields: [phoneField] }, success: true };
+      }
+      if (request.code.includes("const fills = ")) {
+        return { result: { filled: ["#phone"], skipped: [] }, success: true };
+      }
+      clicks += 1;
+      return {
+        result: {
+          clicked: true,
+          errors: clicks === 1 ? ["Phone", "Please enter a valid phone."] : [],
+          navigated: clicks > 1,
+        },
+        success: true,
+      };
+    });
+    mocks.inspect.mockImplementation(async () => ({ submitted: clicks > 1 }));
+    const result = await submitApplication(input);
+    expect(result).toMatchObject({ done: true });
+    expect(clicks).toBe(2);
+    const refill = mocks.executePlaywright.mock.calls
+      .map((call) => call[1].code)
+      .find(
+        (code) => code.includes("const fills = ") && code.includes("#phone")
+      );
+    expect(refill).toContain('"(415) 555-0100"');
+    expect(refill).not.toContain("+14155550100");
+  });
+
+  it("does not retry a refusal that names another field", async () => {
+    mocks.identity.mockResolvedValue({
+      email: "ada@example.com",
+      name: "Ada Lovelace",
+      phone: "+14155550100",
+    });
+    let clicks = 0;
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const found = await page.evaluate")) {
+        return { result: { present: false }, success: true };
+      }
+      clicks += 1;
+      return {
+        result: {
+          clicked: true,
+          errors: ["LinkedIn URL is invalid."],
+          navigated: false,
+        },
+        success: true,
+      };
+    });
+    mocks.inspect.mockResolvedValue({ submitted: false });
+    const result = await submitApplication(input);
+    expect(result).toMatchObject({ pause: "user_input" });
+    expect(clicks).toBe(1);
+  });
+
+  it("captures the confirmation screen before the run is marked done", async () => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) =>
+      request.code.includes("const empty = await")
+        ? { result: { empty: [] }, success: true }
+        : {
+            result: { clicked: true, errors: [], navigated: true },
+            success: true,
+          }
+    );
+    mocks.inspect.mockResolvedValue({ submitted: true });
+    const result = await submitApplication(input);
+    expect(result).toMatchObject({ done: true });
+    expect(mocks.confirmation).toHaveBeenCalledWith(
+      { userId: "alice", workspaceId: "workspace:alice" },
+      "browser-1",
+      { applyUrl: input.applyUrl, role: "Analyst" }
+    );
+    const captureOrder = mocks.confirmation.mock.invocationCallOrder[0] ?? 0;
+    const completedOrder =
+      mocks.updateApplicationRun.mock.invocationCallOrder.at(-1) ?? 0;
+    expect(captureOrder).toBeLessThan(completedOrder);
   });
 });
