@@ -613,58 +613,64 @@ return { ok: true, found, via, filename: state.name || expected, shown, attempts
 `;
 
 /**
- * Whether the page is asking for a verification code, and through which
- * channel.
+ * Browser-side helpers for a verification-code dialog, inlined into each
+ * script that reads one: there is no module scope across scripts.
  *
- * The post-action probe trusts only `autocomplete=one-time-code`, which a
- * hand-rolled verification dialog need not carry. This looks for a visible
- * code-like input corroborated by the wording around it: an input alone is
- * not enough (a zip code is numeric too), and wording alone is not enough
- * (a posting can mention verification). Returns the page's words, never any
- * value: the channel, how many boxes, the sentence that asked, and where the
- * page says it sent the code.
+ * A code input is one that says so in its attributes, or one of a cluster of
+ * three or more small single-character boxes: Greenhouse's are
+ * `#security-input-1` to `-7`, `type=text`, no label, no autocomplete, and
+ * nothing in their attributes says code. Either way the wording around it
+ * has to say verification too; a zip code is numeric and a posting can
+ * mention verifying, and neither alone is a code dialog.
  */
-export const verificationCodeProbeCode = `
-const codeContext = /verif(?:y|ication)|one[- ]?time|security code|passcode|enter (?:the|your) code|code (?:we |was |has been )?sent|sent (?:you |a )?(?:code|email)|two[- ]?(?:factor|step)|authentication code|confirm your email/i;
-const found = await page.evaluate(() => {
+const codeInputHelpers = `
   const visible = (node) => {
     const style = getComputedStyle(node);
     const box = node.getBoundingClientRect();
     return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
   };
   const codeContext = /verif(?:y|ication)|one[- ]?time|security code|passcode|enter (?:the|your) code|code (?:we |was |has been )?sent|sent (?:you |a )?(?:code|email)|two[- ]?(?:factor|step)|authentication code|confirm your email/i;
+  const skipTypes = new Set(["hidden", "submit", "button", "checkbox", "radio", "file", "email", "tel", "password", "search", "url"]);
+  const singleBox = (node) => String(node.getAttribute("maxlength") || "") === "1" || node.getBoundingClientRect().width < 60;
+  const inCluster = (node) => {
+    const group = (node.parentElement && node.parentElement.parentElement) || node.parentElement;
+    if (!group) return false;
+    return [...group.querySelectorAll("input")].filter((peer) => visible(peer) && singleBox(peer)).length >= 3;
+  };
   const codeLike = (node) => {
     const attrs = ["autocomplete", "name", "id", "placeholder", "aria-label", "inputmode"]
       .map((name) => node.getAttribute(name) || "").join(" ").toLowerCase();
-    return /one-time-code|otp|verif|passcode|\\bcode\\b|numeric|\\bpin\\b/.test(attrs);
+    return /one-time-code|otp|verif|passcode|\\bcode\\b|numeric|\\bpin\\b|security|token|digit/.test(attrs) || inCluster(node);
   };
-  const skip = new Set(["hidden", "submit", "button", "checkbox", "radio", "file", "email", "tel", "password", "search", "url"]);
-  const inputs = [...document.querySelectorAll("input")]
-    .filter((node) => visible(node) && !skip.has(String(node.type || "").toLowerCase()) && codeLike(node))
-    .filter((node) => {
-      const scope = node.closest("[role=dialog], dialog, form, section, main") || document.body;
-      return codeContext.test((scope.innerText || "").slice(0, 3000));
-    });
+  const contextOf = (node) => node.closest("[role=dialog], dialog, form, section, main") || document.body;
+  const codeInputs = () => [...document.querySelectorAll("input")].filter((node) =>
+    visible(node)
+    && !skipTypes.has(String(node.type || "").toLowerCase())
+    && codeLike(node)
+    && codeContext.test((contextOf(node).innerText || "").slice(0, 3000)));
+`;
+
+/**
+ * Whether the page is asking for a verification code, and through which
+ * channel. Returns the page's words, never any value: the channel, how many
+ * boxes, and the sentence that asked.
+ */
+export const verificationCodeProbeCode = `
+const found = await page.evaluate(() => {
+${codeInputHelpers}
+  const inputs = codeInputs();
   if (inputs.length === 0) return { present: false };
-  const scope = inputs[0].closest("[role=dialog], dialog, form, section, main") || document.body;
-  const text = (scope.innerText || "").replace(/\\s+/g, " ").trim();
+  const text = (contextOf(inputs[0]).innerText || "").replace(/\\s+/g, " ").trim();
   const sentence = (text.match(/[^.!?]*(?:code|verif)[^.!?]*[.!?]?/i) || [""])[0].trim().slice(0, 200);
   const channel = /\\b(?:sms|text message|phone|mobile)\\b/i.test(sentence) && !/e-?mail|inbox/i.test(sentence)
     ? "sms"
     : "email";
-  const selectorFor = (node, index) => {
-    if (node.id) return "#" + CSS.escape(node.id);
-    const name = node.getAttribute("name");
-    if (name) return "input[name=" + JSON.stringify(name) + "]";
-    return "input:nth-of-type(" + String(index + 1) + ")";
-  };
   return {
     present: true,
     channel,
     count: inputs.length,
-    boxes: inputs.every((node) => String(node.getAttribute("maxlength") || "") === "1"),
+    boxes: inputs.length > 1 && inputs.every(singleBox),
     prompt: sentence,
-    selectors: inputs.map(selectorFor),
   };
 });
 const source = /greenhouse/i.test(new URL(page.url()).hostname) ? "Greenhouse" : new URL(page.url()).hostname;
@@ -681,47 +687,37 @@ return { ...found, hint: source, href: page.url() };
  */
 export const enterVerificationCodeCode = (code: string) => `
 const code = ${JSON.stringify(code)};
-const codeContext = /verif(?:y|ication)|one[- ]?time|security code|passcode|enter (?:the|your) code|code (?:we |was |has been )?sent|sent (?:you |a )?(?:code|email)|two[- ]?(?:factor|step)|authentication code|confirm your email/i;
-const boxes = page.locator("input:visible");
-const candidates = [];
-const total = await boxes.count();
-for (let i = 0; i < total; i += 1) {
-  const box = boxes.nth(i);
-  const info = await box.evaluate((node) => {
-    const attrs = ["autocomplete", "name", "id", "placeholder", "aria-label", "inputmode"]
-      .map((name) => node.getAttribute(name) || "").join(" ").toLowerCase();
-    const scope = node.closest("[role=dialog], dialog, form, section, main") || document.body;
-    return {
-      codeLike: /one-time-code|otp|verif|passcode|\\bcode\\b|numeric|\\bpin\\b/.test(attrs),
-      type: String(node.type || "").toLowerCase(),
-      context: (scope.innerText || "").slice(0, 3000),
-      single: String(node.getAttribute("maxlength") || "") === "1",
-    };
-  }, undefined, { timeout: 2000 }).catch(() => undefined);
-  if (!info || !info.codeLike) continue;
-  if (["hidden", "submit", "button", "checkbox", "radio", "file", "email", "tel", "password", "search", "url"].includes(info.type)) continue;
-  if (!codeContext.test(info.context)) continue;
-  candidates.push({ box, single: info.single });
-}
-if (candidates.length === 0) return { entered: false, clicked: false, confirmed: false, errors: [], remaining: 0, href: page.url() };
+const located = await page.evaluate(() => {
+${codeInputHelpers}
+  const all = [...document.querySelectorAll("input")];
+  const inputs = codeInputs();
+  return {
+    indices: inputs.map((node) => all.indexOf(node)),
+    boxes: inputs.length > 1 && inputs.every(singleBox),
+  };
+});
+if (located.indices.length === 0) return { entered: false, clicked: false, confirmed: false, errors: [], remaining: 0, href: page.url() };
+const first = page.locator("input").nth(located.indices[0]);
 let entered = false;
 try {
-  if (candidates.length > 1 && candidates.every((c) => c.single)) {
-    await candidates[0].box.click({ timeout: 4000 });
+  if (located.boxes) {
+    await first.click({ timeout: 4000 });
     await page.keyboard.type(code, { delay: 40 });
   } else {
-    await candidates[0].box.fill(code, { timeout: 4000 });
+    await first.fill(code, { timeout: 4000 });
   }
   entered = true;
 } catch (error) {
-  return { entered: false, clicked: false, confirmed: false, errors: [String(error && error.message || error).slice(0, 200)], remaining: candidates.length, href: page.url() };
+  return { entered: false, clicked: false, confirmed: false, errors: [String(error && error.message || error).slice(0, 200)], remaining: located.indices.length, href: page.url() };
 }
-// The dialog's own button first, then any such button, then Enter.
-const scope = candidates[0].box.locator("xpath=ancestor::*[@role='dialog' or self::dialog or self::form][1]");
-const inScope = (await scope.count()) > 0 ? scope : page;
+// The dialog's own button first, then any such button, then Enter. A box
+// dialog often submits itself on the last character, so a button that has
+// gone is not a failure.
+const scope = first.locator("xpath=ancestor::*[@role='dialog' or self::dialog or self::form][1]");
+const inScope = (await scope.count().catch(() => 0)) > 0 ? scope : page;
 const button = inScope.getByRole("button", { name: /verify|confirm|submit|continue|next|done/i }).filter({ visible: true }).first();
 let clicked = false;
-if ((await button.count()) > 0) {
+if ((await button.count().catch(() => 0)) > 0) {
   clicked = await button.click({ timeout: 4000 }).then(() => true).catch(() => false);
 }
 if (!clicked) await page.keyboard.press("Enter").catch(() => undefined);
@@ -740,17 +736,8 @@ const errors = await page.$$eval(
     .slice(0, 5)
 ).catch(() => []);
 const after = await page.evaluate(() => {
-  const visible = (node) => {
-    const style = getComputedStyle(node);
-    const box = node.getBoundingClientRect();
-    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
-  };
-  const remaining = [...document.querySelectorAll("input")].filter((node) => {
-    if (!visible(node)) return false;
-    const attrs = ["autocomplete", "name", "id", "placeholder", "aria-label", "inputmode"]
-      .map((name) => node.getAttribute(name) || "").join(" ").toLowerCase();
-    return /one-time-code|otp|verif|passcode|\\bcode\\b/.test(attrs);
-  }).length;
+${codeInputHelpers}
+  const remaining = codeInputs().length;
   const text = (document.body.innerText || "").replace(/\\s+/g, " ");
   const confirmed = /thank you for applying|application (?:has been |was )?(?:submitted|received)|we(?:'ve| have) received your application|successfully submitted/i.test(text);
   return { remaining, confirmed };

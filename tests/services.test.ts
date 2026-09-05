@@ -403,6 +403,16 @@ describe("database services", () => {
         workspaceId: phoneScope.workspaceId,
       })
     ).resolves.toEqual({ name: "" });
+
+    // An iMessage-only candidate has no web account row at all. The number
+    // they text from is remembered, and the identity carries it.
+    const contact = await import("@/lib/manager/server/contact-phone");
+    const textedFrom = access.accessScopeForPhone("+12125550199");
+    await scope.ensureScope(textedFrom);
+    await contact.rememberContactPhone(textedFrom, "+1 (212) 555-0199");
+    await expect(
+      candidateProfile.readCandidateContactIdentity(textedFrom)
+    ).resolves.toEqual({ name: "", phone: "+12125550199" });
   }, 15_000);
 
   it("rebinds adopted vault ciphertext to the target workspace AAD", async () => {
@@ -1095,6 +1105,7 @@ async function applyInitialMigration(database: PGlite) {
   await applyMigration(database, "0009_candidate_profile.sql");
   await applyMigration(database, "0023_little_sentinels.sql");
   await applyMigration(database, "0018_browser_state_namespace.sql");
+  await applyMigration(database, "0024_contact_and_answers_namespaces.sql");
 }
 
 /**

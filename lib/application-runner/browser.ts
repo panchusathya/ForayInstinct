@@ -22,7 +22,13 @@ import {
 } from "@/lib/manager/server/browser-state";
 import { ensureKernelBrowserProfile } from "@/lib/manager/server/kernel-profile";
 
-const browserTimeoutFloorSeconds = 15 * 60;
+/**
+ * The most either backend allows. A candidate reads the review screenshot,
+ * answers a question, fetches a code from their inbox: fifteen minutes was
+ * the shortest fuse in the chain, and the gateway's own TTL should never be
+ * the reason a form has to be filled again.
+ */
+const browserTimeoutFloorSeconds = 60 * 60;
 
 export async function openApplicationBrowser(input: {
   applyUrl: string;

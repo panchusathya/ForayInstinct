@@ -7,6 +7,7 @@ import type { Message, ReactionEvent, Thread } from "chat";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
+import { rememberContactPhone } from "@/lib/manager/server/contact-phone";
 import {
   accessScopeForPhone,
   accessScopeForUser,
@@ -870,6 +871,9 @@ async function prepareInboundMessage(
   }
   await rememberLinqRoleSearchThread(scope, thread.id, phoneNumber);
   if (phoneNumber) {
+    // The number a candidate texts from is their number, and the one a form
+    // asks for. Kept off the critical path like the CRM link below.
+    void rememberContactPhone(scope, phoneNumber).catch(() => undefined);
     // Refreshing the CRM pointer is not on the candidate's critical path:
     // nothing below reads the result, and awaited here a slow JuiceBox held
     // the inbound webhook until the function timed out and the message was

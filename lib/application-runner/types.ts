@@ -113,6 +113,19 @@ export function durableWorkflowRunId(
     : (workflowRunId ?? undefined);
 }
 
+/**
+ * Whether a candidate's reply reads as a verification code: four to sixteen
+ * letters, digits, spaces or dashes with at least one digit. "Yes" and
+ * "None" are not; "482 913" and "7K3-9D2" are.
+ */
+export function looksLikeVerificationCode(value: string) {
+  const trimmed = value.trim();
+  return (
+    /^[A-Za-z0-9][A-Za-z0-9 -]{2,14}[A-Za-z0-9]$/u.test(trimmed) &&
+    /\d/u.test(trimmed)
+  );
+}
+
 export function alreadyInProgressMessage(applyUrl: string) {
   return `${workerBlockerPrefix("existingWorker")} ${alreadyInProgressStatus}. another run is already handling ${applyUrl}.`;
 }

@@ -1030,6 +1030,35 @@ describe("a Greenhouse form, as the DoorDash run saw it", () => {
   });
 });
 
+describe("a verification code dialog", () => {
+  const scripts = readFileSync(
+    "lib/application-runner/playwright-scripts.ts",
+    "utf8"
+  );
+
+  it("recognizes a dialog made of small boxes whatever they are called", () => {
+    // Greenhouse's are #security-input-1 .. 7, type=text, no label, no
+    // autocomplete=one-time-code; nothing in their attributes says code.
+    expect(scripts).toContain(
+      "/one-time-code|otp|verif|passcode|\\\\bcode\\\\b|numeric|\\\\bpin\\\\b|security|token|digit/"
+    );
+    expect(scripts).toContain(
+      'String(node.getAttribute("maxlength") || "") === "1"'
+    );
+    expect(scripts).toContain("length >= 3");
+    // Wording still has to say verification: a zip code is numeric too.
+    expect(scripts).toContain("codeContext.test((contextOf(node).innerText");
+  });
+
+  it("types a box dialog character by character", () => {
+    const enter = scripts.slice(
+      scripts.indexOf("export const enterVerificationCodeCode")
+    );
+    expect(enter).toContain("await page.keyboard.type(code, { delay: 40 })");
+    expect(enter).toContain("await first.fill(code, { timeout: 4000 })");
+  });
+});
+
 describe("the submit click", () => {
   it("prefers the form's own submit control over any button named Apply", () => {
     // The DoorDash submit reported clicked: true, navigated: false, errors:
