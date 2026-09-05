@@ -824,6 +824,100 @@ const after = await fillable();
 return { form: enough(after), fields: after.count, clicked: chosen.text, href: page.url() };
 `;
 
+/**
+ * What a page offers by way of moving on: its heading, any step indicator,
+ * how many controls are still fillable, and every visible button and link,
+ * numbered by its position in one fixed locator list so the click that
+ * follows addresses the same element. Buttons come before links when the page
+ * has more than fit: the control that advances a form is nearly always a
+ * button, and a posting page can carry hundreds of links.
+ */
+export const pageControlsLocator =
+  "button, [role=button], input[type=submit], a[href]";
+
+export const collectPageControlsCode = `
+const summary = await page.evaluate(() => {
+  const visible = (node) => {
+    const style = getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+  };
+  const text = (node) => (node.innerText || node.getAttribute("aria-label") || node.value || node.getAttribute("title") || "").replace(/\\s+/g, " ").trim();
+  const headingNode = [...document.querySelectorAll("h1, h2, [role=heading]")].find(visible);
+  const progress = [...document.querySelectorAll("[role=progressbar], [aria-current], nav li, ol li, [class*=step], [class*=progress]")]
+    .filter(visible)
+    .map(text)
+    .filter((line) => line && line.length < 80 && /step|\\d+\\s*(?:of|\\/)\\s*\\d+|[0-9]\\s*[A-Za-z]/i.test(line))
+    .slice(0, 8)
+    .join(" | ")
+    .slice(0, 240);
+  const skip = new Set(["hidden", "submit", "button", "image", "checkbox", "radio", "search", "reset"]);
+  const fields = [...document.querySelectorAll("input, textarea, select, [role=combobox]")].filter((node) => {
+    const type = String(node.getAttribute("type") || node.tagName).toLowerCase();
+    if (node.tagName === "INPUT" && type === "file") return true;
+    return !skip.has(type) && visible(node);
+  }).length;
+  const all = [...document.querySelectorAll("${pageControlsLocator}")].flatMap((node, index) => {
+    if (!visible(node)) return [];
+    const label = text(node).slice(0, 60);
+    if (!label) return [];
+    return [{
+      disabled: node.disabled === true || node.getAttribute("aria-disabled") === "true",
+      href: node.tagName === "A" ? String(node.href || "") : "",
+      index,
+      link: node.tagName === "A",
+      text: label,
+    }];
+  });
+  const buttons = all.filter((control) => !control.link).slice(0, 40);
+  const links = all.filter((control) => control.link).slice(0, Math.max(0, 60 - buttons.length));
+  const controls = [...buttons, ...links].sort((left, right) => left.index - right.index)
+    .map(({ link, ...control }) => control);
+  return { controls, fields, heading: headingNode ? text(headingNode).slice(0, 120) : "", progress };
+});
+return { ...summary, href: page.url(), title: await page.title() };
+`;
+
+/**
+ * Clicks one of the controls the summary numbered and reports where the page
+ * went: its address, its new heading, and any validation text it put up. The
+ * caller compares before and after; a page that did not move is its own
+ * answer.
+ */
+export const clickControlCode = (index: number) => `
+const control = page.locator("${pageControlsLocator}").nth(${String(index)});
+const before = page.url();
+try {
+  await control.click({ timeout: 5000 });
+} catch (error) {
+  return { clicked: false, errors: [String(error && error.message || error).slice(0, 200)], heading: "", href: page.url(), navigated: false };
+}
+await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => undefined);
+await page.waitForTimeout(800);
+const heading = await page.evaluate(() => {
+  const visible = (node) => {
+    const style = getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+  };
+  const node = [...document.querySelectorAll("h1, h2, [role=heading]")].find(visible);
+  return node ? (node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 120) : "";
+}).catch(() => "");
+const errors = await page.$$eval(
+  "[role=alert], [aria-invalid=true], .error, .field-error, [class*=error]",
+  (nodes) => nodes
+    .filter((node) => {
+      const style = getComputedStyle(node);
+      const box = node.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && box.height > 0;
+    })
+    .map((node) => (node.innerText || node.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim())
+    .filter((text) => text.length > 0 && text.length < 300)
+    .slice(0, 5)
+).catch(() => []);
+return { clicked: true, errors, heading, href: page.url(), navigated: page.url() !== before };
+`;
+
 export const detectLoginWallCode = `
 const password = await page.locator("input[type=password]").count();
 const text = String(await page.locator("body").innerText().catch(() => "")).toLowerCase();

@@ -11,8 +11,39 @@ import {
   fillVisibleForm,
   submitApplication,
 } from "@/lib/application-runner/fill";
+import {
+  clickControl,
+  decideNextStep,
+  type NextStep,
+  type PageSummary,
+  readPageSummary,
+} from "@/lib/application-runner/navigate";
 import type { ApplicationRunInput } from "@/lib/application-runner/types";
 import { applicationPauseMessage } from "@/lib/task-completion";
+
+/** A form over more pages than this is a loop, not an application. */
+const maxFormPages = 12;
+
+/** The pause for a page whose way forward the runner could not find. */
+function stuckPause(
+  input: ApplicationRunInput,
+  summary: PageSummary | undefined,
+  controls: string[]
+) {
+  const seen = controls.slice(0, 8).join(", ");
+  const heading =
+    summary?.heading === "" || summary === undefined
+      ? "the page"
+      : summary.heading;
+  return {
+    applyUrl: input.applyUrl,
+    message: applicationPauseMessage(
+      "user_input",
+      `${heading} on ${input.applyUrl} is filled in, but no control on it moves the application on${seen ? ` (controls seen: ${seen})` : ""}. Tell me which button to press, or what is missing.`
+    ),
+    pause: "user_input" as const,
+  };
+}
 
 export async function runApplicationUntilPause(input: ApplicationRunInput) {
   const existing = await findApplicationRun({
@@ -116,6 +147,77 @@ export async function runApplicationUntilPause(input: ApplicationRunInput) {
       ),
       pause: "user_input",
     };
+  }
+  // A form can run over several pages. Each page is filled and checked like
+  // the only one, then the page is asked how it moves on: code decides when
+  // only one kind of forward control is there, the model when the page is
+  // ambiguous, and code clicks and confirms the page changed. Approval comes
+  // on the page whose control sends the application, so the candidate reviews
+  // the whole thing once, at the end.
+  let stalled = 0;
+  for (let page = 0; page < maxFormPages && !("pause" in filled); page += 1) {
+    const summary = await readPageSummary(browser.session_id);
+    const step: NextStep = summary
+      ? await decideNextStep(summary)
+      : { action: "stuck", controls: [], via: "heuristic" };
+    if (step.action === "submit") break;
+    if (step.action === "stuck") {
+      filled = stuckPause(input, summary, step.controls);
+      break;
+    }
+    const outcome = await clickControl(browser.session_id, step.control);
+    const moved =
+      outcome.clicked &&
+      (outcome.navigated ||
+        (outcome.heading !== "" && outcome.heading !== summary?.heading));
+    applicationExecutionLog({
+      apply_url: input.applyUrl,
+      control: step.control.text,
+      errors: outcome.errors.join(" | ") || "none",
+      event: "runner.advance",
+      execution_id: input.executionId,
+      from: summary?.heading ?? "",
+      moved,
+      page: page + 1,
+      to: outcome.heading,
+      via: step.via,
+    });
+    if (!moved) {
+      if (outcome.errors.length > 0) {
+        // The page refused to move on and said why, in its own words. That
+        // is a question for the candidate, not a reason to click again.
+        filled = {
+          applyUrl: input.applyUrl,
+          message: applicationPauseMessage(
+            "user_input",
+            `${summary?.heading === "" || summary === undefined ? "the page" : summary.heading} would not continue: ${outcome.errors.join("; ")}.`
+          ),
+          pause: "user_input",
+        };
+        break;
+      }
+      stalled += 1;
+      if (stalled >= 2) {
+        filled = stuckPause(
+          input,
+          summary,
+          summary?.controls.map((control) => control.text) ?? []
+        );
+        break;
+      }
+      continue;
+    }
+    stalled = 0;
+    filled = await fillVisibleForm({
+      ...input,
+      answered: input.resumeAnswered,
+      answers: input.resumeAnswers,
+      applyUrl,
+      browserSessionId: browser.session_id,
+    });
+    if ("redirect" in filled) {
+      filled = stuckPause(input, summary, []);
+    }
   }
   if ("pause" in filled) {
     await updateApplicationRun({
