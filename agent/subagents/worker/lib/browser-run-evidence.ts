@@ -87,6 +87,42 @@ async function persistSubmissionScreenshot(
 }
 
 /**
+ * The confirmation screen after an application went in, for the candidate to
+ * see. Captured the moment the page confirms, before the run is marked done
+ * and the browser can be let go; the channel posts it the way it posts the
+ * review. Never fatal: the application is in whether or not the picture is.
+ */
+export async function recordSubmissionConfirmationEvidence(
+  scope: AccessScope,
+  sessionId: string,
+  assignment: { applyUrl: string; role: string },
+  signal?: AbortSignal
+) {
+  const page = await currentKernelPageUrl({
+    browserSessionId: sessionId,
+    signal,
+  }).catch(() => undefined);
+  try {
+    const png = await captureMaskedKernelScreenshot(sessionId, signal);
+    if (png.byteLength === 0) return false;
+    await saveApplicationSubmissionScreenshot(scope, sessionId, {
+      applyUrl: assignment.applyUrl,
+      kind: "submitted",
+      page: browserPageLocation(page),
+      png,
+      role: assignment.role,
+    });
+    return true;
+  } catch (error: unknown) {
+    console.error("[submission-screenshot] confirmation capture failed", {
+      error: evidenceErrorMessage(error),
+      session_id: sessionId,
+    });
+    return false;
+  }
+}
+
+/**
  * The pause before an application's final submit. Captures the completed form
  * for the candidate to check and records the pause on the checkpoint trail, so
  * an application waiting on approval is distinguishable from one abandoned

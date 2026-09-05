@@ -125,6 +125,45 @@ function asksForRegion(key: string) {
   );
 }
 
+/** Whether a control asks for a phone number, by its wording or its type. */
+export function isPhoneField(field: VisibleFormField) {
+  return (
+    field.type === "tel" ||
+    /phone|mobile|\btel\b/iu.test(`${field.label} ${field.name}`)
+  );
+}
+
+/**
+ * The shapes a phone number can be typed in, most likely to be accepted
+ * first.
+ *
+ * The number is kept in E.164 (`+14155550100`), which is the one shape the
+ * DoorDash form refused: "Please enter a valid phone." A US form takes the
+ * ten national digits, or the bracketed national form; the international one
+ * is the last resort. A number from anywhere else is offered as stored, then
+ * as bare digits. The order matters because the submit retries down the list.
+ */
+export function phoneRenderings(phone: string): string[] {
+  const trimmed = phone.trim();
+  const plus = trimmed.startsWith("+");
+  const digits = trimmed.replace(/\D+/gu, "");
+  const national =
+    plus && digits.length === 11 && digits.startsWith("1")
+      ? digits.slice(1)
+      : !plus && digits.length === 10
+        ? digits
+        : undefined;
+  if (national !== undefined) {
+    return [
+      national,
+      `(${national.slice(0, 3)}) ${national.slice(3, 6)}-${national.slice(6)}`,
+      `+1${national}`,
+    ];
+  }
+  const stored = plus ? `+${digits}` : digits;
+  return digits === stored ? [digits] : [stored, digits];
+}
+
 /**
  * Whether a file control is asking for the resume, by its own wording: its
  * label, its name, and its id (the selector), since an ATS that ties no label
@@ -413,7 +452,7 @@ function valueForField(
     return identity.email ?? profile.contactEmail;
   }
   if (/(mobile|phone|tel)/u.test(key) || field.type === "tel") {
-    return identity.phone;
+    return identity.phone ? phoneRenderings(identity.phone)[0] : undefined;
   }
   if (/first.?name|given.?name|legal.?first/u.test(key)) {
     return profile.legalFirstName;
@@ -488,6 +527,11 @@ function alternativesFor(field: VisibleFormField, value: string) {
   }
   if (consentQuestion(key)) {
     for (const option of agreementOptions) alternatives.add(option);
+  }
+  // The other shapes of the same number travel with the fill, so a submit
+  // refused for the phone can try the next one without asking anyone.
+  if (isPhoneField(field)) {
+    for (const rendering of phoneRenderings(value)) alternatives.add(rendering);
   }
   alternatives.delete(value);
   return alternatives.size > 0 ? [...alternatives] : undefined;

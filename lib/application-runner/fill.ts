@@ -1,5 +1,8 @@
 import { inspectPostActionBrowserState } from "@/agent/subagents/worker/lib/post-action-browser-state";
-import { recordSubmissionReviewEvidence } from "@/agent/subagents/worker/lib/browser-run-evidence";
+import {
+  recordSubmissionConfirmationEvidence,
+  recordSubmissionReviewEvidence,
+} from "@/agent/subagents/worker/lib/browser-run-evidence";
 import {
   readCandidateContactIdentity,
   readCandidateProfile,
@@ -20,9 +23,11 @@ import { rememberContactPhone } from "@/lib/manager/server/contact-phone";
 import { suggestUnmappedFills } from "@/lib/application-runner/ambiguous";
 import {
   fillForAnswer,
+  isPhoneField,
   type MappedFill,
   mapProfileToFormFields,
   matchFieldByLabel,
+  phoneRenderings,
   profilePatchForAnswer,
   type VisibleFormField,
 } from "@/lib/application-runner/form-map";
@@ -227,14 +232,6 @@ function answeredFills(
     Object.assign(patch, profilePatchForAnswer(field, value, profile) ?? {});
   }
   return { fills, leftover, patch };
-}
-
-/** Whether a control asks for a phone number, by its wording or its type. */
-function isPhoneField(field: VisibleFormField) {
-  return (
-    field.type === "tel" ||
-    /phone|mobile|\btel\b/iu.test(`${field.label} ${field.name}`)
-  );
 }
 
 /**
@@ -613,55 +610,59 @@ export async function submitApplication(
   // given. Asking the page first turns that into the question it always was.
   const blank = await blankRequiredPause(input);
   if (blank) return blank;
-  const click = await parseResult(
-    input.browserSessionId,
-    clickSubmitCode,
-    z.object({
-      clicked: z.boolean(),
-      errors: z.array(z.string()).default([]),
-      invalid: z.array(z.string()).default([]),
-      navigated: z.boolean().default(false),
-    })
-  );
-  const probe = await inspectPostActionBrowserState(
-    input.browserSessionId
-  ).catch(() => undefined);
-  const submitted = probe?.submitted === true;
-  // A submit that opens a verification step is neither in nor refused. The
-  // DoorDash click came back "clicked, no navigation, no errors, not
-  // submitted" and was reported as a failed submit, when Greenhouse had put up
-  // its emailed-code dialog. That is a pause the agent knows how to resolve,
-  // from Gmail first and the candidate second, so it has to be named as one.
-  const verification = submitted
-    ? undefined
-    : await verificationAsked(input.browserSessionId, probe);
-  // The page's visible error text, and failing that the browser's own verdict
-  // on each control. A form can refuse a submit with no message rendered at
-  // all, which is how a blocked submit reported "errors: none".
-  const complaint = [...(click?.errors ?? []), ...(click?.invalid ?? [])]
-    .map((error) => error.replace(/\s+/gu, " ").trim())
-    .filter(Boolean)
-    .slice(0, 5);
-  // The one question that matters most about a run — did the application
-  // actually go in — was the only transition that wrote no log line. It was
-  // answerable from a checkpoint row and nowhere else, so nobody reading the
-  // logs, the candidate included, could tell a submitted application from a
-  // refused one. The page's own words, never the candidate's values.
-  applicationExecutionLog({
-    apply_url: input.applyUrl,
-    clicked: click?.clicked === true,
-    errors: complaint.join(" | ") || "none",
-    invalid: (click?.invalid ?? []).length,
-    event: "runner.submit",
-    execution_id: input.executionId,
-    navigated: click?.navigated === true,
-    status: submitted
-      ? "completed"
-      : verification
-        ? `verification_${verification.channel}`
-        : "blocked",
-    submitted,
-  });
+  let outcome = await clickAndRead(input);
+  // A submit refused for the phone number's shape is retried in the next
+  // shape before anyone is told. The DoorDash form took a number typed by hand
+  // and refused the same number stored as +1 and ten digits: "Please enter a
+  // valid phone." The shapes come from the number on file, never the log.
+  if (
+    !outcome.submitted &&
+    !outcome.verification &&
+    outcome.complaint.some((line) => /phone|telephone|mobile/iu.test(line))
+  ) {
+    const phone = await readCandidateContactIdentity(input.scope).then(
+      (identity) => identity.phone,
+      () => undefined
+    );
+    const [tried, ...remaining] = phone ? phoneRenderings(phone) : [];
+    if (tried !== undefined && remaining.length > 0) {
+      const collected = await parseResult(
+        input.browserSessionId,
+        collectVisibleFieldsCode,
+        z.object({ fields: z.array(visibleFieldSchema) }),
+        "collect_fields"
+      );
+      const phoneFields = (collected?.fields ?? []).filter((field) =>
+        isPhoneField(field)
+      );
+      for (const rendering of remaining) {
+        if (phoneFields.length === 0) break;
+        applicationExecutionLog({
+          event: "runner.phone_retry",
+          execution_id: input.executionId,
+          rendering: phoneRenderingName(rendering),
+        });
+        await applyFills(
+          input.browserSessionId,
+          phoneFields.map((field) => ({
+            selector: field.selector,
+            value: rendering,
+          }))
+        );
+        outcome = await clickAndRead(input);
+        if (
+          outcome.submitted ||
+          outcome.verification ||
+          !outcome.complaint.some((line) =>
+            /phone|telephone|mobile/iu.test(line)
+          )
+        ) {
+          break;
+        }
+      }
+    }
+  }
+  const { click, complaint, submitted, verification } = outcome;
   await recordBrowserRunCheckpoint(input.scope, input.browserSessionId, {
     action: "submit",
     executionId: input.executionId,
@@ -688,6 +689,70 @@ export async function submitApplication(
     ),
     pause: "user_input",
   };
+}
+
+/** The shape of a phone rendering, for the log; never the number. */
+function phoneRenderingName(rendering: string) {
+  if (rendering.startsWith("+")) return "e164";
+  if (rendering.includes("(")) return "formatted";
+  return "digits";
+}
+
+/**
+ * Clicks submit once and reads what the page did: confirmed, asking for a
+ * verification code, or refusing, and in the page's own words. Logged every
+ * time, because whether the application went in is the one fact about a run
+ * that must never have to be inferred.
+ */
+async function clickAndRead(
+  input: ApplicationRunInput & { browserSessionId: string }
+) {
+  const click = await parseResult(
+    input.browserSessionId,
+    clickSubmitCode,
+    z.object({
+      clicked: z.boolean(),
+      errors: z.array(z.string()).default([]),
+      invalid: z.array(z.string()).default([]),
+      navigated: z.boolean().default(false),
+    }),
+    "click_submit"
+  );
+  const probe = await inspectPostActionBrowserState(
+    input.browserSessionId
+  ).catch(() => undefined);
+  const submitted = probe?.submitted === true;
+  // A submit that opens a verification step is neither in nor refused. The
+  // DoorDash click came back "clicked, no navigation, no errors, not
+  // submitted" and was reported as a failed submit, when Greenhouse had put up
+  // its emailed-code dialog. That is a pause the agent knows how to resolve,
+  // from Gmail first and the candidate second, so it has to be named as one.
+  const verification = submitted
+    ? undefined
+    : await verificationAsked(input.browserSessionId, probe);
+  // The page's visible error text, and failing that the browser's own verdict
+  // on each control. A form can refuse a submit with no message rendered at
+  // all, which is how a blocked submit reported "errors: none".
+  const complaint = [...(click?.errors ?? []), ...(click?.invalid ?? [])]
+    .map((error) => error.replace(/\s+/gu, " ").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  applicationExecutionLog({
+    apply_url: input.applyUrl,
+    clicked: click?.clicked === true,
+    errors: complaint.join(" | ") || "none",
+    invalid: (click?.invalid ?? []).length,
+    event: "runner.submit",
+    execution_id: input.executionId,
+    navigated: click?.navigated === true,
+    status: submitted
+      ? "completed"
+      : verification
+        ? `verification_${verification.channel}`
+        : "blocked",
+    submitted,
+  });
+  return { click, complaint, submitted, verification };
 }
 
 const verificationProbeSchema = z.object({
@@ -766,6 +831,18 @@ async function verificationPause(
 async function completeSubmission(
   input: ApplicationRunInput & { browserSessionId: string }
 ): Promise<FillStepResult> {
+  // The confirmation screen, for the candidate, while the browser is still on
+  // it. The channel posts it the way it posts the review.
+  const captured = await recordSubmissionConfirmationEvidence(
+    input.scope,
+    input.browserSessionId,
+    { applyUrl: input.applyUrl, role: input.role }
+  ).catch(() => false);
+  applicationExecutionLog({
+    captured,
+    event: "runner.confirmation_screenshot",
+    execution_id: input.executionId,
+  });
   await updateApplicationRun({
     executionId: input.executionId,
     pauseReason: null,

@@ -351,6 +351,15 @@ for (const fill of fills) {
       continue;
     }
 
+    if (type === "tel") {
+      // A formatted phone widget reshapes the value on every keystroke and
+      // can drop one written in a single stroke. Type it as a person would.
+      await locator.click({ timeout: 4000 }).catch(() => undefined);
+      await locator.fill("");
+      await locator.pressSequentially(fill.value, { delay: 20 });
+      filled.push(fill.selector);
+      continue;
+    }
     await locator.fill(fill.value);
     filled.push(fill.selector);
   } catch (error) {
