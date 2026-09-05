@@ -28,14 +28,19 @@ export async function fillApplicationWorkflow(input: ApplicationRunInput) {
       return { done: true, message: "Application cancelled." };
     }
     if (payload.approved === true) {
-      return submitStep(input);
+      // A submit can open a verification step; that is a pause like any
+      // other, resolved by the next payload's code.
+      const submitted = await submitStep(input);
+      if (!("pause" in submitted)) return submitted;
+      continue;
     }
     current = {
       applyUrl: current.applyUrl,
       company: current.company,
       executionId: current.executionId,
       ...(payload.answered ? { resumeAnswered: payload.answered } : {}),
-      resumeAnswers: [payload.answers, payload.otp].filter(Boolean).join("\n"),
+      resumeAnswers: payload.answers ?? "",
+      ...(payload.otp ? { resumeOtp: payload.otp } : {}),
       role: current.role,
       rootSessionId: current.rootSessionId,
       scope: current.scope,

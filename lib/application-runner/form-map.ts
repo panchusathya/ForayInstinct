@@ -137,6 +137,21 @@ function asksForResume(field: VisibleFormField) {
 }
 
 /**
+ * Whether a file control is for some other document, by its own wording.
+ *
+ * The "only file input on the form" rule below exists for a page that never
+ * names its one upload slot. It misfired on DoorDash: once Greenhouse had
+ * taken the resume it replaced that input with the filename, the cover letter
+ * slot was the only file input left on the next scan, and the resume went in
+ * there too. A slot that says what it is for is never a resume slot by default.
+ */
+function asksForOtherDocument(field: VisibleFormField) {
+  return /cover ?letter|portfolio|transcript|writing ?sample|reference|certificat|other (?:file|document)/u.test(
+    normalize(field.label, field.name, field.selector)
+  );
+}
+
+/**
  * Deterministic mapping from a candidate profile onto visible form controls.
  * Unmapped required fields are returned for the bounded LLM helper — never a
  * screenshot loop.
@@ -157,7 +172,9 @@ export function mapProfileToFormFields(input: {
     if (isFile(field)) {
       // The resume goes to the control asking for it, or to the only file
       // control on the form. A cover letter slot is not a place for it.
-      const wantsResume = asksForResume(field) || fileFields.length === 1;
+      const wantsResume =
+        asksForResume(field) ||
+        (fileFields.length === 1 && !asksForOtherDocument(field));
       if (input.resumePath && wantsResume) {
         fills.push({ selector: field.selector, value: input.resumePath });
       } else if (field.required || wantsResume) {
