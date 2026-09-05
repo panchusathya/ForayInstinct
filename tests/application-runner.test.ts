@@ -1092,6 +1092,27 @@ describe("a phone number for a form", () => {
   });
 });
 
+describe("reaching the application form", () => {
+  it("follows the page's Apply control on the same site and reports another site", () => {
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    const reach = scripts.slice(
+      scripts.indexOf("export const reachApplicationFormCode")
+    );
+    // Two fillable controls or a file slot is a form; anything less is a
+    // description page whose Apply control is what to open.
+    expect(reach).toContain("found.count >= 2 || found.files > 0");
+    // A cross-site link is handed back, never followed: the browser is pinned
+    // to one site.
+    expect(reach).toContain("external: target.href");
+    expect(reach.indexOf("external: target.href")).toBeLessThan(
+      reach.indexOf("await page.goto(target.href")
+    );
+  });
+});
+
 describe("a verification code dialog", () => {
   const scripts = readFileSync(
     "lib/application-runner/playwright-scripts.ts",

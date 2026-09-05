@@ -5,6 +5,7 @@ import type { AccessScope } from "@/lib/access-scope";
 import { applicationExecutionLog } from "@/lib/application-execution";
 import { browserProvider, isGatewayProvider } from "@/lib/browser";
 import { isCookieSeedFailure } from "@/lib/browser/storage-state";
+import { applicationEntryUrl } from "@/lib/application-runner/entry";
 import {
   isResolvedWorkdayRoute,
   isWorkdayApplicationUrl,
@@ -46,7 +47,8 @@ export async function openApplicationBrowser(input: {
         ),
       };
   const session = {
-    startUrl: isWorkday ? undefined : input.applyUrl,
+    // Boards whose posting URL is a description page open at their form.
+    startUrl: isWorkday ? undefined : applicationEntryUrl(input.applyUrl),
     timeoutSeconds: browserTimeoutFloorSeconds,
   };
   let browser;

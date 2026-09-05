@@ -754,6 +754,76 @@ ${codeInputHelpers}
 return { entered, clicked, confirmed: after.confirmed, errors, remaining: after.remaining, href: page.url() };
 `;
 
+/**
+ * Gets from a posting's description page to its application form.
+ *
+ * A posting URL often lands on the description with an Apply button, and the
+ * form is one click away, on the same site or on another one. Opened there,
+ * the scan found no fields, the fill declared the form done, and the review
+ * screenshot was the job description. This counts the fillable controls; with
+ * fewer than two and no file input it looks for the page's Apply control,
+ * follows it when it stays on this site, and reports a link to another site
+ * instead of following it: the browser is pinned to one site and would die on
+ * the hop. Returns the page's own words for the control it used.
+ */
+export const reachApplicationFormCode = `
+const fillable = () => page.evaluate(() => {
+  const visible = (node) => {
+    const style = getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+  };
+  const skip = new Set(["hidden", "submit", "button", "image", "checkbox", "radio", "search", "reset"]);
+  const nodes = [...document.querySelectorAll("input, textarea, select, [role=combobox]")];
+  let files = 0;
+  let count = 0;
+  for (const node of nodes) {
+    const type = String(node.getAttribute("type") || node.tagName).toLowerCase();
+    if (node.tagName === "INPUT" && type === "file") { files += 1; count += 1; continue; }
+    if (skip.has(type) || !visible(node)) continue;
+    count += 1;
+  }
+  return { count, files };
+});
+const enough = (found) => found.count >= 2 || found.files > 0;
+const before = await fillable();
+if (enough(before)) return { form: true, fields: before.count, clicked: "", href: page.url() };
+const applyWording = /^\\s*(?:apply(?:\\s+now|\\s+here|\\s+for\\s+this\\s+(?:job|position|role)|\\s+to\\s+this\\s+(?:job|position|role))?|start\\s+(?:your\\s+)?application|i'?m\\s+interested)\\s*$/i;
+const controls = await page.evaluate(() => {
+  const visible = (node) => {
+    const style = getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+  };
+  const applyWording = /^\\s*(?:apply(?:\\s+now|\\s+here|\\s+for\\s+this\\s+(?:job|position|role)|\\s+to\\s+this\\s+(?:job|position|role))?|start\\s+(?:your\\s+)?application|i'?m\\s+interested)\\s*$/i;
+  const applyPath = /\\/(?:apply|application)(?:\\/|$|[?#])/i;
+  return [...document.querySelectorAll("a, button, [role=button]")].flatMap((node, index) => {
+    if (!visible(node)) return [];
+    const text = (node.innerText || node.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
+    const href = node.tagName === "A" ? String(node.href || "") : "";
+    if (!applyWording.test(text) && !applyPath.test(href)) return [];
+    return [{ href, index, text: text.slice(0, 60) }];
+  }).slice(0, 5);
+});
+if (controls.length === 0) return { form: false, fields: before.count, clicked: "", href: page.url(), controls: 0 };
+const chosen = controls.find((control) => control.href) || controls[0];
+const site = (hostname) => hostname.toLowerCase().split(".").slice(-2).join(".");
+if (chosen.href) {
+  let target;
+  try { target = new URL(chosen.href, page.url()); } catch { target = undefined; }
+  if (target && /^https?:$/.test(target.protocol) && site(target.hostname) !== site(new URL(page.url()).hostname)) {
+    return { form: false, fields: before.count, clicked: chosen.text, href: page.url(), external: target.href };
+  }
+  if (target) await page.goto(target.href, { timeout: 30000, waitUntil: "domcontentloaded" }).catch(() => undefined);
+} else {
+  await page.locator("a, button, [role=button]").nth(chosen.index).click({ timeout: 5000 }).catch(() => undefined);
+  await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => undefined);
+}
+await page.waitForTimeout(1500);
+const after = await fillable();
+return { form: enough(after), fields: after.count, clicked: chosen.text, href: page.url() };
+`;
+
 export const detectLoginWallCode = `
 const password = await page.locator("input[type=password]").count();
 const text = String(await page.locator("body").innerText().catch(() => "")).toLowerCase();

@@ -263,9 +263,25 @@ describe("incomplete forms never reach approval", () => {
         };
       }
       if (request.code.includes("const fields = await")) {
-        return { result: { fields: [] }, success: true };
+        // A form the scan does see, with the work-authorization control
+        // missing from it: that control is what the blank check must catch.
+        return {
+          result: {
+            fields: [
+              {
+                label: "Email",
+                name: "email",
+                required: true,
+                selector: "#email",
+                tag: "input",
+                type: "email",
+              },
+            ],
+          },
+          success: true,
+        };
       }
-      return { result: { filled: [], skipped: [] }, success: true };
+      return { result: { filled: ["#email"], skipped: [] }, success: true };
     });
 
     const result = await run();
@@ -1219,6 +1235,14 @@ describe("what a run remembers", () => {
           result: {
             fields: [
               {
+                label: "Email",
+                name: "email",
+                required: true,
+                selector: "#email",
+                tag: "input",
+                type: "email",
+              },
+              {
                 label: "Phone*",
                 name: "phone",
                 required: true,
@@ -1358,5 +1382,106 @@ describe("a submit refused for the phone number", () => {
     const completedOrder =
       mocks.updateApplicationRun.mock.invocationCallOrder.at(-1) ?? 0;
     expect(captureOrder).toBeLessThan(completedOrder);
+  });
+});
+
+describe("a posting that opens on its description", () => {
+  const input = {
+    applyUrl: "https://hirro.example/job/associate-finance",
+    browserSessionId: "browser-1",
+    company: "Hirro",
+    executionId: "exec-1",
+    role: "Associate",
+    rootSessionId: "root-1",
+    scope: { userId: "alice", workspaceId: "workspace:alice" },
+  };
+  const formFields = [
+    {
+      label: "Email",
+      name: "email",
+      required: true,
+      selector: "#email",
+      tag: "input",
+      type: "email",
+    },
+    {
+      label: "Full name",
+      name: "name",
+      required: true,
+      selector: "#name",
+      tag: "input",
+      type: "text",
+    },
+  ];
+  const page = (
+    reach: Record<string, unknown> | undefined,
+    afterReach: unknown[]
+  ) => {
+    let scans = 0;
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { success: true, result: { loginWall: false } };
+      }
+      if (request.code.includes("const found = await page.evaluate")) {
+        return { result: { present: false }, success: true };
+      }
+      if (request.code.includes("const before = await fillable()")) {
+        return { result: reach, success: true };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        scans += 1;
+        return {
+          result: { fields: scans === 1 ? [] : afterReach },
+          success: true,
+        };
+      }
+      return {
+        result: { filled: ["#email", "#name"], skipped: [] },
+        success: true,
+      };
+    });
+  };
+
+  it("opens the Apply control and fills the form it leads to", async () => {
+    // Ashby and Hirro both landed on the description: no fields, "filled",
+    // and the job description sent as the review screenshot.
+    page({ clicked: "Apply for this job", fields: 9, form: true }, formFields);
+    expect(await fillVisibleForm(input)).toEqual({ continue: true });
+    const codes = mocks.executePlaywright.mock.calls.map(
+      (call) => call[1].code
+    );
+    expect(
+      codes.filter((code) => code.includes("const fields = await"))
+    ).toHaveLength(2);
+    expect(codes.some((code) => code.includes('"#email"'))).toBe(true);
+  });
+
+  it("hands a form on another site back as a redirect rather than following it", async () => {
+    page(
+      {
+        clicked: "Apply",
+        external: "https://boards.greenhouse.io/hirro/jobs/123",
+        fields: 0,
+        form: false,
+      },
+      []
+    );
+    expect(await fillVisibleForm(input)).toEqual({
+      applyUrl: input.applyUrl,
+      redirect: "https://boards.greenhouse.io/hirro/jobs/123",
+    });
+    expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+
+  it("never sends a page with nothing to fill for approval", async () => {
+    page({ clicked: "", controls: 0, fields: 1, form: false }, []);
+    const result = await fillVisibleForm(input);
+    expect(result).toMatchObject({ pause: "user_input" });
+    expect("message" in result ? result.message : "").toContain(
+      "no application form was found"
+    );
   });
 });

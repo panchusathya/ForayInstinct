@@ -39,6 +39,7 @@ import {
   attachFileCode,
   detectLoginWallCode,
   enterVerificationCodeCode,
+  reachApplicationFormCode,
   verificationCodeProbeCode,
 } from "@/lib/application-runner/playwright-scripts";
 import { tryFillLoginFromVault } from "@/lib/application-runner/vault";
@@ -63,6 +64,8 @@ export type FillStepResult =
       questions?: RunnerQuestion[];
     }
   | { applyUrl: string; done: true; message: string }
+  /** The posting hands applicants to another site; the run must reopen there. */
+  | { applyUrl: string; redirect: string }
   | { continue: true };
 
 const visibleFieldSchema = z.object({
@@ -232,6 +235,22 @@ function answeredFills(
     Object.assign(patch, profilePatchForAnswer(field, value, profile) ?? {});
   }
   return { fills, leftover, patch };
+}
+
+/**
+ * Whether a scan found a form worth filling: two or more controls a candidate
+ * would type or choose in, a file slot, or a control the page marks required.
+ * One lone optional input is a search box or a newsletter field on a
+ * description page, not an application.
+ */
+function looksLikeApplicationForm(fields: VisibleFormField[]) {
+  const fillable = fields.filter(
+    (field) => field.tag !== "checkbox" && field.tag !== "radio"
+  );
+  return (
+    fillable.length >= 2 ||
+    fillable.some((field) => field.tag === "file" || field.required)
+  );
 }
 
 /**
@@ -420,7 +439,61 @@ export async function fillVisibleForm(
     z.object({ fields: z.array(visibleFieldSchema) }),
     "collect_fields"
   );
-  const fields: VisibleFormField[] = collected?.fields ?? [];
+  let fields: VisibleFormField[] = collected?.fields ?? [];
+  // A posting URL often lands on the description, with the form one click
+  // away. A page with nothing to fill is not a filled form: it used to go to
+  // the candidate for approval as one, the job description as the review.
+  if (!looksLikeApplicationForm(fields)) {
+    const reach = await parseResult(
+      input.browserSessionId,
+      reachApplicationFormCode,
+      z.object({
+        clicked: z.string().default(""),
+        controls: z.number().optional(),
+        external: z.string().optional(),
+        fields: z.number().default(0),
+        form: z.boolean(),
+        href: z.string().optional(),
+      }),
+      "reach_form"
+    );
+    applicationExecutionLog({
+      apply_url: input.applyUrl,
+      clicked: reach?.clicked ?? "",
+      event: "runner.reach_form",
+      execution_id: input.executionId,
+      external: reach?.external !== undefined,
+      fields: reach?.fields ?? 0,
+      form: reach?.form === true,
+    });
+    if (reach?.external) {
+      return { applyUrl: input.applyUrl, redirect: reach.external };
+    }
+    if (reach?.form) {
+      const again = await parseResult(
+        input.browserSessionId,
+        collectVisibleFieldsCode,
+        z.object({ fields: z.array(visibleFieldSchema) }),
+        "collect_fields"
+      );
+      fields = again?.fields ?? [];
+    }
+    if (!looksLikeApplicationForm(fields)) {
+      await updateApplicationRun({
+        executionId: input.executionId,
+        pauseReason: "user_input",
+        status: "waiting",
+      });
+      return {
+        applyUrl: input.applyUrl,
+        message: applicationPauseMessage(
+          "user_input",
+          `no application form was found at ${input.applyUrl}: the page has nothing to fill${reach?.clicked ? ` even after opening "${reach.clicked}"` : " and no Apply control"}. If the posting links to an application elsewhere, that link is the URL to start with.`
+        ),
+        pause: "user_input",
+      };
+    }
+  }
   const bySelector = new Map(
     fields.map((field) => [field.selector, field] as const)
   );
