@@ -42,7 +42,11 @@ import {
   reachApplicationFormCode,
   verificationCodeProbeCode,
 } from "@/lib/application-runner/playwright-scripts";
-import { tryFillLoginFromVault } from "@/lib/application-runner/vault";
+import {
+  loginWallSchema,
+  passLoginWall,
+} from "@/lib/application-runner/account";
+import { fillRepeaters } from "@/lib/application-runner/repeaters";
 import type {
   ApplicationPauseReason,
   ApplicationRunInput,
@@ -406,23 +410,21 @@ export async function fillVisibleForm(
   const login = await parseResult(
     input.browserSessionId,
     detectLoginWallCode,
-    z.object({ loginWall: z.boolean() })
+    loginWallSchema,
+    "login_wall"
   );
   if (login?.loginWall) {
-    const vault = await tryFillLoginFromVault({
+    // Sign in with a saved login, or register with the candidate's email and
+    // a generated password the vault keeps; only a page with neither path
+    // pauses for vault setup.
+    const passed = await passLoginWall({
+      applyUrl: input.applyUrl,
       browserSessionId: input.browserSessionId,
+      executionId: input.executionId,
       scope: input.scope,
-    }).catch(() => ({ filled: false, origin: input.applyUrl }));
-    if (!vault.filled) {
-      return {
-        applyUrl: input.applyUrl,
-        message: applicationPauseMessage(
-          "vault_setup",
-          `sign-in is required for ${input.applyUrl}.`
-        ),
-        pause: "vault_setup",
-      };
-    }
+      wall: login,
+    });
+    if ("pause" in passed) return passed;
   }
   const probe = await inspectPostActionBrowserState(
     input.browserSessionId
@@ -572,6 +574,28 @@ export async function fillVisibleForm(
     const attached = await attachResume(input, resume, fileFills, bySelector);
     if (attached) return attached;
   }
+  // Work Experience and Education sections grow by an Add control per entry;
+  // the profile's entries are added and filled here. Whatever they leave
+  // blank is caught by the required-field check with everything else.
+  const grown = await fillRepeaters({
+    applyUrl: input.applyUrl,
+    browserSessionId: input.browserSessionId,
+    executionId: input.executionId,
+    fieldsBefore: fields,
+    profile,
+  }).catch((error: unknown) => {
+    applicationExecutionLog({
+      error: String(error instanceof Error ? error.message : error).slice(
+        0,
+        200
+      ),
+      event: "runner.script_failed",
+      script: "repeaters",
+      success: false,
+    });
+    return [];
+  });
+  for (const field of grown) bySelector.set(field.selector, field);
 
   // A control that refused every phrasing is a question again, now carrying
   // the choices the page really offers. Before, it vanished here: it was

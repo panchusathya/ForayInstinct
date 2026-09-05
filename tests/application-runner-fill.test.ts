@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { emptyCandidateProfile } from "@/lib/candidate-profile";
 
 interface PlaywrightRequest {
@@ -93,8 +94,13 @@ vi.mock("@/db/services/self-identification", () => ({
   readSelfIdentification: mocks.selfIdentification,
 }));
 
-vi.mock("@/lib/application-runner/vault", () => ({
-  tryFillLoginFromVault: mocks.vault,
+vi.mock("@/lib/application-runner/repeaters", () => ({
+  fillRepeaters: vi.fn<() => Promise<never[]>>(async () => []),
+}));
+
+vi.mock("@/lib/application-runner/account", () => ({
+  loginWallSchema: z.object({ loginWall: z.boolean() }).loose(),
+  passLoginWall: mocks.vault,
 }));
 
 vi.mock("@/db/services/browser-run-checkpoints", () => ({

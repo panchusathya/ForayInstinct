@@ -824,11 +824,210 @@ const after = await fillable();
 return { form: enough(after), fields: after.count, clicked: chosen.text, href: page.url() };
 `;
 
+/**
+ * What a page offers by way of moving on: its heading, any step indicator,
+ * how many controls are still fillable, and every visible button and link,
+ * numbered by its position in one fixed locator list so the click that
+ * follows addresses the same element. Buttons come before links when the page
+ * has more than fit: the control that advances a form is nearly always a
+ * button, and a posting page can carry hundreds of links.
+ */
+const pageControlsLocator =
+  "button, [role=button], input[type=submit], a[href]";
+
+export const collectPageControlsCode = `
+const summary = await page.evaluate(() => {
+  const visible = (node) => {
+    const style = getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+  };
+  const text = (node) => (node.innerText || node.getAttribute("aria-label") || node.value || node.getAttribute("title") || "").replace(/\\s+/g, " ").trim();
+  const headingNode = [...document.querySelectorAll("h1, h2, [role=heading]")].find(visible);
+  const progress = [...document.querySelectorAll("[role=progressbar], [aria-current], nav li, ol li, [class*=step], [class*=progress]")]
+    .filter(visible)
+    .map(text)
+    .filter((line) => line && line.length < 80 && /step|\\d+\\s*(?:of|\\/)\\s*\\d+|[0-9]\\s*[A-Za-z]/i.test(line))
+    .slice(0, 8)
+    .join(" | ")
+    .slice(0, 240);
+  const skip = new Set(["hidden", "submit", "button", "image", "checkbox", "radio", "search", "reset"]);
+  const fields = [...document.querySelectorAll("input, textarea, select, [role=combobox]")].filter((node) => {
+    const type = String(node.getAttribute("type") || node.tagName).toLowerCase();
+    if (node.tagName === "INPUT" && type === "file") return true;
+    return !skip.has(type) && visible(node);
+  }).length;
+  const all = [...document.querySelectorAll("${pageControlsLocator}")].flatMap((node, index) => {
+    if (!visible(node)) return [];
+    const label = text(node).slice(0, 60);
+    if (!label) return [];
+    return [{
+      disabled: node.disabled === true || node.getAttribute("aria-disabled") === "true",
+      href: node.tagName === "A" ? String(node.href || "") : "",
+      index,
+      link: node.tagName === "A",
+      text: label,
+    }];
+  });
+  const buttons = all.filter((control) => !control.link).slice(0, 40);
+  const links = all.filter((control) => control.link).slice(0, Math.max(0, 60 - buttons.length));
+  const controls = [...buttons, ...links].sort((left, right) => left.index - right.index)
+    .map(({ link, ...control }) => control);
+  return { controls, fields, heading: headingNode ? text(headingNode).slice(0, 120) : "", progress };
+});
+return { ...summary, href: page.url(), title: await page.title() };
+`;
+
+/**
+ * Clicks one of the controls the summary numbered and reports where the page
+ * went: its address, its new heading, and any validation text it put up. The
+ * caller compares before and after; a page that did not move is its own
+ * answer.
+ */
+export const clickControlCode = (index: number) => `
+const control = page.locator("${pageControlsLocator}").nth(${String(index)});
+const before = page.url();
+try {
+  await control.click({ timeout: 5000 });
+} catch (error) {
+  return { clicked: false, errors: [String(error && error.message || error).slice(0, 200)], heading: "", href: page.url(), navigated: false };
+}
+await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => undefined);
+await page.waitForTimeout(800);
+const heading = await page.evaluate(() => {
+  const visible = (node) => {
+    const style = getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+  };
+  const node = [...document.querySelectorAll("h1, h2, [role=heading]")].find(visible);
+  return node ? (node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 120) : "";
+}).catch(() => "");
+const errors = await page.$$eval(
+  "[role=alert], [aria-invalid=true], .error, .field-error, [class*=error]",
+  (nodes) => nodes
+    .filter((node) => {
+      const style = getComputedStyle(node);
+      const box = node.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && box.height > 0;
+    })
+    .map((node) => (node.innerText || node.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim())
+    .filter((text) => text.length > 0 && text.length < 300)
+    .slice(0, 5)
+).catch(() => []);
+return { clicked: true, errors, heading, href: page.url(), navigated: page.url() !== before };
+`;
+
+/**
+ * The Add controls of a form's repeating sections (Work Experience,
+ * Education), each with the heading and visible text of the section it
+ * belongs to. Indexes count the page-controls locator, so the click lands on
+ * the control this saw. The section text lets the caller tell an entry that
+ * is already on the page from one still to add.
+ */
+export const collectRepeaterSectionsCode = `
+const sections = await page.evaluate((locator) => {
+  ${domHelpers}
+  const text = (node) => (node.innerText || node.getAttribute("aria-label") || node.value || node.getAttribute("title") || "").replace(/\\s+/g, " ").trim();
+  const addWording = /^(?:\\+\\s*)?add(?:\\s+another|\\s+a|\\s+new)?(?:\\s+(?:work\\s+)?experience|\\s+education|\\s+job|\\s+position|\\s+employment|\\s+school|\\s+entry|\\s+row|\\s+more|\\s+degree)?$/i;
+  const isAdd = (node) => addWording.test(text(node)) || /^add\\b/i.test(node.getAttribute("aria-label") || "");
+  const headingOf = (container) => {
+    const node = [...container.querySelectorAll("h1, h2, h3, h4, legend, [role=heading]")].find(visible);
+    return node ? text(node).slice(0, 120) : "";
+  };
+  return [...document.querySelectorAll(locator)].flatMap((node, index) => {
+    if (!visible(node) || !isAdd(node)) return [];
+    let container = node.parentElement;
+    while (container && container !== document.body && headingOf(container) === "") container = container.parentElement;
+    const scope = container && container !== document.body ? container : node.parentElement || document.body;
+    return [{
+      content: text(scope).slice(0, 2000),
+      heading: headingOf(scope) || (node.getAttribute("aria-label") || "").slice(0, 120),
+      index,
+      text: text(node).slice(0, 60),
+    }];
+  });
+}, "${pageControlsLocator}");
+return { sections };
+`;
+
+/**
+ * Reads a page that wants an account before the form: whether it is a sign-in
+ * or a registration page, which controls take the identifier, the password
+ * (twice, on a registration page), and the consents, which numbered controls
+ * create the account or switch to signing in, and the page's own wording of
+ * its password rules. Indexes count the same locator the page-controls
+ * summary does, so the click lands on the node the probe saw. No value is
+ * read back, only selectors and control text.
+ */
 export const detectLoginWallCode = `
-const password = await page.locator("input[type=password]").count();
-const text = String(await page.locator("body").innerText().catch(() => "")).toLowerCase();
-const signIn = /sign in|log in|create account|register/.test(text);
-return { loginWall: password > 0 && signIn, href: page.url() };
+const probe = await page.evaluate((locator) => {
+  ${domHelpers}
+  const text = (node) => (node.innerText || node.getAttribute("aria-label") || node.value || node.getAttribute("title") || "").replace(/\\s+/g, " ").trim();
+  const passwords = [...document.querySelectorAll("input[type=password]")].filter(visible);
+  const inputs = [...document.querySelectorAll("input, textarea, select")];
+  const controls = [...document.querySelectorAll(locator)].flatMap((node, index) => {
+    if (!visible(node)) return [];
+    const label = text(node).slice(0, 60);
+    return label ? [{ index, link: node.tagName === "A", text: label }] : [];
+  });
+  const createWording = /create (?:an? |my |your )?account|sign ?up|register|get started|join now|new user/i;
+  const signInWording = /^(?:sign ?in|log ?in|login|next|continue)$/i;
+  const buttons = controls.filter((control) => !control.link);
+  const createButton = buttons.find((control) => createWording.test(control.text));
+  const signInButton = buttons.find((control) => /^(?:sign ?in|log ?in|login)$/i.test(control.text));
+  const asControl = (control) => (control ? { index: control.index, text: control.text } : null);
+  const createControl = asControl(createButton || controls.find((control) => createWording.test(control.text)));
+  const signInControl = asControl(signInButton || controls.find((control) => /^(?:sign ?in|log ?in|login)$/i.test(control.text)));
+  const headingNode = [...document.querySelectorAll("h1, h2, [role=heading]")].find(visible);
+  const heading = headingNode ? text(headingNode) : "";
+  const wall = passwords.length === 0
+    ? "none"
+    : passwords.length >= 2 || (createButton && !signInButton) || (createWording.test(heading) && !signInButton)
+      ? "register"
+      : "sign_in";
+  const identifierWording = /e-?mail|user ?name|login|account/i;
+  const identifierNode = inputs.find((node) => {
+    if (!visible(node) || node.tagName !== "INPUT") return false;
+    const type = String(node.getAttribute("type") || "text").toLowerCase();
+    if (type === "email") return true;
+    if (!["text", "tel"].includes(type)) return false;
+    const hint = [node.name, node.id, node.getAttribute("autocomplete"), node.getAttribute("placeholder"), ownLabel(node)].join(" ");
+    return identifierWording.test(hint);
+  });
+  const identifierKind = (node) => {
+    const type = String(node.getAttribute("type") || "text").toLowerCase();
+    const hint = [node.name, node.id, node.getAttribute("autocomplete"), node.getAttribute("placeholder"), ownLabel(node)].join(" ");
+    if (type === "email" || /e-?mail/i.test(hint)) return "email";
+    if (type === "tel" || /phone|mobile/i.test(hint)) return "phone";
+    return "username";
+  };
+  const consents = inputs.flatMap((node, index) => {
+    if (node.tagName !== "INPUT" || String(node.getAttribute("type") || "").toLowerCase() !== "checkbox" || !visible(node)) return [];
+    const label = ownLabel(node) || text(node.closest("label") || node.parentElement || node);
+    return /agree|terms|privacy|consent|acknowledge|accept|policy/i.test(label) ? [selectorFor(node, index)] : [];
+  });
+  const policyText = (document.body.innerText || "")
+    .split(/\\n+/)
+    .map((line) => line.replace(/\\s+/g, " ").trim())
+    .filter((line) => line.length > 8 && line.length < 200 && /password|characters?\\b|uppercase|lowercase|special character|symbol|digit|number/i.test(line) && /\\d|uppercase|lowercase|symbol|special/i.test(line))
+    .slice(0, 6)
+    .join(" ")
+    .slice(0, 500);
+  return {
+    consents,
+    createControl,
+    identifier: identifierNode
+      ? { kind: identifierKind(identifierNode), selector: selectorFor(identifierNode, inputs.indexOf(identifierNode)) }
+      : null,
+    loginWall: wall !== "none",
+    passwords: passwords.map((node) => selectorFor(node, inputs.indexOf(node))),
+    policyText,
+    signInControl,
+    wall,
+  };
+}, "${pageControlsLocator}");
+return { ...probe, href: page.url() };
 `;
 
 /**
