@@ -42,7 +42,10 @@ import {
   reachApplicationFormCode,
   verificationCodeProbeCode,
 } from "@/lib/application-runner/playwright-scripts";
-import { tryFillLoginFromVault } from "@/lib/application-runner/vault";
+import {
+  loginWallSchema,
+  passLoginWall,
+} from "@/lib/application-runner/account";
 import type {
   ApplicationPauseReason,
   ApplicationRunInput,
@@ -406,23 +409,21 @@ export async function fillVisibleForm(
   const login = await parseResult(
     input.browserSessionId,
     detectLoginWallCode,
-    z.object({ loginWall: z.boolean() })
+    loginWallSchema,
+    "login_wall"
   );
   if (login?.loginWall) {
-    const vault = await tryFillLoginFromVault({
+    // Sign in with a saved login, or register with the candidate's email and
+    // a generated password the vault keeps; only a page with neither path
+    // pauses for vault setup.
+    const passed = await passLoginWall({
+      applyUrl: input.applyUrl,
       browserSessionId: input.browserSessionId,
+      executionId: input.executionId,
       scope: input.scope,
-    }).catch(() => ({ filled: false, origin: input.applyUrl }));
-    if (!vault.filled) {
-      return {
-        applyUrl: input.applyUrl,
-        message: applicationPauseMessage(
-          "vault_setup",
-          `sign-in is required for ${input.applyUrl}.`
-        ),
-        pause: "vault_setup",
-      };
-    }
+      wall: login,
+    });
+    if ("pause" in passed) return passed;
   }
   const probe = await inspectPostActionBrowserState(
     input.browserSessionId

@@ -918,11 +918,83 @@ const errors = await page.$$eval(
 return { clicked: true, errors, heading, href: page.url(), navigated: page.url() !== before };
 `;
 
+/**
+ * Reads a page that wants an account before the form: whether it is a sign-in
+ * or a registration page, which controls take the identifier, the password
+ * (twice, on a registration page), and the consents, which numbered controls
+ * create the account or switch to signing in, and the page's own wording of
+ * its password rules. Indexes count the same locator the page-controls
+ * summary does, so the click lands on the node the probe saw. No value is
+ * read back, only selectors and control text.
+ */
 export const detectLoginWallCode = `
-const password = await page.locator("input[type=password]").count();
-const text = String(await page.locator("body").innerText().catch(() => "")).toLowerCase();
-const signIn = /sign in|log in|create account|register/.test(text);
-return { loginWall: password > 0 && signIn, href: page.url() };
+const probe = await page.evaluate((locator) => {
+  ${domHelpers}
+  const text = (node) => (node.innerText || node.getAttribute("aria-label") || node.value || node.getAttribute("title") || "").replace(/\\s+/g, " ").trim();
+  const passwords = [...document.querySelectorAll("input[type=password]")].filter(visible);
+  const inputs = [...document.querySelectorAll("input, textarea, select")];
+  const controls = [...document.querySelectorAll(locator)].flatMap((node, index) => {
+    if (!visible(node)) return [];
+    const label = text(node).slice(0, 60);
+    return label ? [{ index, link: node.tagName === "A", text: label }] : [];
+  });
+  const createWording = /create (?:an? |my |your )?account|sign ?up|register|get started|join now|new user/i;
+  const signInWording = /^(?:sign ?in|log ?in|login|next|continue)$/i;
+  const buttons = controls.filter((control) => !control.link);
+  const createButton = buttons.find((control) => createWording.test(control.text));
+  const signInButton = buttons.find((control) => /^(?:sign ?in|log ?in|login)$/i.test(control.text));
+  const asControl = (control) => (control ? { index: control.index, text: control.text } : null);
+  const createControl = asControl(createButton || controls.find((control) => createWording.test(control.text)));
+  const signInControl = asControl(signInButton || controls.find((control) => /^(?:sign ?in|log ?in|login)$/i.test(control.text)));
+  const headingNode = [...document.querySelectorAll("h1, h2, [role=heading]")].find(visible);
+  const heading = headingNode ? text(headingNode) : "";
+  const wall = passwords.length === 0
+    ? "none"
+    : passwords.length >= 2 || (createButton && !signInButton) || (createWording.test(heading) && !signInButton)
+      ? "register"
+      : "sign_in";
+  const identifierWording = /e-?mail|user ?name|login|account/i;
+  const identifierNode = inputs.find((node) => {
+    if (!visible(node) || node.tagName !== "INPUT") return false;
+    const type = String(node.getAttribute("type") || "text").toLowerCase();
+    if (type === "email") return true;
+    if (!["text", "tel"].includes(type)) return false;
+    const hint = [node.name, node.id, node.getAttribute("autocomplete"), node.getAttribute("placeholder"), ownLabel(node)].join(" ");
+    return identifierWording.test(hint);
+  });
+  const identifierKind = (node) => {
+    const type = String(node.getAttribute("type") || "text").toLowerCase();
+    const hint = [node.name, node.id, node.getAttribute("autocomplete"), node.getAttribute("placeholder"), ownLabel(node)].join(" ");
+    if (type === "email" || /e-?mail/i.test(hint)) return "email";
+    if (type === "tel" || /phone|mobile/i.test(hint)) return "phone";
+    return "username";
+  };
+  const consents = inputs.flatMap((node, index) => {
+    if (node.tagName !== "INPUT" || String(node.getAttribute("type") || "").toLowerCase() !== "checkbox" || !visible(node)) return [];
+    const label = ownLabel(node) || text(node.closest("label") || node.parentElement || node);
+    return /agree|terms|privacy|consent|acknowledge|accept|policy/i.test(label) ? [selectorFor(node, index)] : [];
+  });
+  const policyText = (document.body.innerText || "")
+    .split(/\\n+/)
+    .map((line) => line.replace(/\\s+/g, " ").trim())
+    .filter((line) => line.length > 8 && line.length < 200 && /password|characters?\\b|uppercase|lowercase|special character|symbol|digit|number/i.test(line) && /\\d|uppercase|lowercase|symbol|special/i.test(line))
+    .slice(0, 6)
+    .join(" ")
+    .slice(0, 500);
+  return {
+    consents,
+    createControl,
+    identifier: identifierNode
+      ? { kind: identifierKind(identifierNode), selector: selectorFor(identifierNode, inputs.indexOf(identifierNode)) }
+      : null,
+    loginWall: wall !== "none",
+    passwords: passwords.map((node) => selectorFor(node, inputs.indexOf(node))),
+    policyText,
+    signInControl,
+    wall,
+  };
+}, "${pageControlsLocator}");
+return { ...probe, href: page.url() };
 `;
 
 /**
