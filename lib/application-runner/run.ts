@@ -3,6 +3,7 @@ import { updateApplicationRun } from "@/db/services/application-executions";
 import { applicationExecutionLog } from "@/lib/application-execution";
 import {
   closeApplicationBrowser,
+  isApplicationBrowserAlive,
   openApplicationBrowser,
 } from "@/lib/application-runner/browser";
 import {
@@ -50,15 +51,30 @@ export async function runApplicationUntilPause(input: ApplicationRunInput) {
     applyUrl: input.applyUrl,
     scope: input.scope,
   });
-  const existingSessionId = existing?.browserSessionId;
-  const browser: { session_id: string } =
-    typeof existingSessionId === "string" && existingSessionId !== ""
-      ? { session_id: existingSessionId }
-      : await openApplicationBrowser({
-          applyUrl: input.applyUrl,
-          executionId: input.executionId,
-          scope: input.scope,
-        });
+  // Only this execution's own browser, and only while the backend still has
+  // it. The newest row for the posting used to be adopted whatever execution
+  // it belonged to and whether or not its browser was alive, and a fresh
+  // browser was written to the row only on a pause, so one that crashed
+  // first leaked.
+  const existingSessionId =
+    existing?.id === input.executionId ? existing.browserSessionId : undefined;
+  const reusable =
+    typeof existingSessionId === "string" &&
+    existingSessionId !== "" &&
+    (await isApplicationBrowserAlive(existingSessionId));
+  const browser: { session_id: string } = reusable
+    ? { session_id: existingSessionId }
+    : await openApplicationBrowser({
+        applyUrl: input.applyUrl,
+        executionId: input.executionId,
+        scope: input.scope,
+      });
+  if (!reusable) {
+    await updateApplicationRun({
+      browserSessionId: browser.session_id,
+      executionId: input.executionId,
+    });
+  }
   // A code arrives only after the candidate approved and the submit opened a
   // verification step, so it is entered where the page left off, never by
   // filling the form again: the fill's own probe would see the code dialog
@@ -119,23 +135,51 @@ export async function runApplicationUntilPause(input: ApplicationRunInput) {
       sessionId: browser.session_id,
     });
     applyUrl = filled.redirect;
-    const reopened = await openApplicationBrowser({
-      applyUrl,
-      executionId: input.executionId,
-      scope: input.scope,
-    });
-    browser.session_id = reopened.session_id;
-    await updateApplicationRun({
-      browserSessionId: browser.session_id,
-      executionId: input.executionId,
-    });
-    filled = await fillVisibleForm({
-      ...input,
-      answered: input.resumeAnswered,
-      answers: input.resumeAnswers,
-      applyUrl,
-      browserSessionId: browser.session_id,
-    });
+    // The form's site can refuse the browser: OpenAI's posting hands off to
+    // Ashby, and the gateway's open of it came back "connection closed". That
+    // threw straight out of start_application, so the run sat as "running"
+    // with its lease held while the candidate was told the form was being
+    // filled, until the watchdog timed it out twenty minutes later.
+    try {
+      const reopened = await openApplicationBrowser({
+        applyUrl,
+        executionId: input.executionId,
+        scope: input.scope,
+      });
+      browser.session_id = reopened.session_id;
+    } catch (error) {
+      const reason = (error instanceof Error ? error.message : String(error))
+        .split("\n")[0]
+        ?.slice(0, 200);
+      applicationExecutionLog({
+        apply_url: input.applyUrl,
+        error: reason ?? "unknown",
+        event: "runner.reopen_failed",
+        execution_id: input.executionId,
+        to: applyUrl.slice(0, 300),
+      });
+      filled = {
+        applyUrl: input.applyUrl,
+        message: applicationPauseMessage(
+          "user_input",
+          `${input.applyUrl} hands applicants to ${applyUrl}, and the browser could not open that page (${reason ?? "no reason given"}). Nothing was filled. Try again in a little while, or start from ${applyUrl} directly.`
+        ),
+        pause: "user_input",
+      };
+    }
+    if (!("pause" in filled)) {
+      await updateApplicationRun({
+        browserSessionId: browser.session_id,
+        executionId: input.executionId,
+      });
+      filled = await fillVisibleForm({
+        ...input,
+        answered: input.resumeAnswered,
+        answers: input.resumeAnswers,
+        applyUrl,
+        browserSessionId: browser.session_id,
+      });
+    }
   }
   if ("redirect" in filled) {
     // Twice is a chain, not a form. Say where it led and stop.
@@ -155,12 +199,16 @@ export async function runApplicationUntilPause(input: ApplicationRunInput) {
   // on the page whose control sends the application, so the candidate reviews
   // the whole thing once, at the end.
   let stalled = 0;
+  let reachedSubmit = false;
   for (let page = 0; page < maxFormPages && !("pause" in filled); page += 1) {
     const summary = await readPageSummary(browser.session_id);
     const step: NextStep = summary
       ? await decideNextStep(summary)
       : { action: "stuck", controls: [], via: "heuristic" };
-    if (step.action === "submit") break;
+    if (step.action === "submit") {
+      reachedSubmit = true;
+      break;
+    }
     if (step.action === "stuck") {
       filled = stuckPause(input, summary, step.controls);
       break;
@@ -218,6 +266,19 @@ export async function runApplicationUntilPause(input: ApplicationRunInput) {
     if ("redirect" in filled) {
       filled = stuckPause(input, summary, []);
     }
+  }
+  // Running out of pages is a loop, not a form ready to send. It used to fall
+  // through to approval, showing the candidate page twelve as the review of a
+  // submission the runner had never reached.
+  if (!("pause" in filled) && !reachedSubmit) {
+    filled = {
+      applyUrl: input.applyUrl,
+      message: applicationPauseMessage(
+        "user_input",
+        `${input.applyUrl} ran through ${String(maxFormPages)} pages without reaching a control that submits the application, so the form may be looping. Tell me which page it should stop on, or whether to give up.`
+      ),
+      pause: "user_input",
+    };
   }
   if ("pause" in filled) {
     await updateApplicationRun({

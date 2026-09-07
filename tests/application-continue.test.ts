@@ -8,7 +8,10 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       (_input: Record<string, unknown>) => Promise<Record<string, unknown>>
     >(),
-  submit: vi.fn<() => Promise<Record<string, unknown>>>(),
+  submit:
+    vi.fn<
+      (_input: Record<string, unknown>) => Promise<Record<string, unknown>>
+    >(),
   updateRun: vi.fn<(_input: Record<string, unknown>) => Promise<void>>(),
 }));
 
@@ -163,5 +166,100 @@ describe("a browser that died between rounds", () => {
       continueApplication({ applyUrl, approved: true, scope })
     ).rejects.toThrow(/upstream timeout/u);
     expect(mocks.runUntilPause).not.toHaveBeenCalled();
+  });
+});
+
+describe("a run whose browser is gone when the candidate answers", () => {
+  const noBrowser = { ...run, browserSessionId: "" };
+
+  it("fills again and submits once when the candidate approved", async () => {
+    // The approval used to fall through to "Continue signal recorded" and do
+    // nothing, forever; the candidate was asked to confirm again and again.
+    mocks.findRun
+      .mockResolvedValueOnce(noBrowser)
+      .mockResolvedValueOnce({ ...run, browserSessionId: "browser-2" });
+    mocks.runUntilPause.mockResolvedValue({
+      applyUrl,
+      message: "Needs approval: Analyst",
+      pause: "approval",
+    });
+    mocks.submit.mockResolvedValue({
+      applyUrl,
+      done: true,
+      message: "Submitted Analyst.",
+    });
+    const result = await continueApplication({
+      applyUrl,
+      approved: true,
+      scope,
+    });
+    expect(mocks.runUntilPause).toHaveBeenCalledTimes(1);
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    expect(mocks.submit.mock.calls[0]?.[0]).toMatchObject({
+      browserSessionId: "browser-2",
+    });
+    expect(result).toMatchObject({ done: true });
+    expect("message" in result ? result.message : "").toContain(
+      "filled again in a new one"
+    );
+  });
+
+  it("stops at a question the refill raises rather than submitting", async () => {
+    mocks.findRun.mockResolvedValue(noBrowser);
+    mocks.runUntilPause.mockResolvedValue({
+      applyUrl,
+      message: "Needs input: Are you authorized to work in the US?",
+      pause: "user_input",
+    });
+    const result = await continueApplication({
+      applyUrl,
+      approved: true,
+      scope,
+    });
+    expect(result).toMatchObject({ pause: "user_input" });
+    expect(mocks.submit).not.toHaveBeenCalled();
+  });
+
+  it("does not drop answers sent to a run with no browser", async () => {
+    mocks.findRun.mockResolvedValue(noBrowser);
+    const result = await continueApplication({
+      answered: { "Are you authorized to work in the US?": "Yes" },
+      applyUrl,
+      scope,
+    });
+    expect(mocks.runUntilPause).toHaveBeenCalledTimes(1);
+    expect(mocks.runUntilPause.mock.calls[0]?.[0]).toMatchObject({
+      resumeAnswered: { "Are you authorized to work in the US?": "Yes" },
+    });
+    expect(result).toMatchObject({ pause: "approval" });
+  });
+
+  it("treats a cross-domain death as a lost browser, as the gateway reports it", async () => {
+    const hopped = Object.assign(
+      new Error("Session died on a cross-domain hop"),
+      {
+        error: {
+          code: "cross_domain_navigation",
+          domains: ["a.example", "b.example"],
+        },
+        status: 410,
+      }
+    );
+    mocks.runUntilPause.mockRejectedValueOnce(hopped).mockResolvedValueOnce({
+      applyUrl,
+      message: "Needs approval: Analyst",
+      pause: "approval",
+    });
+    const result = await continueApplication({
+      answers: "Boston",
+      applyUrl,
+      scope,
+    });
+    expect(mocks.runUntilPause).toHaveBeenCalledTimes(2);
+    expect(mocks.updateRun).toHaveBeenCalledWith({
+      browserSessionId: "",
+      executionId: "exec-1",
+    });
+    expect(result).toMatchObject({ pause: "approval" });
   });
 });

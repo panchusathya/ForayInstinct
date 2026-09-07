@@ -1,4 +1,4 @@
-import { and, eq, lte, or } from "drizzle-orm";
+import { and, eq, lte } from "drizzle-orm";
 import { applicationLeases, applicationExecutions, db } from "@/db";
 import type { AccessScope } from "@/lib/access-scope";
 import {
@@ -240,28 +240,26 @@ export async function assertApplicationLeaseOwner(input: {
   }
 }
 
+/**
+ * Releases one execution's lease. The execution id names it; the worker
+ * session is only a fallback for a caller that has nothing else. Given both,
+ * the two used to be OR'ed, so releasing one execution could release another
+ * that happened to share the worker session.
+ */
 export async function releaseApplicationLease(input: {
   executionId?: string;
   workerSessionId?: string;
 }) {
-  const match = [
-    input.executionId
-      ? eq(applicationLeases.executionId, input.executionId)
-      : undefined,
-    input.workerSessionId
+  const match = input.executionId
+    ? eq(applicationLeases.executionId, input.executionId)
+    : input.workerSessionId
       ? eq(applicationLeases.workerSessionId, input.workerSessionId)
-      : undefined,
-  ].filter((value) => value !== undefined);
-  if (match.length === 0) return;
+      : undefined;
+  if (match === undefined) return;
   await db
     .update(applicationLeases)
     .set({ status: "released" })
-    .where(
-      and(
-        eq(applicationLeases.status, "held"),
-        match.length === 1 ? match[0] : or(...match)
-      )
-    );
+    .where(and(eq(applicationLeases.status, "held"), match));
 }
 
 export async function claimOverdueApplicationLeases(now = new Date()) {

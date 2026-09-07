@@ -228,6 +228,48 @@ describe("application leases", () => {
     expect(retry).toMatchObject({ executionId, status: "acquired" });
   });
 
+  it("releases only the named execution's lease, whatever worker session travels with it", async () => {
+    // Given both ids the two were OR'ed, so releasing one execution could
+    // release another that shared the worker session.
+    const leases = await setup();
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    const mine = "root-1:call-mine";
+    const theirs = "root-1:call-theirs";
+    await leases.claimApplicationLease({
+      applyUrl: "https://jobs.example/mine",
+      executionId: mine,
+      rootSessionId: "root-1",
+      scope: alice,
+    });
+    await leases.claimApplicationLease({
+      applyUrl: "https://jobs.example/theirs",
+      executionId: theirs,
+      rootSessionId: "root-1",
+      scope: alice,
+    });
+    await leases.attachApplicationLeaseWorker({
+      executionId: theirs,
+      workerSessionId: "worker-shared",
+    });
+    await leases.attachApplicationLeaseWorker({
+      executionId: mine,
+      workerSessionId: "worker-shared",
+    });
+
+    await leases.releaseApplicationLease({
+      executionId: mine,
+      workerSessionId: "worker-shared",
+    });
+
+    const again = await leases.claimApplicationLease({
+      applyUrl: "https://jobs.example/theirs",
+      executionId: "root-1:call-third",
+      rootSessionId: "root-1",
+      scope: alice,
+    });
+    expect(again.status).toBe("already_in_progress");
+  }, 15_000);
+
   it("still blocks a retry while another execution holds the posting", async () => {
     const leases = await setup();
     const tracing = await import("@/lib/application-execution");

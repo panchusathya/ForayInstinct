@@ -10,14 +10,16 @@ import {
   detectLoginWallCode,
 } from "@/lib/application-runner/playwright-scripts";
 import type { ApplicationRunInput } from "@/lib/application-runner/types";
-import { tryFillLoginFromVault } from "@/lib/application-runner/vault";
+import {
+  hasSavedLoginForOrigin,
+  tryFillLoginFromVault,
+} from "@/lib/application-runner/vault";
 import { browserProvider } from "@/lib/browser";
 import {
   generatePassword,
   type PasswordPolicy,
 } from "@/lib/manager/generated-password";
 import { createVaultLogin } from "@/lib/manager/server/store";
-import { readManagerVaultItems } from "@/lib/manager/server/vault";
 import { serializeLoginVaultPayload } from "@/lib/manager/vault-payload";
 import { applicationPauseMessage } from "@/lib/task-completion";
 
@@ -30,6 +32,7 @@ const namedControlSchema = z
 export const loginWallSchema = z.object({
   consents: z.array(z.string()).default([]),
   createControl: namedControlSchema,
+  heading: z.string().default(""),
   href: z.string().default(""),
   identifier: z
     .object({
@@ -150,9 +153,17 @@ export async function passLoginWall(
       `sign-in is required for ${input.applyUrl}, no login is saved for it, and the page offers no way to create an account.`
     );
   }
-  // A registration page while a login is already saved: the account exists,
-  // so switch to signing in with it rather than registering twice.
-  if (wall.signInControl && (await hasSavedLogin(input.scope))) {
+  // A registration page while a login for this site is already saved: the
+  // account exists, so switch to signing in with it rather than registering
+  // twice. A login for some other site is no reason to; it used to be, and
+  // the runner bounced between the two walls before giving up.
+  if (
+    wall.signInControl &&
+    (await hasSavedLoginForOrigin(
+      input.scope,
+      originOf(wall.href, input.applyUrl)
+    ))
+  ) {
     const next = await switchWall(input, wall.signInControl);
     if (next?.wall === "sign_in") {
       return passLoginWall({ ...input, wall: next }, depth + 1);
@@ -231,19 +242,40 @@ async function register(input: LoginWallInput): Promise<LoginWallResult> {
     };
   }
   const control = wall.createControl ?? wall.signInControl;
-  const outcome = control
-    ? await clickControl(input.browserSessionId, asPageControl(control))
-    : undefined;
+  if (!control) {
+    // Typed in, saved, and nothing to press: the account does not exist yet,
+    // and reporting it created would have offered the login page to the
+    // candidate as their application.
+    return {
+      applyUrl: input.applyUrl,
+      message: applicationPauseMessage(
+        "user_input",
+        `${origin} wants an account, but the page offers no control I can press to create it. A login for it is saved; create the account there once and tell me when to continue.`
+      ),
+      pause: "user_input",
+    };
+  }
+  const outcome = await clickControl(
+    input.browserSessionId,
+    asPageControl(control)
+  );
+  // Proof the page moved on: a new address, a new heading, or the wall read
+  // again and found down. A click that changed nothing is not an account.
+  const after = await readWall(input.browserSessionId);
+  const moved =
+    outcome.navigated ||
+    (outcome.heading !== "" && outcome.heading !== wall.heading) ||
+    after?.loginWall === false;
   applicationExecutionLog({
     apply_url: input.applyUrl,
-    control: control?.text ?? "",
-    errors: outcome?.errors.join(" | ") ?? "none",
+    control: control.text,
+    errors: outcome.errors.join(" | ") || "none",
     event: "runner.account_created",
     execution_id: input.executionId,
-    moved: outcome?.navigated === true || (outcome?.heading ?? "") !== "",
+    moved,
     origin,
   });
-  if (outcome && outcome.errors.length > 0) {
+  if (outcome.errors.length > 0) {
     return {
       applyUrl: input.applyUrl,
       message: applicationPauseMessage(
@@ -253,7 +285,26 @@ async function register(input: LoginWallInput): Promise<LoginWallResult> {
       pause: "user_input",
     };
   }
+  if (!moved) {
+    return {
+      applyUrl: input.applyUrl,
+      message: applicationPauseMessage(
+        "user_input",
+        `${origin} did not move on after ${control.text} was pressed, so the account may not exist. A login for it is saved; create the account there once and tell me when to continue.`
+      ),
+      pause: "user_input",
+    };
+  }
   return { passed: true, via: "created" };
+}
+
+/** The wall as the page shows it now, or nothing when it cannot be read. */
+async function readWall(sessionId: string) {
+  const response = await browserProvider.executePlaywright(sessionId, {
+    code: detectLoginWallCode,
+  });
+  const parsed = loginWallSchema.safeParse(response.result);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /** Opens the page's own link to the other kind of wall and reads it again. */
@@ -262,17 +313,7 @@ async function switchWall(
   control: NonNullable<LoginWall["createControl"]>
 ) {
   await clickControl(input.browserSessionId, asPageControl(control));
-  const response = await browserProvider.executePlaywright(
-    input.browserSessionId,
-    { code: detectLoginWallCode }
-  );
-  const parsed = loginWallSchema.safeParse(response.result);
-  return parsed.success ? parsed.data : undefined;
-}
-
-async function hasSavedLogin(scope: LoginWallInput["scope"]) {
-  const items = await readManagerVaultItems(scope).catch(() => []);
-  return items.some((item) => item.kind === "login" && item.hasSecret);
+  return readWall(input.browserSessionId);
 }
 
 function asPageControl(

@@ -58,21 +58,43 @@ export async function openApplicationBrowser(input: {
       input.signal
     );
   } catch (error) {
-    // The saved sign-in state is a convenience; the application is the job.
-    // A blob the browser refused to seed ("Overriding ... cookies is
-    // forbidden") killed every run for the workspace, DoorDash and Hightouch
-    // alike, at the moment the browser was opened. Drop it and open a clean
-    // browser: the state is rebuilt from whatever this session signs into.
-    if (!("storageState" in persistence) || !isCookieSeedFailure(error)) {
+    if ("storageState" in persistence && isCookieSeedFailure(error)) {
+      // The saved sign-in state is a convenience; the application is the
+      // job. A blob the browser refused to seed ("Overriding ... cookies is
+      // forbidden") killed every run for the workspace, DoorDash and
+      // Hightouch alike, at the moment the browser was opened. Drop it and
+      // open a clean browser: the state is rebuilt from whatever this
+      // session signs into.
+      applicationExecutionLog({
+        error: (error instanceof Error ? error.message : "unknown").slice(
+          0,
+          300
+        ),
+        event: "browser.state_rejected",
+        execution_id: input.executionId,
+      });
+      await clearWorkspaceBrowserState(input.scope).catch(() => undefined);
+      browser = await browserProvider.createSession(session, input.signal);
+    } else if (isTransientOpenFailure(error)) {
+      // A site that closed the connection on the first load usually takes
+      // the second. Ashby did this to the gateway once and the run died on
+      // it; one more try is cheap next to a form that never opens.
+      applicationExecutionLog({
+        error: (error instanceof Error ? error.message : "unknown").slice(
+          0,
+          300
+        ),
+        event: "browser.open_retry",
+        execution_id: input.executionId,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      browser = await browserProvider.createSession(
+        { ...session, ...persistence },
+        input.signal
+      );
+    } else {
       throw error;
     }
-    applicationExecutionLog({
-      error: (error instanceof Error ? error.message : "unknown").slice(0, 300),
-      event: "browser.state_rejected",
-      execution_id: input.executionId,
-    });
-    await clearWorkspaceBrowserState(input.scope).catch(() => undefined);
-    browser = await browserProvider.createSession(session, input.signal);
   }
   try {
     await createBrowserSession(input.scope, {
@@ -102,6 +124,35 @@ export async function openApplicationBrowser(input: {
     await routeWorkday(browser.session_id, input.applyUrl, input.signal);
   }
   return browser;
+}
+
+/**
+ * Whether the backend still has this browser. A row can carry a session id
+ * long after the browser behind it died or was reaped; driving it produces
+ * "session gone" errors, or worse, a form filled into nothing.
+ */
+export async function isApplicationBrowserAlive(
+  sessionId: string,
+  signal?: AbortSignal
+) {
+  try {
+    const session = await browserProvider.getSession(
+      sessionId,
+      undefined,
+      signal
+    );
+    return session.status === "active";
+  } catch {
+    return false;
+  }
+}
+
+/** A network-level failure to load the first page, as Chromium words it. */
+function isTransientOpenFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /net::ERR_(?:CONNECTION|NETWORK|TIMED_OUT|EMPTY_RESPONSE|SOCKET)|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN/iu.test(
+    message
+  );
 }
 
 export async function closeApplicationBrowser(input: {

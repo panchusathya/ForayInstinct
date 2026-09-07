@@ -99,6 +99,24 @@ describe("opening the application browser", () => {
     expect(mocks.clearState).toHaveBeenCalledTimes(1);
   });
 
+  it("tries once more when the site closed the connection on the first load", async () => {
+    // Ashby did this to the gateway once and the run died on it.
+    mocks.createSession
+      .mockRejectedValueOnce(
+        new Error(
+          "GatewayRequestError: Could not open https://jobs.ashbyhq.com/x: page.goto: net::ERR_CONNECTION_CLOSED"
+        )
+      )
+      .mockResolvedValueOnce({ session_id: "s-2", status: "active" });
+    await expect(open()).resolves.toMatchObject({ session_id: "s-2" });
+    expect(mocks.createSession).toHaveBeenCalledTimes(2);
+    // The saved state is not to blame, so it is kept.
+    expect(mocks.clearState).not.toHaveBeenCalled();
+    expect(mocks.createSession.mock.calls[1]?.[0]).toMatchObject({
+      storageState: state,
+    });
+  }, 10_000);
+
   it("does not retry any other failure to open a browser", async () => {
     mocks.createSession.mockRejectedValue(
       new Error("Could not connect to the upstream browser")
