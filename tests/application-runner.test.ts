@@ -1247,6 +1247,23 @@ describe("reaching the application form", () => {
   });
 });
 
+describe("what an unlabelled field's surroundings may say", () => {
+  it("reads the group's caption, never a div that spans the neighbours' answers", () => {
+    // A div ancestor carried the veteran status and ethnicity already chosen
+    // in the EEO fieldset into the runner.unlabelled_field log.
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    expect(scripts).not.toContain(
+      'node.closest("fieldset, [role=group], div")'
+    );
+    expect(scripts).toContain(
+      'wrapper.querySelector("legend, [role=heading], h1, h2, h3, h4, label")'
+    );
+  });
+});
+
 describe("a verification code dialog", () => {
   const scripts = readFileSync(
     "lib/application-runner/playwright-scripts.ts",
@@ -1265,6 +1282,14 @@ describe("a verification code dialog", () => {
     expect(scripts).toContain("length >= 3");
     // Wording still has to say verification: a zip code is numeric too.
     expect(scripts).toContain("codeContext.test((contextOf(node).innerText");
+    // The context is the nearest enclosure that could be the dialog asking,
+    // never the whole page, and a zip or country code is not a code box.
+    expect(scripts).not.toContain(
+      'node.closest("[role=dialog], dialog, form, section, main") || document.body'
+    );
+    expect(scripts).toContain(
+      "const notACode = /country|zip|postal|dial|area|phone|address"
+    );
   });
 
   it("types a box dialog character by character", () => {
