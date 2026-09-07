@@ -41,6 +41,7 @@ vi.mock("@/lib/manager/server/application-answers", () => ({
 }));
 
 import { continueApplication } from "@/lib/application-runner/continue";
+import { looksLikeVerificationCode } from "@/lib/application-runner/types";
 
 const scope = { userId: "alice", workspaceId: "workspace:alice" };
 const applyUrl = "https://job-boards.greenhouse.io/doordashusa/jobs/1";
@@ -102,6 +103,67 @@ describe("a code sent back to a waiting run", () => {
     expect(mocks.runUntilPause.mock.calls[0]?.[0]).not.toHaveProperty(
       "resumeOtp"
     );
+  });
+
+  it("does not read an ordinary answer with a number in it as a code", async () => {
+    // "10 years" to "Years of experience?" was typed into the code dialog.
+    await continueApplication({
+      answered: { "Years of experience?": "10 years" },
+      applyUrl,
+      scope,
+    });
+    expect(mocks.runUntilPause.mock.calls[0]?.[0]).not.toHaveProperty(
+      "resumeOtp"
+    );
+    expect(mocks.runUntilPause.mock.calls[0]?.[0]).toMatchObject({
+      resumeAnswered: { "Years of experience?": "10 years" },
+    });
+  });
+
+  it("reads a lone answer as a code only when the run was waiting on one", async () => {
+    mocks.findRun.mockResolvedValue({ ...run, pauseReason: "user_input" });
+    await continueApplication({
+      answered: { Code: "482913" },
+      applyUrl,
+      scope,
+    });
+    expect(mocks.runUntilPause.mock.calls[0]?.[0]).not.toHaveProperty(
+      "resumeOtp"
+    );
+    vi.clearAllMocks();
+    mocks.findRun.mockResolvedValue({ ...run, pauseReason: "email_otp" });
+    mocks.runUntilPause.mockResolvedValue({
+      applyUrl,
+      done: true,
+      message: "Submitted",
+    });
+    await continueApplication({
+      answered: { Code: "482913" },
+      applyUrl,
+      scope,
+    });
+    expect(mocks.runUntilPause.mock.calls[0]?.[0]).toMatchObject({
+      resumeOtp: "482913",
+    });
+  });
+
+  it("knows a code's shape from an answer's", () => {
+    for (const code of ["482 913", "7K3-9D2", "123456", "48291", "AB12 CD34"]) {
+      expect(looksLikeVerificationCode(code)).toBe(true);
+    }
+    for (const answer of [
+      "5 years",
+      "10 years",
+      "2 weeks",
+      "Level 3",
+      "Yes 1",
+      "Boston MA 02110",
+      "Tier 2 visa",
+      "No",
+      "ABCD EFGH",
+    ]) {
+      expect(looksLikeVerificationCode(answer)).toBe(false);
+    }
   });
 });
 

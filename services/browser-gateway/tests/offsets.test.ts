@@ -8,6 +8,12 @@ describe("computeSliceOffsets", () => {
     );
   });
 
+  it("gives the bottom, not the top, when only one slice is allowed", () => {
+    expect(
+      computeSliceOffsets({ clientHeight: 800, maxScroll: 700 }, 1)
+    ).toEqual([700]);
+  });
+
   it("covers a short page with top and bottom", () => {
     expect(
       computeSliceOffsets({ clientHeight: 800, maxScroll: 700 }, 10)

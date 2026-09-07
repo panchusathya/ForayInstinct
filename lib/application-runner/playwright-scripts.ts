@@ -494,8 +494,12 @@ ${domHelpers}
       // candidate, so carry the surrounding form text instead. It is the
       // employer's own wording, never anything the candidate typed, and it is
       // what makes an unreadable field diagnosable without a screenshot.
-      const wrapper = label === "" ? node.closest("fieldset, [role=group], div") : undefined;
-      const nearby = wrapper ? (wrapper.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 120) : "";
+      // The group's own caption only. A div ancestor spanned neighbouring
+      // fields, and the text read off it carried the choices already made in
+      // them (a veteran status, an ethnicity) into the log.
+      const wrapper = label === "" ? node.closest("fieldset, [role=group]") : undefined;
+      const caption = wrapper ? wrapper.querySelector("legend, [role=heading], h1, h2, h3, h4, label") : undefined;
+      const nearby = caption ? (caption.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 120) : "";
       return [{ label, nearby, selector: selectorFor(node, index), tag: (node.getAttribute("type") || node.tagName).toLowerCase() }];
     });
   }
@@ -548,12 +552,13 @@ const describeError = (error) => String(error && error.message || error).replace
 const describe = (node) => {
   const byFor = node.id && document.querySelector("label[for=" + JSON.stringify(node.id) + "]");
   const own = node.closest("label");
-  const wrapper = node.closest("fieldset, [role=group], div");
+  const wrapper = node.closest("fieldset, [role=group]");
+  const caption = wrapper && wrapper.querySelector("legend, [role=heading], label");
   const tidy = (parts) => parts.filter(Boolean).join(" ").replace(/\\s+/g, " ").slice(0, 400);
   return {
     own: tidy([node.id, node.getAttribute("name"), node.getAttribute("aria-label"),
       byFor && byFor.innerText, own && own.innerText]),
-    nearby: tidy([wrapper && wrapper.innerText]),
+    nearby: tidy([caption && caption.innerText]),
   };
 };
 // By their own wording only, so a failure names the control and never the file.
@@ -708,12 +713,19 @@ const codeInputHelpers = `
     if (!group) return false;
     return [...group.querySelectorAll("input")].filter((peer) => visible(peer) && singleBox(peer)).length >= 3;
   };
+  // A country code, a zip code and a dial code are codes too, and a form with
+  // one of them beside an email-confirmation line paused a run as waiting on
+  // a verification code before a single field was read.
+  const notACode = /country|zip|postal|dial|area|phone|address|promo|discount|referral/;
   const codeLike = (node) => {
     const attrs = ["autocomplete", "name", "id", "placeholder", "aria-label", "inputmode"]
       .map((name) => node.getAttribute(name) || "").join(" ").toLowerCase();
+    if (notACode.test(attrs)) return false;
     return /one-time-code|otp|verif|passcode|\\bcode\\b|numeric|\\bpin\\b|security|token|digit/.test(attrs) || inCluster(node);
   };
-  const contextOf = (node) => node.closest("[role=dialog], dialog, form, section, main") || document.body;
+  // The nearest enclosure that could be the dialog asking, never the whole
+  // page: body text mentions verification on many a form that asks for none.
+  const contextOf = (node) => node.closest("[role=dialog], dialog, fieldset, form, section") || node.parentElement || node;
   const codeInputs = () => [...document.querySelectorAll("input")].filter((node) =>
     visible(node)
     && !skipTypes.has(String(node.type || "").toLowerCase())

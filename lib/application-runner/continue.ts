@@ -96,10 +96,17 @@ export async function continueApplication(input: {
   // asking for a code is decided at the page, not from the last pause: the
   // pause a code dialog produced was once a plain "blocked submit".
   const typedOtp = input.otp?.trim();
+  // A code can arrive as free text whatever the last pause was: the pause a
+  // Greenhouse code dialog produced was once a plain "blocked submit". An
+  // answer to a named question is read as a code only when the run was in
+  // fact waiting on one; "10 years" to "Years of experience?" is an answer.
   const code =
     typedOtp !== undefined && typedOtp !== ""
       ? typedOtp
-      : verificationCodeAmong(input.answers, answered);
+      : verificationCodeAmong(
+          input.answers,
+          run.pauseReason === "email_otp" ? answered : undefined
+        );
   // A run whose browser is gone still owes the candidate an answer. The
   // approval and answers branches used to require a live session and fall
   // through to "Continue signal recorded" without one, so a yes sent after

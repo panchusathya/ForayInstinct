@@ -122,15 +122,18 @@ export function durableWorkflowRunId(
 }
 
 /**
- * Whether a candidate's reply reads as a verification code: four to sixteen
- * letters, digits, spaces or dashes with at least one digit. "Yes" and
- * "None" are not; "482 913" and "7K3-9D2" are.
+ * Whether a candidate's reply reads as a verification code: four to eight
+ * digits, or two short groups of letters and digits, with at least one
+ * digit. "482 913", "7K3-9D2" and "123456" are; "Yes", "10 years", "Level 3"
+ * and "Boston MA 02110" are not. The looser rule this replaces read "5 years"
+ * as a code and typed it into the dialog.
  */
 export function looksLikeVerificationCode(value: string) {
   const trimmed = value.trim();
   return (
-    /^[A-Za-z0-9][A-Za-z0-9 -]{2,14}[A-Za-z0-9]$/u.test(trimmed) &&
-    /\d/u.test(trimmed)
+    /^(?:\d{3}[ -]?\d{3,5}|\d{4,8}|[A-Za-z0-9]{3,4}[ -]?[A-Za-z0-9]{3,4})$/u.test(
+      trimmed
+    ) && /\d/u.test(trimmed)
   );
 }
 

@@ -37,7 +37,8 @@ export function computeSliceOffsets(
   const step = Math.max(1, Math.round(root.clientHeight * sliceOverlap));
   const needed = Math.ceil(root.maxScroll / step) + 1;
   const count = Math.min(Math.max(needed, 2), Math.max(maxSlices, 1));
-  if (count <= 1) return [0];
+  // One slice is the bottom: the end of the form is what is being approved.
+  if (count <= 1) return [root.maxScroll];
   return Array.from({ length: count }, (_, index) =>
     Math.round((root.maxScroll * index) / (count - 1))
   ).filter(
