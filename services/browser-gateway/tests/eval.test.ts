@@ -62,4 +62,23 @@ describe("runPlaywrightCode", () => {
     expect(response.success).toBe(false);
     expect(response.error).toMatch(/timed out/iu);
   });
+
+  it("hands the caller the script's own promise, which outlives the timeout", async () => {
+    let settled: Promise<void> | undefined;
+    let finished = false;
+    const response = await runPlaywrightCode(
+      scope,
+      "await new Promise((done) => setTimeout(done, 120)); page.marker = true;",
+      0.05,
+      (promise) => {
+        settled = promise.then(() => {
+          finished = true;
+        });
+      }
+    );
+    expect(response.success).toBe(false);
+    expect(finished).toBe(false);
+    await settled;
+    expect(finished).toBe(true);
+  });
 });

@@ -24,29 +24,46 @@ export async function fillApplicationWorkflow(input: ApplicationRunInput) {
     if (!("pause" in paused)) return paused;
     const payload = await waitForContinue(input.executionId);
     if (payload.action === "cancel" || payload.approved === false) {
-      await cancelRunStep(input);
+      await cancelRunStep(current);
       return { done: true, message: "Application cancelled." };
     }
     if (payload.approved === true) {
+      // Answers first, approval second, as continue.ts does: a reply sent in
+      // the same breath as a yes used to be dropped here and the form
+      // submitted exactly as incomplete as it had just been reported.
+      if (payload.answered || payload.answers) {
+        current = withResume(current, payload);
+        const filled = await runUntilPauseStep(current);
+        if (!("pause" in filled)) return filled;
+        if (filled.pause === "user_input") continue;
+      }
       // A submit can open a verification step; that is a pause like any
       // other, resolved by the next payload's code.
-      const submitted = await submitStep(input);
+      const submitted = await submitStep(current);
       if (!("pause" in submitted)) return submitted;
       continue;
     }
-    current = {
-      applyUrl: current.applyUrl,
-      company: current.company,
-      executionId: current.executionId,
-      ...(payload.answered ? { resumeAnswered: payload.answered } : {}),
-      resumeAnswers: payload.answers ?? "",
-      ...(payload.otp ? { resumeOtp: payload.otp } : {}),
-      role: current.role,
-      rootSessionId: current.rootSessionId,
-      scope: current.scope,
-    };
+    current = withResume(current, payload);
   }
   return { done: true, message: "Application run paused too many times." };
+}
+
+/** The next round's input: the run as it was, plus what the candidate sent. */
+function withResume(
+  current: ApplicationRunInput,
+  payload: ApplicationHookPayload
+): ApplicationRunInput {
+  return {
+    applyUrl: current.applyUrl,
+    company: current.company,
+    executionId: current.executionId,
+    ...(payload.answered ? { resumeAnswered: payload.answered } : {}),
+    resumeAnswers: payload.answers ?? "",
+    ...(payload.otp ? { resumeOtp: payload.otp } : {}),
+    role: current.role,
+    rootSessionId: current.rootSessionId,
+    scope: current.scope,
+  };
 }
 
 /**

@@ -4,8 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   browserPageLocation,
   groupBrowserRunCheckpoints,
+  imageMimeType,
   maxApplicationReviewCaptures,
   observedSubmission,
+  submissionConfirmationText,
+  submissionUrlPattern,
 } from "../lib/browser-submission";
 import {
   reviewScrollCode,
@@ -90,6 +93,46 @@ vi.mock("@/lib/manager/server/kernel-native-autofill", () => ({
   currentKernelPageUrl: mocks.currentKernelPageUrl,
   snapshotKernelPage: mocks.snapshotKernelPage,
 }));
+
+describe("what a page's own bytes and words say about a submission", () => {
+  it("recognises confirmation copy and not the posting's promise of it", () => {
+    for (const line of [
+      "Thank you for applying to DoorDash!",
+      "Your application has been submitted.",
+      "Application received",
+      "We've received your application and will be in touch.",
+      "Successfully submitted",
+    ]) {
+      expect(submissionConfirmationText.test(line)).toBe(true);
+    }
+    expect(submissionConfirmationText.test("Submit application")).toBe(false);
+    expect(submissionConfirmationText.test("Apply for this job")).toBe(false);
+  });
+
+  it("names a confirmation address with one rule everywhere", () => {
+    expect(
+      submissionUrlPattern.test("https://a.example/applicationSubmitted")
+    ).toBe(true);
+    expect(
+      submissionUrlPattern.test("https://a.example/jobs/1/confirmation")
+    ).toBe(true);
+    expect(
+      submissionUrlPattern.test(
+        "https://a.example/jobs/1/confirmation-of-terms"
+      )
+    ).toBe(false);
+  });
+
+  it("types an image by its bytes, not by hope", () => {
+    expect(imageMimeType(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBe(
+      "image/jpeg"
+    );
+    expect(imageMimeType(Buffer.from([0x89, 0x50, 0x4e, 0x47]))).toBe(
+      "image/png"
+    );
+    expect(imageMimeType(Buffer.alloc(0))).toBe("image/png");
+  });
+});
 
 describe("browser submission evidence", () => {
   it("classifies confirmation URLs and ignores posting-page copy", () => {

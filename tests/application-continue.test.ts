@@ -102,6 +102,40 @@ describe("a code sent back to a waiting run", () => {
   });
 });
 
+describe("a run that already ended", () => {
+  it("returns the finished result on a second approval and touches nothing", async () => {
+    // Nothing checked the run's status, so a second "yes" reached
+    // submitApplication on the confirmation page, where the related-jobs
+    // Apply buttons were the only submit-shaped controls left to click.
+    mocks.findRun.mockResolvedValue({ ...run, status: "completed" });
+    const result = await continueApplication({
+      applyUrl,
+      approved: true,
+      scope,
+    });
+    expect(result).toMatchObject({ done: true, status: "completed" });
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.runUntilPause).not.toHaveBeenCalled();
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
+  });
+
+  it("refuses to continue a run that failed or timed out", async () => {
+    mocks.findRun.mockResolvedValue({ ...run, status: "timed_out" });
+    const result = await continueApplication({
+      answers: "Boston",
+      applyUrl,
+      approved: true,
+      scope,
+    });
+    expect(result).toMatchObject({ status: "timed_out" });
+    expect("message" in result ? result.message : "").toContain(
+      "start_application"
+    );
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.runUntilPause).not.toHaveBeenCalled();
+  });
+});
+
 describe("a browser that died between rounds", () => {
   it("opens a fresh one and fills the form again instead of throwing", async () => {
     // Brightdata dropped the browser between the review screenshot and the

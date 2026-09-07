@@ -4,6 +4,11 @@
  * Shared browser-side helpers. Inlined into each script because every script is
  * evaluated on its own — there is no module scope to hold them.
  */
+import {
+  submissionConfirmationText,
+  submissionUrlPattern,
+} from "@/lib/browser-submission";
+
 const domHelpers = `
   const visible = (node) => {
     const style = getComputedStyle(node);
@@ -748,7 +753,7 @@ const after = await page.evaluate(() => {
 ${codeInputHelpers}
   const remaining = codeInputs().length;
   const text = (document.body.innerText || "").replace(/\\s+/g, " ");
-  const confirmed = /thank you for applying|application (?:has been |was )?(?:submitted|received)|we(?:'ve| have) received your application|successfully submitted/i.test(text);
+  const confirmed = new RegExp(${JSON.stringify(submissionConfirmationText.source)}, "i").test(text);
   return { remaining, confirmed };
 }).catch(() => ({ remaining: 0, confirmed: false }));
 return { entered, clicked, confirmed: after.confirmed, errors, remaining: after.remaining, href: page.url() };
@@ -1040,6 +1045,29 @@ return { ...probe, href: page.url() };
  */
 export const clickSubmitCode = `
 const before = page.url();
+const confirmedPattern = new RegExp(${JSON.stringify(submissionConfirmationText.source)}, "i");
+const submittedUrl = new RegExp(${JSON.stringify(submissionUrlPattern.source)}, "i");
+const describe = (error) => String(error && error.message || error).replace(/\\s+/g, " ").slice(0, 200);
+const bodyText = () => page.locator("body").innerText({ timeout: 2000 })
+  .then((text) => String(text || "").replace(/\\s+/g, " "))
+  .catch(() => "");
+// What is left of the form: controls a candidate could still fill and submit
+// buttons inside a form. A confirmation page has neither.
+const remains = () => page.evaluate(() => {
+  const visible = (node) => {
+    const style = getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+  };
+  const skip = new Set(["hidden", "submit", "button", "image", "checkbox", "radio", "search", "reset"]);
+  let fields = 0;
+  for (const node of document.querySelectorAll("input, textarea, select, [role=combobox]")) {
+    const type = String(node.getAttribute("type") || node.tagName).toLowerCase();
+    if (!skip.has(type) && visible(node)) fields += 1;
+  }
+  const submits = [...document.querySelectorAll("form button[type=submit], form input[type=submit]")].filter(visible).length;
+  return { fields, submits };
+}).catch(() => ({ fields: 99, submits: 99 }));
 // The form's own submit control first. A posting page can carry other buttons
 // whose names also say Apply, and taking the first name match means a click
 // the runner reports as landed may have gone to a control that never submits
@@ -1058,9 +1086,16 @@ for (const candidate of candidates) {
   }
   if (button) break;
 }
-if (!button) return { clicked: false, errors: [], href: before };
-await button.click();
-await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => undefined);
+if (!button) return { clicked: false, errors: [], href: before, invalid: [], navigated: false, reason: "no_control" };
+// Confirmation wording already on the page is the posting's own, never proof.
+const confirmedBefore = confirmedPattern.test(await bodyText());
+try {
+  await button.click({ timeout: 8000 });
+} catch (error) {
+  return { clicked: false, errors: [describe(error)], href: page.url(), invalid: [], navigated: false, reason: "click_failed" };
+}
+await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => undefined);
+await page.waitForTimeout(500);
 const errors = await page.$$eval(
   "[aria-invalid=true], [role=alert], .error, .field-error, [class*=error]",
   (nodes) => nodes
@@ -1093,5 +1128,23 @@ const invalid = await page.$$eval(
     })
     .slice(0, 10)
 ).catch(() => []);
-return { clicked: true, errors: [...new Set(errors)], href: page.url(), invalid: [...new Set(invalid)], navigated: page.url() !== before };
+// Three signs the page took it, read from the same page the click went to:
+// its address, its copy, and the form itself being gone. Any one of them is
+// weighed by the caller against the page's complaints and any code dialog.
+const href = page.url();
+const confirmedText = !confirmedBefore && confirmedPattern.test(await bodyText());
+const submitGone = !(await button.isVisible().catch(() => false));
+const left = await remains();
+const formGone = left.fields < 2 && left.submits === 0;
+return {
+  clicked: true,
+  confirmedText,
+  confirmedUrl: submittedUrl.test(href),
+  errors: [...new Set(errors)],
+  formGone,
+  href,
+  invalid: [...new Set(invalid)],
+  navigated: href !== before,
+  submitGone,
+};
 `;

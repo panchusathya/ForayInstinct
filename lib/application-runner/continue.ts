@@ -9,6 +9,7 @@ import {
   type ApplicationRunInput,
   durableWorkflowRunId,
   isInlineWorkflow,
+  liveRunStatuses,
   looksLikeVerificationCode,
 } from "@/lib/application-runner/types";
 import { resumeApplicationHook } from "@/lib/application-runner/workflow";
@@ -33,6 +34,27 @@ export async function continueApplication(input: {
   const run = await findApplicationRun({ applyUrl, scope: input.scope });
   if (!run) {
     throw new Error("No application run found for that posting URL.");
+  }
+  // A run that already ended takes no more input. A second "yes" on a
+  // completed run used to reach submitApplication again, and with the
+  // confirmation page's own Apply buttons in reach that was a second
+  // application, or a click on something unrelated.
+  if (!liveRunStatuses.has(run.status)) {
+    if (run.status === "completed") {
+      return {
+        applyUrl,
+        done: true as const,
+        executionId: run.id,
+        message: `The application for ${run.role} at ${applyUrl} was already submitted; there is nothing to continue.`,
+        status: "completed" as const,
+      };
+    }
+    return {
+      applyUrl,
+      executionId: run.id,
+      message: `This run ended (${run.status}) and cannot be continued. Start it again with start_application.`,
+      status: run.status,
+    };
   }
   const answered =
     input.answered && Object.keys(input.answered).length > 0

@@ -24,7 +24,8 @@ const AsyncFunction = (async () => undefined)
 export async function runPlaywrightCode(
   scope: EvalScope,
   code: string,
-  timeoutSec: number
+  timeoutSec: number,
+  track?: (settled: Promise<void>) => void
 ): Promise<PlaywrightResponse> {
   let compiled: (...values: unknown[]) => Promise<unknown>;
   try {
@@ -39,10 +40,16 @@ export async function runPlaywrightCode(
     }, timeoutSec * 1_000);
   });
   try {
-    const result = await Promise.race([
-      compiled(scope.browser, scope.page, scope.context),
-      timeout,
-    ]);
+    // The race answers the caller; the script itself may run on past a
+    // timeout, so whoever needs to know when it is really over is told.
+    const running = compiled(scope.browser, scope.page, scope.context);
+    track?.(
+      running.then(
+        () => undefined,
+        () => undefined
+      )
+    );
+    const result = await Promise.race([running, timeout]);
     return result === undefined
       ? { success: true }
       : { result: serialize(result), success: true };
