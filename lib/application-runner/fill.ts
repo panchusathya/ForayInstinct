@@ -34,12 +34,13 @@ import {
 } from "@/lib/application-runner/form-map";
 import {
   applyFillsCode,
+  attachFileCode,
   clickSubmitCode,
   collectEmptyRequiredFieldsCode,
   collectVisibleFieldsCode,
-  attachFileCode,
   detectLoginWallCode,
   enterVerificationCodeCode,
+  phoneRenderingIndexCode,
   reachApplicationFormCode,
   verificationCodeProbeCode,
 } from "@/lib/application-runner/playwright-scripts";
@@ -48,6 +49,7 @@ import {
   passLoginWall,
 } from "@/lib/application-runner/account";
 import { closeApplicationBrowser } from "@/lib/application-runner/browser";
+import { onlyUnset } from "@/lib/application-runner/profile-gate";
 import { fillRepeaters } from "@/lib/application-runner/repeaters";
 import type {
   ApplicationPauseReason,
@@ -106,7 +108,9 @@ const emptyRequiredSchema = z.object({
 function hasReadableLabel(label: string) {
   const text = label.replace(/\s+/gu, " ").trim();
   if (text.length < 2) return false;
-  return !/^[#.(]|\[name=|\)\[\d+\]$/u.test(text);
+  // Only the shapes a selector takes. A rule that rejected any label opening
+  // with a bracket also threw out "(Optional) Cover letter note".
+  return !/^#\S|^\w+\[name=|^\(\w+\)\[\d+\]$|^\[data-foray-id=/u.test(text);
 }
 
 /**
@@ -120,8 +124,11 @@ function hasReadableLabel(label: string) {
  * words instead of ours.
  */
 async function applyFills(sessionId: string, fills: MappedFill[]) {
-  if (fills.length === 0) return { refused: [], skipped: [] };
-  const applied = await parseResult(
+  if (fills.length === 0) return { refused: [], reported: true, skipped: [] };
+  // Comboboxes open, type and wait one at a time, so a batch of them needs
+  // more than the default budget; and a batch whose report never came back
+  // is said so, where it used to look exactly like one that filled everything.
+  const { data: applied, error } = await runScript(
     sessionId,
     applyFillsCode(fills),
     z.object({
@@ -130,8 +137,16 @@ async function applyFills(sessionId: string, fills: MappedFill[]) {
         .array(z.object({ options: z.array(z.string()), selector: z.string() }))
         .default([]),
       skipped: z.array(z.object({ reason: z.string(), selector: z.string() })),
-    })
+    }),
+    { label: "apply_fills", timeoutSec: 90 }
   );
+  if (applied === undefined) {
+    applicationExecutionLog({
+      error: (error ?? "no report").slice(0, 200),
+      event: "runner.fill_unreported",
+      fills: fills.length,
+    });
+  }
   const offered = new Map(
     (applied?.offered ?? []).map((row) => [row.selector, row.options] as const)
   );
@@ -161,6 +176,7 @@ async function applyFills(sessionId: string, fills: MappedFill[]) {
         options: offered.get(row.selector) ?? [],
         selector: row.selector,
       })),
+    reported: applied !== undefined,
     skipped,
   };
 }
@@ -187,22 +203,16 @@ async function rememberAnswers(input: {
   const bySelector = new Map(
     input.fields.map((field) => [field.selector, field] as const)
   );
-  const current: Record<string, unknown> = { ...input.profile };
   const patch: Record<string, unknown> = {};
   for (const fill of input.fills) {
     const field = bySelector.get(fill.selector);
     if (!field) continue;
     const candidate = profilePatchForAnswer(field, fill.value, input.profile);
     if (!candidate) continue;
-    for (const [key, value] of Object.entries(candidate)) {
-      const existing = current[key];
-      const alreadySet =
-        typeof existing === "string"
-          ? existing.trim() !== ""
-          : existing !== null;
-      if (alreadySet) continue;
-      patch[key] = value;
-    }
+    // The same "only what is unset" rule the resume import uses: an empty
+    // list counts as unset, so a LinkedIn URL the helper placed is kept
+    // where `[] !== null` used to read it as already there.
+    Object.assign(patch, onlyUnset(input.profile, candidate));
   }
   const stated = profilePatchOf(patch);
   if (!stated) return;
@@ -743,16 +753,35 @@ export async function submitApplication(
       (identity) => identity.phone,
       () => undefined
     );
-    const [tried, ...remaining] = phone ? phoneRenderings(phone) : [];
-    if (tried !== undefined && remaining.length > 0) {
+    const renderings = phone ? phoneRenderings(phone) : [];
+    if (renderings.length > 1) {
       const collected = await parseResult(
         input.browserSessionId,
         collectVisibleFieldsCode,
         z.object({ fields: z.array(visibleFieldSchema) }),
         "collect_fields"
       );
-      const phoneFields = (collected?.fields ?? []).filter((field) =>
-        isPhoneField(field)
+      // The number's own control only. Every phone-ish control used to be
+      // refilled, the country-code select and the extension with it.
+      const phoneFields = (collected?.fields ?? []).filter(
+        (field) =>
+          isPhoneField(field) &&
+          !["checkbox", "combobox", "radio", "select"].includes(field.tag) &&
+          !/country|code|ext\b|extension|type|prefix|carrier/iu.test(
+            field.label
+          )
+      );
+      const first = phoneFields[0];
+      const held = first
+        ? await parseResult(
+            input.browserSessionId,
+            phoneRenderingIndexCode(first.selector, renderings),
+            z.object({ index: z.number().int() }),
+            "phone_rendering"
+          )
+        : undefined;
+      const remaining = renderings.filter(
+        (_rendering, index) => index !== (held?.index ?? -1)
       );
       for (const rendering of remaining) {
         if (phoneFields.length === 0) break;

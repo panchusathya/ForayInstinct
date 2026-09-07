@@ -4,6 +4,7 @@
  * Shared browser-side helpers. Inlined into each script because every script is
  * evaluated on its own — there is no module scope to hold them.
  */
+import { twoPartTldList } from "@/lib/browser/domains";
 import {
   submissionConfirmationText,
   submissionUrlPattern,
@@ -39,11 +40,28 @@ const domHelpers = `
   const isFileInput = (node) => node.tagName.toLowerCase() === "input"
     && String(node.getAttribute("type") || "").toLowerCase() === "file";
   const candidateFacing = (node) => isFileInput(node) || (!assistiveHidden(node) && visible(node));
-  const selectorFor = (node, index) => {
+  /**
+   * A control with no id and no name gets a mark of our own, stamped on the
+   * node so it survives every later scan. The positional fallback it replaces
+   * shifted whenever the page gained a control (a repeater's Add moved every
+   * later selector by a few places, and the runner read the shifted ones as
+   * new) and was not valid CSS to begin with, so a fill aimed at it threw.
+   */
+  const selectorFor = (node, _index) => {
     if (node.id) return "#" + CSS.escape(node.id);
     const name = node.getAttribute("name");
     if (name) return node.tagName.toLowerCase() + "[name=" + JSON.stringify(name) + "]";
-    return "(" + node.tagName.toLowerCase() + ")[" + String(index) + "]";
+    let stamp = node.getAttribute("data-foray-id");
+    if (!stamp) {
+      stamp = "f" + Math.random().toString(36).slice(2, 10);
+      node.setAttribute("data-foray-id", stamp);
+    }
+    return '[data-foray-id="' + stamp + '"]';
+  };
+  /** The repeating section a control sits in, when one has been marked. */
+  const sectionOf = (node) => {
+    const holder = node.closest("[data-foray-section]");
+    return holder ? holder.getAttribute("data-foray-section") || "" : "";
   };
   /**
    * The control's own label only. An ancestor lookup would happily return a
@@ -187,6 +205,7 @@ ${domHelpers}
         name: node.getAttribute("name") || "",
         options: optionsFor(node),
         required: isRequired(node),
+        section: sectionOf(node),
         selector: selectorFor(node, index),
         tag: kind,
         type,
@@ -224,13 +243,15 @@ const matchOption = (options, values) => {
     const exact = options.find((option) => option.trim().toLowerCase() === wanted);
     if (exact) return exact;
   }
+  // A prefix settles it only when it settles it: "MA" begins Maine, Maryland
+  // and Massachusetts alike, and the first of those was taken.
   for (const value of values) {
     const wanted = value.toLowerCase();
-    const partial = options.find((option) => {
+    const partial = options.filter((option) => {
       const text = option.trim().toLowerCase();
       return text.startsWith(wanted) || wanted.startsWith(text);
     });
-    if (partial) return partial;
+    if (partial.length === 1) return partial[0];
   }
   return undefined;
 };
@@ -308,7 +329,15 @@ for (const fill of fills) {
         await page.keyboard.press("ArrowDown").catch(() => undefined);
       }
       await page.waitForTimeout(150);
-      const liveOptions = () => page.$$eval("[role=option]", (nodes) => nodes
+      // The widget's own list when it names one, so two open lists on a page
+      // cannot swap options; the whole page when it does not (a react-select
+      // portal without aria-controls still resolves this way).
+      const owned = (await locator.getAttribute("aria-controls").catch(() => null))
+        || (await locator.getAttribute("aria-owns").catch(() => null));
+      const ownedBox = owned ? page.locator("[id=" + JSON.stringify(owned) + "]") : undefined;
+      const ownedCount = ownedBox ? await ownedBox.locator("[role=option]").count().catch(() => 0) : 0;
+      const optionRoot = ownedBox && ownedCount > 0 ? ownedBox : page;
+      const liveOptions = () => optionRoot.locator("[role=option]").evaluateAll((nodes) => nodes
         .filter((node) => {
           const box = node.getBoundingClientRect();
           return box.width > 0 && box.height > 0;
@@ -351,7 +380,10 @@ for (const fill of fills) {
         skipped.push({ reason: "no-option", selector: fill.selector });
         continue;
       }
-      await page.getByRole("option", { name: wanted, exact: true }).first().click();
+      // Bounded: an option that never became clickable used to hold the whole
+      // batch past its budget, and a batch that never reported back read as
+      // one that filled everything.
+      await optionRoot.getByRole("option", { name: wanted, exact: true }).first().click({ timeout: 5000 });
       filled.push(fill.selector);
       continue;
     }
@@ -379,6 +411,24 @@ return { filled, href: page.url(), offered, skipped };
  * a fill pass — trusting the fill's own report would miss a value the page
  * accepted and then cleared.
  */
+/**
+ * Which of the number's shapes a control holds right now, as an index into
+ * the list given, or -1. The retry after a refused submit used to assume the
+ * first shape had been tried, which held only when the runner itself had
+ * typed it. Nothing but the index comes back.
+ */
+export const phoneRenderingIndexCode = (
+  selector: string,
+  renderings: string[]
+) => `
+const renderings = ${JSON.stringify(renderings)};
+const value = String(await page.locator(${JSON.stringify(selector)}).first().inputValue().catch(() => "")).trim();
+const digits = (text) => String(text || "").replace(/\\D/g, "");
+const exact = renderings.findIndex((rendering) => rendering === value);
+const same = digits(value) === "" ? -1 : renderings.findIndex((rendering) => digits(rendering) === digits(value));
+return { index: exact >= 0 ? exact : same };
+`;
+
 export const collectEmptyRequiredFieldsCode = `
 const empty = await page.$$eval(
   "input, textarea, select, [role=combobox], [role=listbox]",
@@ -599,11 +649,18 @@ let via = "";
 for (const method of order) {
   if (via) break;
   if (method === "path" && stagedPath && await attach("path", stagedPath)) via = "path";
-  if (method === "payload" && payload && await attach("payload", {
-    name: payload.name,
-    mimeType: payload.mimeType,
-    buffer: Buffer.from(payload.base64, "base64"),
-  })) via = "payload";
+  if (method === "payload" && payload) {
+    // Built inside the try: a Buffer this executor does not have used to
+    // throw here, before attach's own catch, and the DOM route below that
+    // needed nothing but atob in the page was never reached.
+    let files;
+    try {
+      files = { name: payload.name, mimeType: payload.mimeType, buffer: Buffer.from(payload.base64, "base64") };
+    } catch (error) {
+      attempts.push("payload: " + describeError(error));
+    }
+    if (files && await attach("payload", files)) via = "payload";
+  }
 }
 if (!via && payload && await domAttach()) via = "dom";
 if (!via) {
@@ -812,7 +869,16 @@ const controls = await page.evaluate(() => {
 });
 if (controls.length === 0) return { form: false, fields: before.count, clicked: "", href: page.url(), controls: 0 };
 const chosen = controls.find((control) => control.href) || controls[0];
-const site = (hostname) => hostname.toLowerCase().split(".").slice(-2).join(".");
+// The same registrable-domain rule the gateway pins a browser to, so a hop
+// the browser would die on is always called external here first. Two labels
+// alone read every .co.uk as one site.
+const twoPartTlds = new Set(${JSON.stringify([...twoPartTldList])});
+const site = (hostname) => {
+  const labels = String(hostname || "").toLowerCase().replace(/\\.$/, "").split(".").filter(Boolean);
+  if (labels.length <= 2) return labels.join(".");
+  const keep = twoPartTlds.has(labels.slice(-2).join(".")) ? 3 : 2;
+  return labels.slice(-keep).join(".");
+};
 if (chosen.href) {
   let target;
   try { target = new URL(chosen.href, page.url()); } catch { target = undefined; }
@@ -945,10 +1011,22 @@ const sections = await page.evaluate((locator) => {
     let container = node.parentElement;
     while (container && container !== document.body && headingOf(container) === "") container = container.parentElement;
     const scope = container && container !== document.body ? container : node.parentElement || document.body;
+    // Marked so the next scan can say which controls belong to this section:
+    // a block was read as "every selector not seen before", and controls
+    // elsewhere on the page whose selectors had shifted looked new.
+    let section = "";
+    if (scope !== document.body) {
+      section = scope.getAttribute("data-foray-section") || "";
+      if (!section) {
+        section = "s" + Math.random().toString(36).slice(2, 10);
+        scope.setAttribute("data-foray-section", section);
+      }
+    }
     return [{
       content: text(scope).slice(0, 2000),
       heading: headingOf(scope) || (node.getAttribute("aria-label") || "").slice(0, 120),
       index,
+      section,
       text: text(node).slice(0, 60),
     }];
   });

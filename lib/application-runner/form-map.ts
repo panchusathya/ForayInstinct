@@ -119,6 +119,20 @@ function selfIdentificationKey(
  * was offered as the answer and a Yes typed by the candidate was then stored
  * as their state.
  */
+/**
+ * Whether a question is about when the candidate can start. "Available"
+ * alone also asks about weekends, shifts, travel and interviews, and the
+ * start date went into every one of those.
+ */
+function asksForStartDate(key: string) {
+  if (
+    /weekend|shift|overtime|travel|relocat|interview|hours|nights/u.test(key)
+  ) {
+    return false;
+  }
+  return /start.?date|earliest.?start|\bavailab/u.test(key);
+}
+
 function asksForRegion(key: string) {
   return /\b(state|region|province)\b/u.test(
     key.replace(/united states( of america)?|\bu ?s ?a?\b/gu, " ")
@@ -127,10 +141,82 @@ function asksForRegion(key: string) {
 
 /** Whether a control asks for a phone number, by its wording or its type. */
 export function isPhoneField(field: VisibleFormField) {
+  const wording = `${field.label} ${field.name}`;
   return (
     field.type === "tel" ||
-    /phone|mobile|\btel\b/iu.test(`${field.label} ${field.name}`)
+    (/phone|mobile|\btel\b/iu.test(wording) && !/telecommut/iu.test(wording))
   );
+}
+
+/**
+ * US states by postal abbreviation. A region stored as "MA" met a state
+ * dropdown whose first prefix match was Maine; carrying the full name (and
+ * the abbreviation for a profile that stores the name) lets the exact match
+ * settle it.
+ */
+const usStates: Record<string, string> = {
+  AK: "Alaska",
+  AL: "Alabama",
+  AR: "Arkansas",
+  AZ: "Arizona",
+  CA: "California",
+  CO: "Colorado",
+  CT: "Connecticut",
+  DC: "District of Columbia",
+  DE: "Delaware",
+  FL: "Florida",
+  GA: "Georgia",
+  HI: "Hawaii",
+  IA: "Iowa",
+  ID: "Idaho",
+  IL: "Illinois",
+  IN: "Indiana",
+  KS: "Kansas",
+  KY: "Kentucky",
+  LA: "Louisiana",
+  MA: "Massachusetts",
+  MD: "Maryland",
+  ME: "Maine",
+  MI: "Michigan",
+  MN: "Minnesota",
+  MO: "Missouri",
+  MS: "Mississippi",
+  MT: "Montana",
+  NC: "North Carolina",
+  ND: "North Dakota",
+  NE: "Nebraska",
+  NH: "New Hampshire",
+  NJ: "New Jersey",
+  NM: "New Mexico",
+  NV: "Nevada",
+  NY: "New York",
+  OH: "Ohio",
+  OK: "Oklahoma",
+  OR: "Oregon",
+  PA: "Pennsylvania",
+  RI: "Rhode Island",
+  SC: "South Carolina",
+  SD: "South Dakota",
+  TN: "Tennessee",
+  TX: "Texas",
+  UT: "Utah",
+  VA: "Virginia",
+  VT: "Vermont",
+  WA: "Washington",
+  WI: "Wisconsin",
+  WV: "West Virginia",
+  WY: "Wyoming",
+};
+
+/** The other name of a US state: the full name for an abbreviation and back. */
+function stateAlternatives(value: string): string[] {
+  const trimmed = value.trim();
+  const byAbbreviation = usStates[trimmed.toUpperCase()];
+  if (trimmed.length === 2 && byAbbreviation) return [byAbbreviation];
+  const abbreviation = Object.entries(usStates).find(
+    ([, name]) => name.toLowerCase() === trimmed.toLowerCase()
+  )?.[0];
+  return abbreviation ? [abbreviation] : [];
 }
 
 /**
@@ -311,13 +397,11 @@ export function profilePatchForAnswer(
     const authorization = workAuthorizationFromAnswer(value);
     return authorization ? { workAuthorization: authorization } : undefined;
   }
-  if (/city/u.test(key)) return { locationCity: value };
+  if (/\bcity\b/u.test(key)) return { locationCity: value };
   if (asksForRegion(key)) return { locationRegion: value };
   if (/zip|postal/u.test(key)) return { locationPostalCode: value };
   if (/headline|title/u.test(key)) return { headline: value };
-  if (/start.?date|earliest.?start|available/u.test(key)) {
-    return { earliestStartDate: value };
-  }
+  if (asksForStartDate(key)) return { earliestStartDate: value };
   if (/salary|compensation|pay.?expect/u.test(key)) {
     const digits = value.replace(/[^0-9]/gu, "");
     if (digits === "") return undefined;
@@ -451,7 +535,13 @@ function valueForField(
   if (/e.?mail/u.test(key) || field.type === "email") {
     return identity.email ?? profile.contactEmail;
   }
-  if (/(mobile|phone|tel)/u.test(key) || field.type === "tel") {
+  // Whole words only: "telecommuting" is not a telephone, and the candidate's
+  // number was typed into "Are you open to telecommuting?".
+  if (
+    field.type === "tel" ||
+    (/\b(?:mobile|phone|telephone|tel)\b/u.test(key) &&
+      !/telecommut/u.test(key))
+  ) {
     return identity.phone ? phoneRenderings(identity.phone)[0] : undefined;
   }
   if (/first.?name|given.?name|legal.?first/u.test(key)) {
@@ -478,7 +568,8 @@ function valueForField(
     return workAuthorizationLabels[profile.workAuthorization];
   }
   if (/relocat/u.test(key)) return yesNo(profile.willingToRelocate);
-  if (/city/u.test(key)) return profile.locationCity;
+  // "In what capacity..." contains city; the home city went into it.
+  if (/\bcity\b/u.test(key)) return profile.locationCity;
   if (asksForRegion(key)) return profile.locationRegion;
   if (/zip|postal/u.test(key)) return profile.locationPostalCode;
   if (/country/u.test(key)) return profile.locationCountryCode;
@@ -491,9 +582,7 @@ function valueForField(
     return profile.links.find((link) => /github/iu.test(link.label + link.url))
       ?.url;
   }
-  if (/start.?date|earliest.?start|available/u.test(key)) {
-    return profile.earliestStartDate;
-  }
+  if (asksForStartDate(key)) return profile.earliestStartDate;
   if (/salary|compensation|pay.?expect/u.test(key)) {
     if (profile.salaryMin == null) return undefined;
     return String(profile.salaryMin);
@@ -532,6 +621,11 @@ function alternativesFor(field: VisibleFormField, value: string) {
   // refused for the phone can try the next one without asking anyone.
   if (isPhoneField(field)) {
     for (const rendering of phoneRenderings(value)) alternatives.add(rendering);
+  }
+  if (asksForRegion(key)) {
+    for (const alternative of stateAlternatives(value)) {
+      alternatives.add(alternative);
+    }
   }
   alternatives.delete(value);
   return alternatives.size > 0 ? [...alternatives] : undefined;
@@ -575,11 +669,13 @@ function resolveAgainstOptions(field: VisibleFormField, value: string) {
     (option) => option.trim().toLowerCase() === wanted
   );
   if (exact) return exact;
-  const partial = options.find((option) => {
+  // A prefix settles it only when it settles it: "MA" begins Maine, Maryland
+  // and Massachusetts alike, and the form was sent with Maine.
+  const partial = options.filter((option) => {
     const text = option.trim().toLowerCase();
     return text.startsWith(wanted) || wanted.startsWith(text);
   });
-  if (partial) return partial;
+  if (partial.length === 1) return partial[0];
   const affirmative = affirmativeAnswer(value);
   if (affirmative === undefined) return undefined;
   return options.find((option) =>

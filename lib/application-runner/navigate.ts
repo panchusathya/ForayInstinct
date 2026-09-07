@@ -48,7 +48,7 @@ const submitControl =
 
 /** The control that moves a multi-page form to its next page. */
 const advanceControl =
-  /^(?:save (?:and|&) (?:continue|next)|continue|next(?: step| page| section)?|proceed|review(?: application| and submit| & submit)?|go to (?:next|review))$/iu;
+  /^(?:save (?:and|&) (?:continue|next)|continue(?: to [\w ]{1,40})?|next(?: step| page| section)?|proceed|review(?: application| and submit| & submit)?|go to (?:next|review))$/iu;
 
 /**
  * Controls the runner must never choose to move a form forward: they go
@@ -56,7 +56,7 @@ const advanceControl =
  * that other steps own. Checked before and after the model answers.
  */
 const deniedControl =
-  /back|previous|cancel|sign ?in|log ?in|sign ?out|log ?out|sign ?up|register|create account|apply with|autofill|attach|upload|browse|\badd\b|remove|delete|edit|clear|dropbox|google ?drive|enter manually|skip|help|privacy|cookie|terms|menu|search|share|save (?:for later|draft|job|and exit)|withdraw|exit|close|dismiss/iu;
+  /\b(?:back|previous|cancel|sign ?in|log ?in|login|sign ?out|log ?out|logout|sign ?up|signup|register|create account|apply with|autofill|attach|upload|browse|add|remove|delete|edit|clear|dropbox|google ?drive|enter manually|skip|help|privacy|cookie|cookies|terms|menu|search|share|withdraw|exit|close|dismiss)\b|save (?:for later|draft|job|and exit)/iu;
 
 export type NextStep =
   | {
@@ -66,10 +66,19 @@ export type NextStep =
     }
   | { action: "stuck"; controls: string[]; via: "heuristic" | "model" };
 
-/** The forward controls a page offers, by the wording the page uses. */
+/**
+ * The forward controls a page offers, by the wording the page uses. A
+ * control that reads as a submit or an advance is kept whatever else its
+ * wording contains: "Continue to Background Check" was thrown out for the
+ * "back" in it, and the page it was the only way forward from read as stuck.
+ */
 function classifyControls(controls: PageControl[]) {
+  const forward = (control: PageControl) =>
+    submitControl.test(control.text) || advanceControl.test(control.text);
   const candidates = controls.filter(
-    (control) => !control.disabled && !deniedControl.test(control.text)
+    (control) =>
+      !control.disabled &&
+      (forward(control) || !deniedControl.test(control.text))
   );
   return {
     advance: candidates.filter((control) => advanceControl.test(control.text)),

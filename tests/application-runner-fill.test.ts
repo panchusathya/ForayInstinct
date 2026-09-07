@@ -1520,7 +1520,27 @@ describe("a submit refused for the phone number", () => {
         return { result: { present: false }, success: true };
       }
       if (request.code.includes("const fields = await")) {
-        return { result: { fields: [phoneField] }, success: true };
+        return {
+          result: {
+            fields: [
+              {
+                label: "Phone country code",
+                name: "country",
+                options: ["+1", "+44"],
+                required: true,
+                selector: "#country",
+                tag: "select",
+                type: "select-one",
+              },
+              phoneField,
+            ],
+          },
+          success: true,
+        };
+      }
+      if (request.code.includes("const renderings = ")) {
+        // The page holds the ten digits already, which is the first shape.
+        return { result: { index: 0 }, success: true };
       }
       if (request.code.includes("const fills = ")) {
         return { result: { filled: ["#phone"], skipped: [] }, success: true };
@@ -1546,6 +1566,8 @@ describe("a submit refused for the phone number", () => {
       );
     expect(refill).toContain('"(415) 555-0100"');
     expect(refill).not.toContain("+14155550100");
+    // The country-code select is not the number's control.
+    expect(refill).not.toContain("#country");
   });
 
   it("does not retry a refusal that names another field", async () => {
@@ -1742,5 +1764,82 @@ describe("a login wall that is still up after the account step", () => {
       "still asks to create an account after the runner created one"
     );
     expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+});
+
+describe("a fill pass whose report never came back", () => {
+  it("is logged as unreported and the page is still checked for blanks", async () => {
+    // A timed-out batch returned as "nothing refused", which read exactly like
+    // one that filled everything.
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const input = {
+      applyUrl: "https://jobs.example/role/1",
+      browserSessionId: "browser-1",
+      company: "Example",
+      executionId: "exec-1",
+      role: "Analyst",
+      rootSessionId: "root-1",
+      scope: { userId: "alice", workspaceId: "workspace:alice" },
+    };
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { result: { loginWall: false }, success: true };
+      }
+      if (request.code.includes("const found = await page.evaluate")) {
+        return { result: { present: false }, success: true };
+      }
+      if (request.code.includes("const fields = await")) {
+        return {
+          result: {
+            fields: [
+              {
+                label: "Email",
+                name: "email",
+                required: true,
+                selector: "#email",
+                tag: "input",
+                type: "email",
+              },
+              {
+                label: "First name",
+                name: "first",
+                required: true,
+                selector: "#first",
+                tag: "input",
+                type: "text",
+              },
+            ],
+          },
+          success: true,
+        };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const fills = ")) {
+        return { error: "Execution timed out after 90s", success: false };
+      }
+      return { result: {}, success: true };
+    });
+    const result = await fillVisibleForm(input);
+    expect(result).toEqual({ continue: true });
+    const logged = info.mock.calls.map((call) => JSON.stringify(call));
+    expect(logged.some((line) => line.includes("runner.fill_unreported"))).toBe(
+      true
+    );
+    const codes = mocks.executePlaywright.mock.calls.map(
+      (call) => call[1].code
+    );
+    expect(codes.some((code) => code.includes("const empty = await"))).toBe(
+      true
+    );
+    const batch = mocks.executePlaywright.mock.calls.find((call) =>
+      call[1].code.includes("const fills = ")
+    );
+    expect(
+      z.object({ timeoutSec: z.number().optional() }).parse(batch?.[1] ?? {})
+        .timeoutSec
+    ).toBe(90);
+    info.mockRestore();
   });
 });

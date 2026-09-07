@@ -225,6 +225,28 @@ describe("mapping one profile entry onto a freshly added block", () => {
     ]);
   });
 
+  it("does not read Gender, Attendance or Candidate as date controls", () => {
+    const { fills, leftover } = mapEntryToBlock(
+      [
+        field("#gender", "Gender of supervisor", {
+          options: ["Female", "Male", "Prefer not to say"],
+          tag: "select",
+          type: "select-one",
+        }),
+        field("#attendance", "Attendance record"),
+        field("#candidate", "Candidate reference number"),
+        field("#start", "Start date", { type: "month" }),
+      ],
+      pastJob
+    );
+    expect(fills).toEqual([{ selector: "#start", value: "2019-06" }]);
+    expect(leftover.map((row) => row.selector)).toEqual([
+      "#gender",
+      "#attendance",
+      "#candidate",
+    ]);
+  });
+
   it("takes unnamed date controls in page order, start before end", () => {
     const { fills } = mapEntryToBlock(
       [
@@ -346,6 +368,68 @@ describe("growing a page's repeating sections", () => {
         mapped: 7,
       })
     );
+  });
+
+  it("attributes only controls inside the section to the new block", async () => {
+    // A control elsewhere on the page whose selector had shifted used to be
+    // read as part of the entry just added, and filled from it.
+    let adds = 0;
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("const sections = await")) {
+        return {
+          result: {
+            sections: [
+              {
+                content:
+                  adds === 0
+                    ? "Work Experience Add"
+                    : "Work Experience Analyst Acme Capital Associate Beta Advisors Add",
+                heading: "Work Experience",
+                index: 9,
+                section: "s-work",
+                text: "Add",
+              },
+            ],
+          },
+          success: true,
+        };
+      }
+      if (request.code.includes("const fields = await")) {
+        return {
+          result: {
+            fields: [
+              field("#country", "Country"),
+              { ...field("#preferred", "Preferred name"), section: "" },
+              ...workBlock(1).map((row) => ({ ...row, section: "s-work" })),
+            ],
+          },
+          success: true,
+        };
+      }
+      return {
+        result: { filled: [], offered: [], skipped: [] },
+        success: true,
+      };
+    });
+    mocks.click.mockImplementation(async () => {
+      adds += 1;
+      return {
+        clicked: true,
+        errors: [],
+        heading: "My Experience",
+        href: "",
+        navigated: false,
+      };
+    });
+    const grown = await fillRepeaters(input);
+    expect(grown.map((row) => row.selector)).not.toContain("#preferred");
+    expect(grown.map((row) => row.selector)).toContain("#company-1");
+    // The helper never hears about the control outside the section.
+    for (const call of mocks.helper.mock.calls) {
+      expect(call[0].fields.map((row) => row.selector)).not.toContain(
+        "#preferred"
+      );
+    }
   });
 
   it("skips an entry the section already shows, so a second pass does not double up", async () => {

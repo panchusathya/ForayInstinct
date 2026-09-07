@@ -137,7 +137,10 @@ async function adoptResumeFacts(
  * the links the candidate typed rather than being dropped because they typed
  * any at all.
  */
-function onlyUnset(stored: CandidateProfile, patch: CandidateProfilePatch) {
+export function onlyUnset(
+  stored: CandidateProfile,
+  patch: CandidateProfilePatch
+) {
   const current: Record<string, unknown> = { ...stored };
   const kept: Record<string, unknown> = {};
   const { links, ...rest } = patch;

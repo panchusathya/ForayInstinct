@@ -23,6 +23,7 @@ const sectionSchema = z.object({
   content: z.string().default(""),
   heading: z.string().default(""),
   index: z.number().int().min(0),
+  section: z.string().default(""),
   text: z.string(),
 });
 
@@ -33,10 +34,13 @@ const fieldSchema = z.object({
   name: z.string(),
   options: z.array(z.string()).optional(),
   required: z.boolean(),
+  section: z.string().default(""),
   selector: z.string(),
   tag: z.string(),
   type: z.string(),
 });
+
+type ScannedField = z.infer<typeof fieldSchema>;
 
 /** How many entries a form is given, whatever the profile holds. */
 const maxWorkEntries = 5;
@@ -80,8 +84,10 @@ function entryKey(entry: ProfileEntry) {
   return ("company" in entry ? entry.company : entry.school).trim();
 }
 
+// Whole words: "Gender", "Attendance" and "Candidate" are not dates, and a
+// start date went into each of them.
 const isDateField = (field: VisibleFormField) =>
-  /month|year|date|\bfrom\b|\bto\b|start|end/iu.test(field.label) ||
+  /\b(?:month|year|date|from|to|start|end)\b/iu.test(field.label) ||
   ["date", "month"].includes(field.type);
 
 function monthFill(selector: string, month: number): MappedFill {
@@ -190,10 +196,10 @@ export function mapEntryToBlock(
     else leftover.push(field);
   }
   const starts = dateFields.filter((field) =>
-    /start|from|begin/iu.test(field.label)
+    /\b(?:start|from|begin)/iu.test(field.label)
   );
   const ends = dateFields.filter((field) =>
-    /end|\bto\b|until|finish|complet|graduat/iu.test(field.label)
+    /\b(?:end|to|until|finish|complet|graduat)/iu.test(field.label)
   );
   const unnamed = dateFields.filter(
     (field) => !starts.includes(field) && !ends.includes(field)
@@ -291,7 +297,14 @@ export async function fillRepeaters(input: {
         text: current.text,
       });
       const after = await readFields(input.browserSessionId);
-      const block = after.filter((field) => !known.has(field.selector));
+      // New controls inside this section only. Selectors are stable now, and
+      // the section is marked, so a control elsewhere on the page can no
+      // longer be read as part of the entry just added.
+      const block = after.filter(
+        (field) =>
+          !known.has(field.selector) &&
+          (current.section === "" || field.section === current.section)
+      );
       for (const field of block) known.add(field.selector);
       added.push(...block);
       const { fills, leftover } =
@@ -340,7 +353,7 @@ async function readSections(sessionId: string): Promise<RepeaterSection[]> {
   return parsed.success ? parsed.data.sections : [];
 }
 
-async function readFields(sessionId: string): Promise<VisibleFormField[]> {
+async function readFields(sessionId: string): Promise<ScannedField[]> {
   const response = await browserProvider.executePlaywright(sessionId, {
     code: collectVisibleFieldsCode,
   });
@@ -353,6 +366,7 @@ async function readFields(sessionId: string): Promise<VisibleFormField[]> {
 async function apply(sessionId: string, fills: MappedFill[]) {
   const response = await browserProvider.executePlaywright(sessionId, {
     code: applyFillsCode(fills),
+    timeoutSec: 90,
   });
   const parsed = z
     .object({
