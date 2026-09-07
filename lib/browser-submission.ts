@@ -12,6 +12,20 @@ export const maxApplicationReviewCaptures = 6;
  */
 export const maxClaimedSubmissionScreenshots = maxApplicationReviewCaptures + 1;
 
+/** A confirmation address: the ATS moved to a page named for the submission. */
+export const submissionUrlPattern =
+  /applicationSubmitted|\/confirmation(?:\/|$)/iu;
+
+/**
+ * Confirmation copy an ATS renders on the page it leaves the candidate on.
+ * Greenhouse, Lever and Ashby confirm this way, on the same address the form
+ * had. It is evidence only right after a submit click, and only when the same
+ * words were not already on the page before it: a posting's own "once your
+ * application has been submitted" must never count.
+ */
+export const submissionConfirmationText =
+  /thank you for applying|application (?:has been |was )?(?:submitted|received)|we(?:'ve| have) received your application|successfully submitted/iu;
+
 /**
  * Conservative evidence that an ATS already accepted an application. The
  * worker's Playwright return value is not a source of truth: it is often
@@ -25,13 +39,18 @@ export function observedSubmission(
   _body?: string
 ): string | undefined {
   const location = browserPageLocation(url) ?? url;
-  if (
-    /applicationSubmitted/i.test(location) ||
-    /\/confirmation(?:\/|$)/i.test(location)
-  ) {
-    return "application submitted";
-  }
-  return undefined;
+  return submissionUrlPattern.test(location)
+    ? "application submitted"
+    : undefined;
+}
+
+/**
+ * What an image's own bytes say it is. The gateway's viewport screenshots are
+ * JPEG while the sliced ones are PNG, and a row stamped with the wrong type
+ * reaches the channel as a picture that will not open.
+ */
+export function imageMimeType(bytes: Uint8Array): "image/jpeg" | "image/png" {
+  return bytes[0] === 0xff && bytes[1] === 0xd8 ? "image/jpeg" : "image/png";
 }
 
 /** Origin and pathname only, matching browser-run checkpoint `page` values. */

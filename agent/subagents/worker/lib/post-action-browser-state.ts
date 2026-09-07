@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { browserProvider } from "@/lib/browser";
+import { submissionUrlPattern } from "@/lib/browser-submission";
 
 const postActionBrowserStateSchema = z.object({
   botOrChallenge: z.boolean(),
@@ -54,7 +55,7 @@ const inspect = () => {
     const source = /greenhouse/iu.test(location.hostname) ? "Greenhouse" : location.hostname;
     state.otpHint ??= source;
   }
-  if (/applicationSubmitted|\\/confirmation(?:\\/|$)/i.test(location.href)) {
+  if (new RegExp(${JSON.stringify(submissionUrlPattern.source)}, "i").test(location.href)) {
     state.submitted = true;
   }
   const captchaSrc = (value) => /recaptcha|hcaptcha|turnstile|challenges\\.cloudflare/.test(String(value || "").toLowerCase());

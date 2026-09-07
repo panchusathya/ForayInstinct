@@ -14,6 +14,7 @@ import { recordBrowserRunCheckpoint } from "@/db/services/browser-run-checkpoint
 import { updateApplicationRun } from "@/db/services/application-executions";
 import { applicationExecutionLog } from "@/lib/application-execution";
 import { browserProvider } from "@/lib/browser";
+import { observedSubmission } from "@/lib/browser-submission";
 import {
   forgetRunAnswers,
   readRunAnswers,
@@ -759,7 +760,7 @@ export async function submitApplication(
       }
     }
   }
-  const { click, complaint, submitted, verification } = outcome;
+  const { click, complaint, scriptError, submitted, verification } = outcome;
   await recordBrowserRunCheckpoint(input.scope, input.browserSessionId, {
     action: "submit",
     executionId: input.executionId,
@@ -778,14 +779,62 @@ export async function submitApplication(
     applyUrl: input.applyUrl,
     message: applicationPauseMessage(
       "user_input",
-      click?.clicked === false
-        ? `no submit control was found on ${input.applyUrl}.`
-        : complaint.length > 0
-          ? `the submission was refused: ${complaint.join("; ")}.`
-          : `the submit was clicked but ${input.applyUrl} never confirmed it. The application is not in.`
+      click === undefined
+        ? // The script never came back, so whether the click landed is
+          // unknown. Saying "not confirmed" here invited a second click on
+          // an application that may well be in.
+          `the submit script on ${input.applyUrl} did not finish${scriptError ? ` (${scriptError})` : ""}, so whether the click landed is unknown. Check the page before anything is clicked again.`
+        : !click.clicked
+          ? click.reason === "click_failed"
+            ? `the submit control on ${input.applyUrl} could not be clicked: ${complaint.join("; ") || "the browser gave no reason"}.`
+            : `no submit control was found on ${input.applyUrl}.`
+          : complaint.length > 0
+            ? `the submission was refused: ${complaint.join("; ")}.`
+            : `the submit was clicked but ${input.applyUrl} never confirmed it. The application is not in.`
     ),
     pause: "user_input",
   };
+}
+
+const submitClickSchema = z.object({
+  clicked: z.boolean(),
+  confirmedText: z.boolean().default(false),
+  confirmedUrl: z.boolean().default(false),
+  errors: z.array(z.string()).default([]),
+  formGone: z.boolean().default(false),
+  href: z.string().default(""),
+  invalid: z.array(z.string()).default([]),
+  navigated: z.boolean().default(false),
+  reason: z.enum(["click_failed", "no_control"]).optional(),
+  submitGone: z.boolean().default(false),
+});
+
+type SubmitClick = z.infer<typeof submitClickSchema>;
+
+/**
+ * Whether the application went in, from everything read after the click.
+ *
+ * The address is the strongest sign and stands on its own: the probe's
+ * confirmation URL, or the same rule on the address the click left the page
+ * at. Confirmation copy, or the form and its submit control being gone, count
+ * only when the page raised no complaint and put up no code dialog; either of
+ * those is a page that has more to say, and Greenhouse's emailed-code dialog
+ * covers the form exactly like a confirmation would.
+ */
+export function judgeSubmission(input: {
+  click: SubmitClick | undefined;
+  complaint: string[];
+  probe: { submitted: boolean } | undefined;
+  verification: unknown;
+}): boolean {
+  if (input.probe?.submitted === true) return true;
+  const { click } = input;
+  if (!click?.clicked) return false;
+  if (click.confirmedUrl || observedSubmission(click.href) !== undefined) {
+    return true;
+  }
+  if (input.verification || input.complaint.length > 0) return false;
+  return click.confirmedText || (click.submitGone && click.formGone);
 }
 
 /** The shape of a phone rendering, for the log; never the number. */
@@ -804,29 +853,30 @@ function phoneRenderingName(rendering: string) {
 async function clickAndRead(
   input: ApplicationRunInput & { browserSessionId: string }
 ) {
-  const click = await parseResult(
+  // The click gets a budget of its own: the script bounds its click and its
+  // wait, and the request outlasts both, so a slow ATS cannot leave the
+  // runner reading "no submit control" while the click it never heard about
+  // lands anyway.
+  const { data: click, error: scriptError } = await runScript(
     input.browserSessionId,
     clickSubmitCode,
-    z.object({
-      clicked: z.boolean(),
-      errors: z.array(z.string()).default([]),
-      invalid: z.array(z.string()).default([]),
-      navigated: z.boolean().default(false),
-    }),
-    "click_submit"
+    submitClickSchema,
+    { label: "click_submit", timeoutSec: 60 }
   );
   const probe = await inspectPostActionBrowserState(
     input.browserSessionId
   ).catch(() => undefined);
-  const submitted = probe?.submitted === true;
   // A submit that opens a verification step is neither in nor refused. The
   // DoorDash click came back "clicked, no navigation, no errors, not
   // submitted" and was reported as a failed submit, when Greenhouse had put up
   // its emailed-code dialog. That is a pause the agent knows how to resolve,
   // from Gmail first and the candidate second, so it has to be named as one.
-  const verification = submitted
-    ? undefined
-    : await verificationAsked(input.browserSessionId, probe);
+  // It is read before the verdict, because a code dialog vetoes the softer
+  // signs of a submission: it covers the form exactly as a confirmation would.
+  const verification =
+    probe?.submitted === true
+      ? undefined
+      : await verificationAsked(input.browserSessionId, probe);
   // The page's visible error text, and failing that the browser's own verdict
   // on each control. A form can refuse a submit with no message rendered at
   // all, which is how a blocked submit reported "errors: none".
@@ -834,22 +884,31 @@ async function clickAndRead(
     .map((error) => error.replace(/\s+/gu, " ").trim())
     .filter(Boolean)
     .slice(0, 5);
+  const submitted = judgeSubmission({ click, complaint, probe, verification });
   applicationExecutionLog({
     apply_url: input.applyUrl,
     clicked: click?.clicked === true,
+    confirmed_text: click?.confirmedText === true,
+    confirmed_url: click?.confirmedUrl === true || probe?.submitted === true,
     errors: complaint.join(" | ") || "none",
-    invalid: (click?.invalid ?? []).length,
     event: "runner.submit",
     execution_id: input.executionId,
+    form_gone: click?.formGone === true,
+    invalid: (click?.invalid ?? []).length,
     navigated: click?.navigated === true,
+    reason: click?.reason ?? "none",
+    script_error: scriptError ?? "none",
     status: submitted
       ? "completed"
       : verification
         ? `verification_${verification.channel}`
-        : "blocked",
+        : click === undefined
+          ? "unknown"
+          : "blocked",
+    submit_gone: click?.submitGone === true,
     submitted,
   });
-  return { click, complaint, submitted, verification };
+  return { click, complaint, scriptError, submitted, verification };
 }
 
 const verificationProbeSchema = z.object({

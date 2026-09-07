@@ -31,6 +31,7 @@ import {
 import { urlRegistrableDomain } from "./domains.ts";
 import { gatewayError, sessionGone, sessionNotFound } from "./errors.ts";
 import { runPlaywrightCode } from "./eval.ts";
+import { InflightGuard } from "./inflight.ts";
 import { captureScreenshots } from "./screenshot.ts";
 
 const defaultTtlSeconds = 900;
@@ -117,6 +118,7 @@ export interface GatewaySessions {
 }
 
 export class SessionRegistry implements GatewaySessions {
+  private readonly inflight = new InflightGuard();
   private readonly entries = new Map<string, SessionEntry>();
   private readonly endpoint: string;
 
@@ -470,10 +472,13 @@ export class SessionRegistry implements GatewaySessions {
   ): Promise<PlaywrightResponse> {
     const entry = this.requireLive(id);
     const page = await this.currentPage(entry);
-    return runPlaywrightCode(
-      { browser: entry.browser, context: entry.context, page },
-      request.code,
-      request.timeout_sec ?? 30
+    return this.inflight.run(id, (track) =>
+      runPlaywrightCode(
+        { browser: entry.browser, context: entry.context, page },
+        request.code,
+        request.timeout_sec ?? 30,
+        track
+      )
     );
   }
 

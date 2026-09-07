@@ -13,6 +13,7 @@ export const gatewayErrorCodeSchema = z.enum([
   "session_not_found",
   "cross_domain_navigation",
   "execution_failed",
+  "execution_in_flight",
   "invalid_request",
   "unauthorized",
   "gateway_error",

@@ -1,13 +1,14 @@
 import { and, asc, desc, eq, inArray, isNull, lt } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
-import { maxClaimedSubmissionScreenshots } from "@/lib/browser-submission";
+import {
+  imageMimeType,
+  maxClaimedSubmissionScreenshots,
+} from "@/lib/browser-submission";
 import {
   applicationExecutions,
   applicationSubmissionScreenshots,
   db,
 } from "@/db";
-
-const pngMimeType = "image/png";
 
 /**
  * How long an undelivered capture is still worth showing. A thread that reads
@@ -39,7 +40,7 @@ export async function saveApplicationSubmissionScreenshot(
     createdAt: new Date().toISOString(),
     createdByUserId: scope.userId,
     kind: screenshot.kind,
-    mimeType: pngMimeType,
+    mimeType: imageMimeType(screenshot.png),
     page: screenshot.page,
     pngBase64: screenshot.png.toString("base64"),
     role: screenshot.role ?? "",

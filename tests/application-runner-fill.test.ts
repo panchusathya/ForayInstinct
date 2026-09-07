@@ -114,8 +114,10 @@ vi.mock("@/db/services/application-executions", () => ({
 import {
   enterVerificationCode,
   fillVisibleForm,
+  judgeSubmission,
   submitApplication,
 } from "@/lib/application-runner/fill";
+import { clickSubmitCode } from "@/lib/application-runner/playwright-scripts";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -440,6 +442,207 @@ describe("submitApplication", () => {
     expect(mocks.updateApplicationRun).toHaveBeenCalledWith(
       expect.objectContaining({ status: "completed" })
     );
+  });
+
+  const afterClick = (click: Record<string, unknown>, probe = {}) => {
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const found = await page.evaluate")) {
+        return { result: { present: false, ...probe }, success: true };
+      }
+      return { result: click, success: true };
+    });
+    mocks.inspect.mockResolvedValue({ submitted: false });
+  };
+
+  it("reports done when the page confirms in words on the address it already had", async () => {
+    // Greenhouse, Lever and Ashby confirm on the same URL. The only sensor
+    // was a URL rule, so a submitted application read as "not in" and the
+    // next approval clicked submit again.
+    afterClick({
+      clicked: true,
+      confirmedText: true,
+      errors: [],
+      navigated: false,
+    });
+    await expect(submit()).resolves.toMatchObject({ done: true });
+  });
+
+  it("reports done when the form and its submit control are gone with nothing complained", async () => {
+    afterClick({
+      clicked: true,
+      errors: [],
+      formGone: true,
+      navigated: false,
+      submitGone: true,
+    });
+    await expect(submit()).resolves.toMatchObject({ done: true });
+  });
+
+  it("does not read a code dialog over the form as a confirmation", async () => {
+    afterClick(
+      {
+        clicked: true,
+        errors: [],
+        formGone: true,
+        navigated: false,
+        submitGone: true,
+      },
+      {
+        channel: "email",
+        hint: "Greenhouse",
+        present: true,
+        prompt: "Enter the code",
+      }
+    );
+    await expect(submit()).resolves.toMatchObject({ pause: "email_otp" });
+  });
+
+  it("does not read a refused form as gone", async () => {
+    afterClick({
+      clicked: true,
+      confirmedText: true,
+      errors: ["Resume/CV is required."],
+      formGone: true,
+      navigated: false,
+      submitGone: true,
+    });
+    const result = await submit();
+    expect(result).toMatchObject({ pause: "user_input" });
+    expect("message" in result ? result.message : "").toContain(
+      "Resume/CV is required."
+    );
+  });
+
+  it("says the submit script did not finish, never that the page refused", async () => {
+    // A timed-out script leaves the click's fate unknown, and the old wording
+    // ("never confirmed it. The application is not in.") invited a second
+    // click on an application that may well have gone in.
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      if (request.code.includes("const found = await page.evaluate")) {
+        return { result: { present: false }, success: true };
+      }
+      return { error: "Execution timed out after 60s", success: false };
+    });
+    mocks.inspect.mockResolvedValue({ submitted: false });
+    const result = await submit();
+    expect(result).toMatchObject({ pause: "user_input" });
+    const message = "message" in result ? result.message : "";
+    expect(message).toContain("did not finish");
+    expect(message).not.toContain("The application is not in");
+  });
+
+  it("asks for a budget that outlasts the click and the wait it bounds", async () => {
+    afterClick({
+      clicked: true,
+      confirmedText: true,
+      errors: [],
+      navigated: false,
+    });
+    await submit();
+    expect(clickSubmitCode).toContain("click({ timeout: 8000 })");
+    expect(clickSubmitCode).toContain('"networkidle", { timeout: 8000 }');
+    // Confirmation copy already on the page before the click never counts.
+    expect(clickSubmitCode).toContain("confirmedBefore");
+    const budget = mocks.executePlaywright.mock.calls.find((call) =>
+      call[1].code.includes("confirmedBefore")
+    );
+    expect(
+      z.object({ timeoutSec: z.number().optional() }).parse(budget?.[1] ?? {})
+        .timeoutSec
+    ).toBe(60);
+  });
+});
+
+describe("judging a submission from what the click left behind", () => {
+  const click = (extra: Record<string, unknown>) =>
+    z
+      .object({
+        clicked: z.boolean(),
+        confirmedText: z.boolean().default(false),
+        confirmedUrl: z.boolean().default(false),
+        errors: z.array(z.string()).default([]),
+        formGone: z.boolean().default(false),
+        href: z.string().default("https://jobs.example/role/1"),
+        invalid: z.array(z.string()).default([]),
+        navigated: z.boolean().default(false),
+        submitGone: z.boolean().default(false),
+      })
+      .parse({ clicked: true, ...extra });
+
+  it("trusts the address on its own and the softer signs only when the page is quiet", () => {
+    expect(
+      judgeSubmission({
+        click: undefined,
+        complaint: [],
+        probe: { submitted: true },
+        verification: undefined,
+      })
+    ).toBe(true);
+    expect(
+      judgeSubmission({
+        click: click({ href: "https://jobs.example/role/1/confirmation" }),
+        complaint: ["Resume is required."],
+        probe: undefined,
+        verification: undefined,
+      })
+    ).toBe(true);
+    expect(
+      judgeSubmission({
+        click: click({ confirmedText: true }),
+        complaint: [],
+        probe: undefined,
+        verification: undefined,
+      })
+    ).toBe(true);
+    expect(
+      judgeSubmission({
+        click: click({ formGone: true, submitGone: true }),
+        complaint: [],
+        probe: undefined,
+        verification: undefined,
+      })
+    ).toBe(true);
+  });
+
+  it("never calls a complaining page, a code dialog, or a missed click a submission", () => {
+    expect(
+      judgeSubmission({
+        click: click({ confirmedText: true }),
+        complaint: ["Required"],
+        probe: undefined,
+        verification: undefined,
+      })
+    ).toBe(false);
+    expect(
+      judgeSubmission({
+        click: click({ formGone: true, submitGone: true }),
+        complaint: [],
+        probe: undefined,
+        verification: { channel: "email" },
+      })
+    ).toBe(false);
+    expect(
+      judgeSubmission({
+        click: click({ clicked: false, confirmedText: true }),
+        complaint: [],
+        probe: undefined,
+        verification: undefined,
+      })
+    ).toBe(false);
+    expect(
+      judgeSubmission({
+        click: click({ submitGone: true }),
+        complaint: [],
+        probe: undefined,
+        verification: undefined,
+      })
+    ).toBe(false);
   });
 });
 
