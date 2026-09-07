@@ -153,6 +153,45 @@ describe("deciding how a page moves on", () => {
     });
   });
 
+  it("keeps a forward control whose wording also contains a denied word", async () => {
+    // "Continue to Background Check" was thrown out for the "back" in it, and
+    // a page it was the only way forward from read as stuck.
+    const step = await decideNextStep(
+      summary([
+        control(0, "Back"),
+        control(1, "Continue to Background Check"),
+        control(2, "Credit history"),
+      ])
+    );
+    expect(step).toEqual({
+      action: "advance",
+      control: control(1, "Continue to Background Check"),
+      via: "heuristic",
+    });
+    expect(mocks.generateText).not.toHaveBeenCalled();
+    // Submit and Review together make the page ambiguous, so the model is
+    // asked and sees the full list code kept.
+    mocks.generateText.mockResolvedValueOnce({
+      text: '{"action":"advance","index":3}',
+    });
+    const model = await decideNextStep(
+      summary([
+        control(0, "Back"),
+        control(1, "Submit"),
+        control(2, "Review"),
+        control(3, "Credit history"),
+      ])
+    );
+    // "Credit history" is not denied for the "edit" inside it; "Back" still is.
+    expect(model).toMatchObject({
+      action: "advance",
+      control: control(3, "Credit history"),
+    });
+    const prompt = mocks.generateText.mock.calls.at(-1)?.[0]?.prompt ?? "";
+    expect(prompt).toContain('"text":"Credit history"');
+    expect(prompt).not.toContain('"text":"Back"');
+  });
+
   it("is stuck without a model call when nothing on the page can be pressed", async () => {
     expect(
       await decideNextStep(

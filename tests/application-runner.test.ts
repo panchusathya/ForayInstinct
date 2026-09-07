@@ -340,6 +340,91 @@ describe("option-based questions", () => {
   });
 });
 
+describe("a region against a list of states", () => {
+  const region = (value: string, options: string[]) =>
+    mapProfileToFormFields({
+      fields: [
+        {
+          label: "State*",
+          name: "state",
+          options,
+          required: true,
+          selector: "#state",
+          tag: "select",
+          type: "select",
+        },
+      ],
+      identity: { email: "ada@example.com", name: "Ada", phone: "" },
+      profile: { ...emptyCandidateProfile, locationRegion: value },
+    });
+
+  it("takes the state the abbreviation names, not the first that begins with it", () => {
+    // "MA" begins Maine, Maryland and Massachusetts; Maine was sent.
+    const { fills } = region("MA", ["Maine", "Maryland", "Massachusetts"]);
+    expect(fills[0]?.value).toBe("Massachusetts");
+    const back = region("Massachusetts", ["CA", "MA", "NY"]);
+    expect(back.fills[0]?.value).toBe("MA");
+  });
+
+  it("uses a prefix only when it settles the choice", () => {
+    expect(
+      region("Mass", ["Maine", "Maryland", "Massachusetts"]).fills[0]?.value
+    ).toBe("Massachusetts");
+    const ambiguous = region("New", ["New Jersey", "New York"]);
+    expect(ambiguous.fills).toHaveLength(0);
+    expect(ambiguous.unmapped).toHaveLength(1);
+  });
+});
+
+describe("questions that only sound like contact details", () => {
+  const mapped = (label: string) =>
+    mapProfileToFormFields({
+      fields: [
+        {
+          label,
+          name: "q",
+          required: true,
+          selector: "#q",
+          tag: "input",
+          type: "text",
+        },
+      ],
+      identity: {
+        email: "ada@example.com",
+        name: "Ada",
+        phone: "+14155550100",
+      },
+      profile: {
+        ...emptyCandidateProfile,
+        earliestStartDate: "2026-10-01",
+        locationCity: "Boston",
+      },
+    });
+
+  it("does not type a phone number, a city, or a start date into them", () => {
+    // Each of these was answered with the matching profile fact.
+    for (const label of [
+      "Are you open to telecommuting?",
+      "In what capacity did you work with them?",
+      "Are you available to work weekends?",
+    ]) {
+      const { fills, unmapped } = mapped(label);
+      expect({ fills: fills.length, label, unmapped: unmapped.length }).toEqual(
+        {
+          fills: 0,
+          label,
+          unmapped: 1,
+        }
+      );
+    }
+    expect(mapped("Phone").fills[0]?.value).toBe("4155550100");
+    expect(mapped("City").fills[0]?.value).toBe("Boston");
+    expect(mapped("Earliest available start date").fills[0]?.value).toBe(
+      "2026-10-01"
+    );
+  });
+});
+
 describe("remembering an answer", () => {
   const field = (label: string, name = "q") => ({
     label,
@@ -426,7 +511,27 @@ describe("closed-choice controls", () => {
     const combobox = script.slice(script.indexOf('role === "combobox"'));
     expect(combobox).toContain("await locator.click(");
     expect(combobox.indexOf("await locator.click(")).toBeLessThan(
-      combobox.indexOf('page.$$eval("[role=option]"')
+      combobox.indexOf('optionRoot.locator("[role=option]")')
+    );
+  });
+
+  it("picks options from the widget's own list, and gives up on one in time", () => {
+    // Two open lists on a page could swap options, and an option that never
+    // became clickable held the batch past its budget.
+    const combobox = script.slice(script.indexOf('role === "combobox"'));
+    expect(combobox).toContain('getAttribute("aria-controls")');
+    expect(combobox).toContain(
+      'optionRoot.getByRole("option", { name: wanted, exact: true }).first().click({ timeout: 5000 })'
+    );
+  });
+
+  it("marks a control with no id or name so its selector survives a re-scan", () => {
+    expect(script).toContain('node.setAttribute("data-foray-id", stamp)');
+    expect(script).not.toContain(
+      'return "(" + node.tagName.toLowerCase() + ")["'
+    );
+    expect(script).toContain(
+      'scope.setAttribute("data-foray-section", section)'
     );
   });
 
@@ -1093,6 +1198,35 @@ describe("a phone number for a form", () => {
 });
 
 describe("reaching the application form", () => {
+  it("compares registrable domains, so two .co.uk sites are not one site", () => {
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    const reach = scripts.slice(
+      scripts.indexOf("export const reachApplicationFormCode")
+    );
+    expect(reach).toContain("twoPartTlds.has(labels.slice(-2)");
+    expect(scripts).toContain("twoPartTldList");
+  });
+
+  it("keeps the DOM attach route open when the payload cannot be built", () => {
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    const attach = scripts.slice(
+      scripts.indexOf("export const attachFileCode"),
+      scripts.indexOf("const codeInputHelpers")
+    );
+    expect(attach).toContain(
+      'attempts.push("payload: " + describeError(error))'
+    );
+    expect(attach.indexOf('attempts.push("payload: "')).toBeLessThan(
+      attach.indexOf("await domAttach()")
+    );
+  });
+
   it("follows the page's Apply control on the same site and reports another site", () => {
     const scripts = readFileSync(
       "lib/application-runner/playwright-scripts.ts",
