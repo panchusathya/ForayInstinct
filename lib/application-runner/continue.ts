@@ -13,7 +13,10 @@ import {
   looksLikeVerificationCode,
 } from "@/lib/application-runner/types";
 import { resumeApplicationHook } from "@/lib/application-runner/workflow";
-import { describeBrowserSessionFailure } from "@/agent/subagents/worker/lib/challenge-diagnostics";
+import {
+  describeBrowserSessionFailure,
+  isBrowserSessionDead,
+} from "@/agent/subagents/worker/lib/challenge-diagnostics";
 import {
   applicationExecutionLog,
   safeApplyUrl,
@@ -97,8 +100,23 @@ export async function continueApplication(input: {
     typedOtp !== undefined && typedOtp !== ""
       ? typedOtp
       : verificationCodeAmong(input.answers, answered);
+  // A run whose browser is gone still owes the candidate an answer. The
+  // approval and answers branches used to require a live session and fall
+  // through to "Continue signal recorded" without one, so a yes sent after
+  // the watchdog reaped the browser did nothing, forever.
+  const browserSessionId =
+    typeof run.browserSessionId === "string" ? run.browserSessionId : "";
+  const live = browserSessionId !== "";
   try {
-    if (code && run.browserSessionId) {
+    if (code) {
+      if (!live) {
+        // The dialog that asked for the code died with its browser; the code
+        // is stale. Fill again and let the page ask afresh.
+        return await refillAfterLostBrowser(
+          { ...base, ...carried },
+          "the browser that asked for the code is gone"
+        );
+      }
       return await runApplicationUntilPause({
         ...base,
         // A code typed into the otp field travels alone; one read out of an
@@ -107,7 +125,33 @@ export async function continueApplication(input: {
         resumeOtp: code,
       });
     }
-    if (input.approved === true && run.browserSessionId) {
+    if (input.approved === true) {
+      if (!live) {
+        // The candidate approved a form whose browser has since gone. Fill
+        // it again from the profile and the run's remembered answers, and
+        // when that comes back ready for approval, send it: the approval was
+        // given for this form, and asking for it a second time is the loop
+        // the candidate experienced as being ignored.
+        const refilled = await refillAfterLostBrowser(
+          { ...base, ...carried },
+          "no browser session for the approved run"
+        );
+        if (!("pause" in refilled) || refilled.pause !== "approval") {
+          return refilled;
+        }
+        const reopened = await findApplicationRun({
+          applyUrl,
+          scope: input.scope,
+        });
+        if (!reopened?.browserSessionId) return refilled;
+        const submitted = await submitApplication({
+          ...base,
+          browserSessionId: reopened.browserSessionId,
+        });
+        return "message" in submitted
+          ? { ...submitted, message: `${submitted.message} ${lostBrowserNote}` }
+          : submitted;
+      }
       // Answers first, approval second. Approval used to short-circuit
       // straight to the click, so replies sent in the same breath as a yes
       // were dropped and the form was submitted exactly as incomplete as it
@@ -121,15 +165,24 @@ export async function continueApplication(input: {
       }
       return await submitApplication({
         ...base,
-        browserSessionId: run.browserSessionId,
+        browserSessionId,
       });
     }
-    if (run.browserSessionId && (input.answers || answered)) {
+    if (input.answers || answered) {
+      if (!live) {
+        return await refillAfterLostBrowser(
+          { ...base, ...carried },
+          "no browser session for the answered run"
+        );
+      }
       return await runApplicationUntilPause({ ...base, ...carried });
     }
   } catch (error) {
     if (!isBrowserGone(error)) throw error;
-    return refillAfterLostBrowser({ ...base, ...carried }, error);
+    return refillAfterLostBrowser(
+      { ...base, ...carried },
+      error instanceof Error ? error.message : "unknown"
+    );
   }
   return {
     applyUrl,
@@ -158,11 +211,18 @@ function verificationCodeAmong(
   return undefined;
 }
 
-/** A browser the backend no longer has, as either backend reports it. */
+/**
+ * A browser the backend no longer has, as either backend reports it. The
+ * gateway's sessions are pinned to one registrable domain, and a form that
+ * hops to the employer's own site kills one with `cross_domain_navigation`;
+ * that death was missed here, so the recovery written for it never ran.
+ */
 function isBrowserGone(error: unknown) {
-  const failure = describeBrowserSessionFailure(error);
-  return failure === "session_gone" || failure === "session_not_found";
+  return isBrowserSessionDead(describeBrowserSessionFailure(error));
 }
+
+const lostBrowserNote =
+  "The previous browser session had expired, so the form was filled again in a new one.";
 
 /**
  * Opens a fresh browser and fills the form again when the last browser died.
@@ -175,11 +235,11 @@ function isBrowserGone(error: unknown) {
  */
 async function refillAfterLostBrowser(
   input: ApplicationRunInput,
-  error: unknown
+  reason: string
 ) {
   applicationExecutionLog({
     apply_url: input.applyUrl,
-    error: (error instanceof Error ? error.message : "unknown").slice(0, 200),
+    error: reason.slice(0, 200),
     event: "browser.gone",
     execution_id: input.executionId,
   });
@@ -191,7 +251,7 @@ async function refillAfterLostBrowser(
   if (!("message" in refilled)) return refilled;
   return {
     ...refilled,
-    message: `${refilled.message} The previous browser session had expired, so the form was filled again in a new one.`,
+    message: `${refilled.message} ${lostBrowserNote}`,
   };
 }
 

@@ -259,7 +259,8 @@ function codecsForSurface(surface: DetectedAutofillSurface) {
   return codecs.filter((codec) => codec.surfaceKinds.includes(surface.kind));
 }
 
-function isBoundLoginForOrigin(secret: string, origin: string) {
+/** Whether a saved login payload names this origin as its site. */
+export function isBoundLoginForOrigin(secret: string, origin: string) {
   const login = parseLoginVaultPayload(secret);
   return Boolean(login && "origin" in login && login.origin === origin);
 }

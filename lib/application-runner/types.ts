@@ -52,6 +52,14 @@ export type ApplicationRunResult =
       message: string;
       status: "working";
     }
+  /** A start that threw. The run is over; the message says why in one line. */
+  | {
+      applyUrl: string;
+      executionId: string;
+      message: string;
+      pause: "user_input";
+      status: "failed";
+    }
   | {
       applyUrl: string;
       existingExecutionId: string;

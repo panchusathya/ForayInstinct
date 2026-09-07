@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   claimApplicationLease: vi.fn<() => Promise<Record<string, unknown>>>(),
+  closeApplicationBrowser:
+    vi.fn<(_input: Record<string, unknown>) => Promise<void>>(),
   createApplicationExecution: vi.fn<() => Promise<void>>(),
   findApplicationRun: vi.fn<
     () => Promise<
@@ -49,6 +51,10 @@ vi.mock("@/db/services/default-resume", () => ({
 
 vi.mock("@/lib/application-runner/run", () => ({
   runApplicationUntilPause: mocks.runApplicationUntilPause,
+}));
+
+vi.mock("@/lib/application-runner/browser", () => ({
+  closeApplicationBrowser: mocks.closeApplicationBrowser,
 }));
 
 import { emptyCandidateProfile } from "@/lib/candidate-profile";
@@ -190,6 +196,14 @@ describe("startApplication", () => {
       browserSessionId: "",
       pauseReason: null,
     });
+    // Closed before it is forgotten, or it leaks until the backend's timeout.
+    expect(mocks.closeApplicationBrowser).toHaveBeenCalledWith({
+      scope: input.scope,
+      sessionId: "dead-session",
+    });
+    expect(
+      mocks.closeApplicationBrowser.mock.invocationCallOrder[0] ?? 0
+    ).toBeLessThan(mocks.updateApplicationRun.mock.invocationCallOrder[0] ?? 0);
   });
 
   it("still refuses a posting whose run is waiting on the candidate", async () => {
@@ -298,5 +312,37 @@ describe("the profile gate", () => {
     await startApplication(input);
 
     expect(mocks.claimApplicationLease).toHaveBeenCalled();
+  });
+});
+
+describe("a run that throws while starting", () => {
+  it("is marked failed with its browser closed, and says so, rather than staying running", async () => {
+    mocks.findApplicationRun
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({
+        browserSessionId: "browser-9",
+        id: "exec-1",
+        status: "running",
+        workflowRunId: "inline:exec-1",
+      });
+    mocks.runApplicationUntilPause.mockRejectedValue(
+      new Error(
+        "GatewayRequestError: Could not open the form: net::ERR_CONNECTION_CLOSED\nCall log"
+      )
+    );
+
+    const result = await startApplication(input);
+
+    expect(result).toMatchObject({ pause: "user_input", status: "failed" });
+    expect("message" in result ? result.message : "").toContain(
+      "could not be started"
+    );
+    expect(mocks.closeApplicationBrowser).toHaveBeenCalledWith({
+      scope: input.scope,
+      sessionId: "browser-9",
+    });
+    expect(mocks.updateApplicationRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({ browserSessionId: "", status: "failed" })
+    );
   });
 });

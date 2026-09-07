@@ -24,6 +24,7 @@ import {
   missingProfileFacts,
   profileGateMessage,
 } from "@/lib/application-runner/profile-gate";
+import { closeApplicationBrowser } from "@/lib/application-runner/browser";
 import { runApplicationUntilPause } from "@/lib/application-runner/run";
 import { startApplicationWorkflow } from "@/lib/application-runner/workflow";
 import { applicationPauseMessage } from "@/lib/task-completion";
@@ -113,8 +114,15 @@ export async function startApplication(input: {
   };
   const workflowRunId = await startApplicationWorkflow(runInput);
   // A retry reuses the execution row, whose browser session the watchdog has
-  // already closed. Clear the run state so the fill opens a fresh one instead
-  // of driving a dead session.
+  // usually already closed. Close it in case it has not been, so the browser
+  // is not leaked until the backend's own timeout, then clear the run state
+  // so the fill opens a fresh one instead of driving a dead session.
+  if (existing?.browserSessionId) {
+    await closeApplicationBrowser({
+      scope: input.scope,
+      sessionId: existing.browserSessionId,
+    });
+  }
   await updateApplicationRun({
     browserSessionId: "",
     executionId: id,
@@ -134,7 +142,46 @@ export async function startApplication(input: {
   // Without a durable run nothing else will ever drive this execution, so the
   // fill has to finish inside the caller's own invocation. It stops at the
   // first pause, which continue_application resumes.
-  const outcome = await runApplicationUntilPause(runInput);
+  let outcome: Awaited<ReturnType<typeof runApplicationUntilPause>>;
+  try {
+    outcome = await runApplicationUntilPause(runInput);
+  } catch (error) {
+    // A run that threw is a run that ended. Left as "running" with its lease
+    // held, the coordinator read the row and told the candidate the form was
+    // being filled until the watchdog timed it out twenty minutes later.
+    const reason = (error instanceof Error ? error.message : String(error))
+      .split("\n")[0]
+      ?.slice(0, 200);
+    applicationExecutionLog({
+      apply_url: applyUrl,
+      error: reason ?? "unknown",
+      event: "runner.failed",
+      execution_id: id,
+    });
+    const run = await findApplicationRun({ applyUrl, scope: input.scope });
+    if (run?.browserSessionId) {
+      await closeApplicationBrowser({
+        scope: input.scope,
+        sessionId: run.browserSessionId,
+      });
+    }
+    await updateApplicationRun({
+      browserSessionId: "",
+      executionId: id,
+      pauseReason: null,
+      status: "failed",
+    });
+    return {
+      applyUrl,
+      executionId: id,
+      message: applicationPauseMessage(
+        "user_input",
+        `the application for ${input.role} could not be started: ${reason ?? "the runner gave no reason"}. Nothing was filled; send the posting again to retry.`
+      ),
+      pause: "user_input",
+      status: "failed",
+    };
+  }
   if ("done" in outcome) {
     return {
       applyUrl,

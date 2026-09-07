@@ -1022,6 +1022,7 @@ const probe = await page.evaluate((locator) => {
   return {
     consents,
     createControl,
+    heading: heading.slice(0, 120),
     identifier: identifierNode
       ? { kind: identifierKind(identifierNode), selector: selectorFor(identifierNode, inputs.indexOf(identifierNode)) }
       : null,

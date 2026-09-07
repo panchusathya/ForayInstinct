@@ -103,7 +103,12 @@ export async function claimPendingApplicationSubmissionScreenshots(
       const [execution] = await transaction
         .select({ applyUrl: applicationExecutions.applyUrl })
         .from(applicationExecutions)
-        .where(eq(applicationExecutions.id, filter.executionId))
+        .where(
+          and(
+            eq(applicationExecutions.workspaceId, scope.workspaceId),
+            eq(applicationExecutions.id, filter.executionId)
+          )
+        )
         .limit(1);
       applyUrl = execution?.applyUrl ?? "";
     }

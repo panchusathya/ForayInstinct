@@ -1,7 +1,11 @@
 import { readVaultItem } from "@/db/services/vault";
 import type { AccessScope } from "@/lib/access-scope";
+import { readSecret } from "@/lib/manager/server/secret-store";
 import { materializeAutofillClaims } from "@/lib/manager/server/vault-autofill";
-import { vaultAutofillProvider } from "@/lib/manager/server/vault-autofill-provider";
+import {
+  isBoundLoginForOrigin,
+  vaultAutofillProvider,
+} from "@/lib/manager/server/vault-autofill-provider";
 import { loginTokensForPurpose } from "@/lib/manager/server/kernel-login-autofill";
 import {
   currentKernelPageOrigin,
@@ -23,15 +27,14 @@ export async function tryFillLoginFromVault(input: {
     browserSessionId: input.browserSessionId,
     signal: input.signal,
   });
-  const items = await readManagerVaultItems(input.scope);
-  const login = items.find((item) => item.kind === "login" && item.hasSecret);
-  if (!login) return { filled: false, origin };
-  const item = await readVaultItem(input.scope, login.id);
+  const loginId = await findLoginForOrigin(input.scope, origin);
+  if (loginId === undefined) return { filled: false, origin };
+  const item = await readVaultItem(input.scope, loginId);
   if (item?.kind !== "login") return { filled: false, origin };
   const tokens = loginTokensForPurpose("sign_in");
   const claims = await materializeAutofillClaims(
     input.scope,
-    login.id,
+    loginId,
     {
       availableTokens: new Set(tokens),
       origin,
@@ -52,4 +55,42 @@ export async function tryFillLoginFromVault(input: {
     signal: input.signal,
   });
   return { filled: true, origin };
+}
+
+/**
+ * The saved login bound to this site, if any.
+ *
+ * The first login in the workspace used to be taken whatever site it was
+ * for; the origin check downstream then refused it, and a candidate with one
+ * Workday login could sign in nowhere else and register nowhere new. Each
+ * login's payload names its origin, so that is what is matched. Payloads are
+ * decrypted only to read that field and are never logged.
+ */
+export async function findLoginForOrigin(
+  scope: AccessScope,
+  origin: string
+): Promise<string | undefined> {
+  const items = await readManagerVaultItems(scope);
+  for (const item of items) {
+    if (item.kind !== "login" || !item.hasSecret) continue;
+    const secret = await readSecret({
+      id: item.id,
+      namespace: "vault",
+      scope,
+    }).catch(() => undefined);
+    if (typeof secret === "string" && isBoundLoginForOrigin(secret, origin)) {
+      return item.id;
+    }
+  }
+  return undefined;
+}
+
+export async function hasSavedLoginForOrigin(
+  scope: AccessScope,
+  origin: string
+) {
+  return (
+    (await findLoginForOrigin(scope, origin).catch(() => undefined)) !==
+    undefined
+  );
 }

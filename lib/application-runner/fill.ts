@@ -47,6 +47,7 @@ import {
   loginWallSchema,
   passLoginWall,
 } from "@/lib/application-runner/account";
+import { closeApplicationBrowser } from "@/lib/application-runner/browser";
 import { fillRepeaters } from "@/lib/application-runner/repeaters";
 import type {
   ApplicationPauseReason,
@@ -426,6 +427,26 @@ export async function fillVisibleForm(
       wall: login,
     });
     if ("pause" in passed) return passed;
+    // The wall has to be down before the page is read as the form. A sign-in
+    // the site refused, or an account it did not create, leaves the same
+    // wall up with its own words on it; scanning that page as an application
+    // form offered the login page to the candidate for approval.
+    const still = await parseResult(
+      input.browserSessionId,
+      detectLoginWallCode,
+      loginWallSchema,
+      "login_wall_after"
+    );
+    if (still?.loginWall) {
+      return {
+        applyUrl: input.applyUrl,
+        message: applicationPauseMessage(
+          "user_input",
+          `${input.applyUrl} still asks to ${still.wall === "register" ? "create an account" : "sign in"} after the runner ${passed.via === "created" ? "created one" : "signed in"}. A login for the site is in the vault; sign in there once and tell me when to continue.`
+        ),
+        pause: "user_input",
+      };
+    }
   }
   const probe = await inspectPostActionBrowserState(
     input.browserSessionId
@@ -999,7 +1020,20 @@ async function completeSubmission(
     event: "runner.confirmation_screenshot",
     execution_id: input.executionId,
   });
+  // The browser has done its work. Closing it is also what saves the site's
+  // signed-in state on the gateway, so an account created for this ATS is
+  // there for the next posting instead of being registered twice; left open,
+  // it sat until the backend's timeout with the state never written.
+  await closeApplicationBrowser({
+    scope: input.scope,
+    sessionId: input.browserSessionId,
+  });
+  applicationExecutionLog({
+    event: "runner.browser_closed",
+    execution_id: input.executionId,
+  });
   await updateApplicationRun({
+    browserSessionId: "",
     executionId: input.executionId,
     pauseReason: null,
     status: "completed",

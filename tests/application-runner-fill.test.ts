@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   profile: vi.fn<() => Promise<unknown>>(),
   identity: vi.fn<() => Promise<unknown>>(),
   resume: vi.fn<() => Promise<unknown>>(),
-  vault: vi.fn<() => Promise<{ filled: boolean; origin: string }>>(),
+  vault: vi.fn<() => Promise<Record<string, unknown>>>(),
   checkpoint: vi.fn<() => Promise<void>>(),
   stageFile:
     vi.fn<
@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   providerName: ((): { value: "gateway" | "kernel" } => ({
     value: "gateway",
   }))(),
+  closeBrowser: vi.fn<(_input: Record<string, unknown>) => Promise<void>>(),
   confirmation: vi.fn<() => Promise<boolean>>(),
   review: vi.fn<() => Promise<number>>(),
   readAnswers: vi.fn<() => Promise<Record<string, string>>>(),
@@ -94,6 +95,11 @@ vi.mock("@/db/services/self-identification", () => ({
   readSelfIdentification: mocks.selfIdentification,
 }));
 
+vi.mock("@/lib/application-runner/browser", () => ({
+  closeApplicationBrowser: mocks.closeBrowser,
+  isApplicationBrowserAlive: vi.fn<() => Promise<boolean>>(async () => true),
+}));
+
 vi.mock("@/lib/application-runner/repeaters", () => ({
   fillRepeaters: vi.fn<() => Promise<never[]>>(async () => []),
 }));
@@ -138,6 +144,7 @@ beforeEach(() => {
   });
   mocks.resume.mockResolvedValue(undefined);
   mocks.selfIdentification.mockResolvedValue({});
+  mocks.closeBrowser.mockResolvedValue(undefined);
   mocks.confirmation.mockResolvedValue(true);
   mocks.review.mockResolvedValue(1);
   mocks.readAnswers.mockResolvedValue({});
@@ -1302,6 +1309,7 @@ describe("a verification step after the submit", () => {
     // Whitespace stripped, and the code never reaches the log.
     expect(typed).toContain('const code = "482913"');
     expect(mocks.updateApplicationRun).toHaveBeenCalledWith({
+      browserSessionId: "",
       executionId: "exec-1",
       pauseReason: null,
       status: "completed",
@@ -1591,6 +1599,18 @@ describe("a submit refused for the phone number", () => {
     const completedOrder =
       mocks.updateApplicationRun.mock.invocationCallOrder.at(-1) ?? 0;
     expect(captureOrder).toBeLessThan(completedOrder);
+    // The browser is closed after the capture and before the row is marked
+    // done: closing is what saves the site's signed-in state on the gateway.
+    const closeOrder = mocks.closeBrowser.mock.invocationCallOrder[0] ?? 0;
+    expect(closeOrder).toBeGreaterThan(captureOrder);
+    expect(closeOrder).toBeLessThan(completedOrder);
+    expect(mocks.closeBrowser).toHaveBeenCalledWith({
+      scope: { userId: "alice", workspaceId: "workspace:alice" },
+      sessionId: "browser-1",
+    });
+    expect(mocks.updateApplicationRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({ browserSessionId: "", status: "completed" })
+    );
   });
 });
 
@@ -1692,5 +1712,35 @@ describe("a posting that opens on its description", () => {
     expect("message" in result ? result.message : "").toContain(
       "no application form was found"
     );
+  });
+});
+
+describe("a login wall that is still up after the account step", () => {
+  it("pauses instead of reading the login page as the form", async () => {
+    const input = {
+      applyUrl: "https://acme.wd5.myworkdayjobs.com/apply",
+      browserSessionId: "browser-1",
+      company: "Acme",
+      executionId: "exec-1",
+      role: "Analyst",
+      rootSessionId: "root-1",
+      scope: { userId: "alice", workspaceId: "workspace:alice" },
+    };
+    mocks.vault.mockResolvedValue({ passed: true, via: "created" });
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return {
+          result: { loginWall: true, wall: "register" },
+          success: true,
+        };
+      }
+      return { result: { fields: [] }, success: true };
+    });
+    const result = await fillVisibleForm(input);
+    expect(result).toMatchObject({ pause: "user_input" });
+    expect("message" in result ? result.message : "").toContain(
+      "still asks to create an account after the runner created one"
+    );
+    expect(mocks.generateText).not.toHaveBeenCalled();
   });
 });

@@ -27,7 +27,8 @@ const mocks = vi.hoisted(() => ({
   identity: vi.fn<() => Promise<Record<string, unknown>>>(),
   log: vi.fn<(_entry: Record<string, unknown>) => void>(),
   vaultFill: vi.fn<() => Promise<{ filled: boolean; origin: string }>>(),
-  vaultItems: vi.fn<() => Promise<{ hasSecret: boolean; kind: string }[]>>(),
+  savedForOrigin:
+    vi.fn<(_scope: unknown, _origin: string) => Promise<boolean>>(),
 }));
 
 vi.mock("@/lib/application-execution", () => ({
@@ -37,6 +38,7 @@ vi.mock("@/lib/application-runner/navigate", () => ({
   clickControl: mocks.click,
 }));
 vi.mock("@/lib/application-runner/vault", () => ({
+  hasSavedLoginForOrigin: mocks.savedForOrigin,
   tryFillLoginFromVault: mocks.vaultFill,
 }));
 vi.mock("@/lib/browser", () => ({
@@ -44,9 +46,6 @@ vi.mock("@/lib/browser", () => ({
 }));
 vi.mock("@/lib/manager/server/store", () => ({
   createVaultLogin: mocks.createLogin,
-}));
-vi.mock("@/lib/manager/server/vault", () => ({
-  readManagerVaultItems: mocks.vaultItems,
 }));
 vi.mock("@/db/services/candidate-profile", () => ({
   readCandidateContactIdentity: mocks.identity,
@@ -69,6 +68,7 @@ const input = {
 const registerWall: LoginWall = {
   consents: ["#agree"],
   createControl: { index: 5, text: "Create Account" },
+  heading: "",
   href: "https://acme.wd5.myworkdayjobs.com/en-US/careers/login?redirect=apply",
   identifier: { kind: "email", selector: "#email" },
   loginWall: true,
@@ -82,6 +82,7 @@ const registerWall: LoginWall = {
 const signInWall: LoginWall = {
   consents: [],
   createControl: { index: 6, text: "Create Account" },
+  heading: "",
   href: "https://acme.wd5.myworkdayjobs.com/en-US/careers/login",
   identifier: { kind: "email", selector: "#email" },
   loginWall: true,
@@ -106,7 +107,7 @@ beforeEach(() => {
     name: "Ada Lovelace",
     phone: "+14155550100",
   });
-  mocks.vaultItems.mockResolvedValue([]);
+  mocks.savedForOrigin.mockResolvedValue(false);
   mocks.vaultFill.mockResolvedValue({ filled: false, origin: "" });
   mocks.createLogin.mockResolvedValue({
     account: "",
@@ -178,7 +179,7 @@ describe("a registration page", () => {
   });
 
   it("signs in instead when a login for the site is already saved", async () => {
-    mocks.vaultItems.mockResolvedValue([{ hasSecret: true, kind: "login" }]);
+    mocks.savedForOrigin.mockResolvedValue(true);
     mocks.executePlaywright.mockResolvedValue({
       result: { ...signInWall, createControl: null },
       success: true,
@@ -195,6 +196,65 @@ describe("a registration page", () => {
       expect.objectContaining({ text: "Sign In", index: 7 }),
       expect.objectContaining({ text: "Sign In", index: 4 }),
     ]);
+  });
+
+  it("registers directly when the only saved login is for another site", async () => {
+    // A login for some other ATS used to switch the runner to Sign In, where
+    // the origin check refused it, and the walls bounced until vault_setup.
+    mocks.savedForOrigin.mockResolvedValue(false);
+    const result = await passLoginWall({ ...input, wall: registerWall });
+    expect(result).toEqual({ passed: true, via: "created" });
+    expect(mocks.savedForOrigin).toHaveBeenCalledWith(
+      input.scope,
+      "https://acme.wd5.myworkdayjobs.com"
+    );
+    expect(mocks.createLogin).toHaveBeenCalledTimes(1);
+    expect(mocks.click.mock.calls.map((call) => call[1])).toEqual([
+      expect.objectContaining({ index: 5, text: "Create Account" }),
+    ]);
+  });
+
+  it("stops when Create Account did not move the page", async () => {
+    mocks.click.mockResolvedValue({
+      clicked: true,
+      errors: [],
+      heading: "Create Account",
+      href: registerWall.href,
+      navigated: false,
+    });
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) =>
+      request.code.includes("loginWall")
+        ? {
+            result: { ...registerWall, heading: "Create Account" },
+            success: true,
+          }
+        : {
+            result: { filled: ["#email"], offered: [], skipped: [] },
+            success: true,
+          }
+    );
+    const result = await passLoginWall({
+      ...input,
+      wall: { ...registerWall, heading: "Create Account" },
+    });
+    expect(result).toMatchObject({ pause: "user_input" });
+    expect("message" in result ? result.message : "").toContain(
+      "did not move on after Create Account was pressed"
+    );
+    // The login was still saved: the candidate can use it by hand.
+    expect(mocks.createLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops when the page offers nothing to press", async () => {
+    const result = await passLoginWall({
+      ...input,
+      wall: { ...registerWall, createControl: null, signInControl: null },
+    });
+    expect(result).toMatchObject({ pause: "user_input" });
+    expect("message" in result ? result.message : "").toContain(
+      "offers no control I can press"
+    );
+    expect(mocks.click).not.toHaveBeenCalled();
   });
 
   it("asks for vault setup when the candidate has no verified email to register with", async () => {
