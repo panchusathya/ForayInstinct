@@ -281,7 +281,35 @@ describe("database migrations", () => {
          WHERE session_id = 'browser-1'`
       )
     ).resolves.toMatchObject({ rows: [{ apply_url: "", role: "" }] });
-  }, 15_000);
+
+    // 0025 gives every row a batch. Rows from before each become their own,
+    // so they still deliver; re-applying leaves them alone.
+    await database.exec(`
+      INSERT INTO application_submission_screenshots (
+        session_id, workspace_id, created_by_user_id, created_at, png_base64
+      ) VALUES ('browser-1', 'workspace-1', 'user-1', '2026-01-02', 'iVBORw0KGgo=');
+    `);
+    await applyMigration(database, "0025_submission_screenshot_batches.sql");
+    const batched = await database.query<{ batch_id: string }>(
+      `SELECT batch_id FROM application_submission_screenshots ORDER BY id`
+    );
+    expect(batched.rows).toHaveLength(2);
+    expect(batched.rows.every((row) => row.batch_id !== "")).toBe(true);
+    expect(batched.rows[0]?.batch_id).not.toBe(batched.rows[1]?.batch_id);
+    await applyMigration(database, "0025_submission_screenshot_batches.sql");
+    await expect(
+      database.query<{ batch_id: string }>(
+        `SELECT batch_id FROM application_submission_screenshots ORDER BY id`
+      )
+    ).resolves.toMatchObject({ rows: batched.rows });
+    const indexes = await database.query<{ indexname: string }>(
+      "SELECT indexname FROM pg_indexes WHERE tablename = 'application_submission_screenshots'"
+    );
+    expect(indexes.rows.map((row) => row.indexname)).toContain(
+      "application_submission_screenshots_batch_idx"
+    );
+    expect(await pendingConstraintCount(database)).toBe(0);
+  }, 20_000);
 
   it("stores the candidate ATS profile beside the workspace Kernel profile id", async () => {
     const database = createDatabase();

@@ -176,6 +176,13 @@
       "when": 1788476700000,
       "tag": "0024_contact_and_answers_namespaces",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788476800000,
+      "tag": "0025_submission_screenshot_batches",
+      "breakpoints": true
     }
   ]
 }

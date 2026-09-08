@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, lt } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
 import {
@@ -23,6 +24,7 @@ const pendingScreenshotTtlMs = 7 * 24 * 60 * 60 * 1000;
  */
 export type ApplicationSubmissionScreenshotKind = "review" | "submitted";
 
+/** One capture of its own: a confirmation screen, or a legacy single save. */
 export async function saveApplicationSubmissionScreenshot(
   scope: AccessScope,
   sessionId: string,
@@ -34,23 +36,54 @@ export async function saveApplicationSubmissionScreenshot(
     role?: string;
   }
 ) {
-  if (screenshot.png.byteLength === 0) return;
-  await db.insert(applicationSubmissionScreenshots).values({
-    applyUrl: screenshot.applyUrl ?? "",
-    createdAt: new Date().toISOString(),
-    createdByUserId: scope.userId,
-    kind: screenshot.kind,
-    mimeType: imageMimeType(screenshot.png),
-    page: screenshot.page,
-    pngBase64: screenshot.png.toString("base64"),
-    role: screenshot.role ?? "",
-    sessionId,
-    workspaceId: scope.workspaceId,
+  await saveApplicationSubmissionScreenshotBatch(scope, sessionId, {
+    ...screenshot,
+    pngs: [screenshot.png],
   });
+}
+
+/**
+ * One capture set, written in one statement. A review is several screenshots
+ * of one form; written a row at a time, a claim that landed between two
+ * writes took a page of five as the whole review. Every row of a set shares
+ * the batch id the claim takes whole.
+ */
+export async function saveApplicationSubmissionScreenshotBatch(
+  scope: AccessScope,
+  sessionId: string,
+  screenshots: {
+    applyUrl?: string;
+    kind: ApplicationSubmissionScreenshotKind;
+    page?: string;
+    pngs: readonly Buffer[];
+    role?: string;
+  }
+) {
+  const batchId = `${sessionId}:${randomUUID()}`;
+  const pngs = screenshots.pngs.filter((png) => png.byteLength > 0);
+  if (pngs.length === 0) return { batchId, count: 0 };
+  const createdAt = new Date().toISOString();
+  await db.insert(applicationSubmissionScreenshots).values(
+    pngs.map((png) => ({
+      applyUrl: screenshots.applyUrl ?? "",
+      batchId,
+      createdAt,
+      createdByUserId: scope.userId,
+      kind: screenshots.kind,
+      mimeType: imageMimeType(png),
+      page: screenshots.page,
+      pngBase64: png.toString("base64"),
+      role: screenshots.role ?? "",
+      sessionId,
+      workspaceId: scope.workspaceId,
+    }))
+  );
+  return { batchId, count: pngs.length };
 }
 
 export interface ClaimSubmissionScreenshotsFilter {
   applyUrl?: string;
+  batchId?: string;
   executionId?: string;
 }
 
@@ -113,11 +146,17 @@ export async function claimPendingApplicationSubmissionScreenshots(
       applyUrl = execution?.applyUrl ?? "";
     }
 
+    // The set to claim: a named batch; else the application named, or the
+    // newest pending one. An application's rows are complete sets now that
+    // each set is written in one statement, so they can travel together and
+    // number their pages among themselves.
+    const batchId = filter.batchId?.trim() ?? "";
     const [newest] =
-      applyUrl === ""
+      batchId === "" && applyUrl === ""
         ? await transaction
             .select({
               applyUrl: applicationSubmissionScreenshots.applyUrl,
+              batchId: applicationSubmissionScreenshots.batchId,
               sessionId: applicationSubmissionScreenshots.sessionId,
             })
             .from(applicationSubmissionScreenshots)
@@ -136,13 +175,25 @@ export async function claimPendingApplicationSubmissionScreenshots(
             )
             .limit(1)
         : [];
-    if (applyUrl === "" && !newest) return [];
+    if (batchId === "" && applyUrl === "" && !newest) return [];
 
     const batchApplyUrl = applyUrl === "" ? (newest?.applyUrl ?? "") : applyUrl;
-    const batchSessionId = newest?.sessionId;
+    const setPredicate =
+      batchId !== ""
+        ? eq(applicationSubmissionScreenshots.batchId, batchId)
+        : batchApplyUrl !== ""
+          ? eq(applicationSubmissionScreenshots.applyUrl, batchApplyUrl)
+          : // A row that names no posting (a legacy capture, or a confirmation
+            // saved from the checkpoint trail) travels with the rest of its
+            // browser session, as it always did.
+            eq(
+              applicationSubmissionScreenshots.sessionId,
+              newest?.sessionId ?? ""
+            );
     const rows = await transaction
       .select({
         applyUrl: applicationSubmissionScreenshots.applyUrl,
+        batchId: applicationSubmissionScreenshots.batchId,
         id: applicationSubmissionScreenshots.id,
         kind: applicationSubmissionScreenshots.kind,
         mimeType: applicationSubmissionScreenshots.mimeType,
@@ -155,12 +206,7 @@ export async function claimPendingApplicationSubmissionScreenshots(
         and(
           eq(applicationSubmissionScreenshots.workspaceId, scope.workspaceId),
           isNull(applicationSubmissionScreenshots.deliveredAt),
-          batchApplyUrl !== ""
-            ? eq(applicationSubmissionScreenshots.applyUrl, batchApplyUrl)
-            : eq(
-                applicationSubmissionScreenshots.sessionId,
-                batchSessionId ?? ""
-              )
+          setPredicate
         )
       )
       .orderBy(
@@ -189,6 +235,7 @@ export async function claimPendingApplicationSubmissionScreenshots(
       .filter((row) => claimedIds.has(row.id))
       .map((row) => ({
         applyUrl: row.applyUrl,
+        batchId: row.batchId,
         id: row.id,
         kind: row.kind,
         mimeType: row.mimeType,
@@ -222,29 +269,57 @@ export async function releaseApplicationSubmissionScreenshots(
 
 /**
  * The screenshot table is also the delivery outbox. A background dispatcher
- * needs the owning scope to claim one application's newest batch without
- * waiting for the candidate to send another message.
+ * and the inbound webhook deliver every pending set, each on its own, oldest
+ * first, so two applications in flight arrive as two captioned reviews and
+ * not as whichever is newest. One entry per pending application (or, for a
+ * row that names none, per batch), with the scope that owns it.
  */
-export async function listPendingApplicationSubmissionScreenshotScopes(
-  limit = 25
-): Promise<AccessScope[]> {
+export async function listPendingApplicationSubmissionScreenshotBatches(
+  limit = 25,
+  scope?: AccessScope
+): Promise<
+  { applyUrl: string; batchId: string; kind: string; scope: AccessScope }[]
+> {
   const rows = await db
     .select({
+      applyUrl: applicationSubmissionScreenshots.applyUrl,
+      batchId: applicationSubmissionScreenshots.batchId,
+      kind: applicationSubmissionScreenshots.kind,
       userId: applicationSubmissionScreenshots.createdByUserId,
       workspaceId: applicationSubmissionScreenshots.workspaceId,
     })
     .from(applicationSubmissionScreenshots)
-    .where(isNull(applicationSubmissionScreenshots.deliveredAt))
-    .orderBy(desc(applicationSubmissionScreenshots.createdAt))
-    .limit(limit * 4);
-  const scopes: AccessScope[] = [];
+    .where(
+      scope
+        ? and(
+            eq(applicationSubmissionScreenshots.workspaceId, scope.workspaceId),
+            isNull(applicationSubmissionScreenshots.deliveredAt)
+          )
+        : isNull(applicationSubmissionScreenshots.deliveredAt)
+    )
+    .orderBy(
+      asc(applicationSubmissionScreenshots.createdAt),
+      asc(applicationSubmissionScreenshots.id)
+    )
+    .limit(limit * 8);
+  const batches: {
+    applyUrl: string;
+    batchId: string;
+    kind: string;
+    scope: AccessScope;
+  }[] = [];
   const seen = new Set<string>();
   for (const row of rows) {
-    const key = `${row.workspaceId}:${row.userId}`;
+    const key = `${row.workspaceId}:${row.applyUrl === "" ? row.batchId : row.applyUrl}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    scopes.push({ userId: row.userId, workspaceId: row.workspaceId });
-    if (scopes.length === limit) break;
+    batches.push({
+      applyUrl: row.applyUrl,
+      batchId: row.batchId,
+      kind: row.kind,
+      scope: { userId: row.userId, workspaceId: row.workspaceId },
+    });
+    if (batches.length === limit) break;
   }
-  return scopes;
+  return batches;
 }

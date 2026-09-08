@@ -183,6 +183,34 @@ export async function findApplicationRun(input: {
   return row;
 }
 
+/**
+ * The application a browser session is filling, for a capture that only knows
+ * its session. A confirmation saved from the checkpoint trail carried no
+ * posting, so it could never be claimed and retired a week later unseen.
+ */
+export async function findApplicationExecutionByBrowserSession(
+  scope: AccessScope,
+  browserSessionId: string
+) {
+  if (browserSessionId === "") return undefined;
+  const [row] = await db
+    .select({
+      applyUrl: applicationExecutions.applyUrl,
+      id: applicationExecutions.id,
+      role: applicationExecutions.role,
+    })
+    .from(applicationExecutions)
+    .where(
+      and(
+        eq(applicationExecutions.workspaceId, scope.workspaceId),
+        eq(applicationExecutions.browserSessionId, browserSessionId)
+      )
+    )
+    .orderBy(desc(applicationExecutions.updatedAt))
+    .limit(1);
+  return row;
+}
+
 export async function updateApplicationExecutionForWorker(input: {
   eventId: string;
   eventType: string;

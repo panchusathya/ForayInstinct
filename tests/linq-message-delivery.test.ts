@@ -11,7 +11,10 @@ const channelCapture = vi.hoisted(() => ({
 }));
 const screenshotMocks = vi.hoisted(() => ({
   claimPendingApplicationSubmissionScreenshots: vi.fn<
-    (_scope: unknown) => Promise<
+    (
+      _scope: unknown,
+      _filter?: Record<string, unknown>
+    ) => Promise<
       {
         applyUrl: string;
         id: number;
@@ -25,8 +28,16 @@ const screenshotMocks = vi.hoisted(() => ({
   >(),
   releaseApplicationSubmissionScreenshots:
     vi.fn<(_scope: unknown, _ids: readonly number[]) => Promise<void>>(),
-  listPendingApplicationSubmissionScreenshotScopes:
-    vi.fn<() => Promise<{ userId: string; workspaceId: string }[]>>(),
+  listPendingApplicationSubmissionScreenshotBatches: vi.fn<
+    () => Promise<
+      {
+        applyUrl: string;
+        batchId: string;
+        kind: string;
+        scope: { userId: string; workspaceId: string };
+      }[]
+    >
+  >(),
 }));
 const linqThreadMocks = vi.hoisted(() => ({
   findLinqThread: vi.fn<() => Promise<string | undefined>>(),
@@ -60,8 +71,8 @@ vi.mock("@/db/services/application-submission-screenshots", () => ({
     screenshotMocks.claimPendingApplicationSubmissionScreenshots,
   releaseApplicationSubmissionScreenshots:
     screenshotMocks.releaseApplicationSubmissionScreenshots,
-  listPendingApplicationSubmissionScreenshotScopes:
-    screenshotMocks.listPendingApplicationSubmissionScreenshotScopes,
+  listPendingApplicationSubmissionScreenshotBatches:
+    screenshotMocks.listPendingApplicationSubmissionScreenshotBatches,
 }));
 vi.mock("@/db/services/pending-role-searches", () => ({
   findLinqThread: linqThreadMocks.findLinqThread,
@@ -105,8 +116,8 @@ describe("Linq message delivery", () => {
     screenshotMocks.releaseApplicationSubmissionScreenshots.mockResolvedValue(
       undefined
     );
-    screenshotMocks.listPendingApplicationSubmissionScreenshotScopes.mockReset();
-    screenshotMocks.listPendingApplicationSubmissionScreenshotScopes.mockResolvedValue(
+    screenshotMocks.listPendingApplicationSubmissionScreenshotBatches.mockReset();
+    screenshotMocks.listPendingApplicationSubmissionScreenshotBatches.mockResolvedValue(
       []
     );
     linqThreadMocks.findLinqThread.mockReset();
@@ -283,8 +294,15 @@ describe("Linq message delivery", () => {
   });
 
   it("flushes the screenshot outbox without a new inbound message", async () => {
-    screenshotMocks.listPendingApplicationSubmissionScreenshotScopes.mockResolvedValue(
-      [{ userId: "user-1", workspaceId: "workspace-1" }]
+    screenshotMocks.listPendingApplicationSubmissionScreenshotBatches.mockResolvedValue(
+      [
+        {
+          applyUrl: "https://example.com/apply",
+          batchId: "browser-1:b1",
+          kind: "review",
+          scope: { userId: "user-1", workspaceId: "workspace-1" },
+        },
+      ]
     );
     screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
       [reviewScreenshot()]
@@ -305,7 +323,10 @@ describe("Linq message delivery", () => {
     expect(post).toHaveBeenCalledOnce();
     expect(
       screenshotMocks.claimPendingApplicationSubmissionScreenshots
-    ).toHaveBeenCalledWith({ userId: "user-1", workspaceId: "workspace-1" });
+    ).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: "workspace-1" },
+      { applyUrl: "https://example.com/apply" }
+    );
   });
 
   it("delivers Exa role cards with their apply URL instead of the model reply", async () => {
@@ -1764,5 +1785,66 @@ describe("a review only partly delivered", () => {
     );
     const prose = post.mock.calls.map((call) => postedMarkdown(call[0]));
     expect(prose.some((line) => line?.includes("ready to submit"))).toBe(true);
+  });
+});
+
+describe("two applications pending in one thread", () => {
+  it("are swept as two captioned reviews, each claimed by its own posting", async () => {
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockReset();
+    channelCapture.thread.mockReset();
+    // The sweep claimed once per workspace, so the newest review went out and
+    // the other waited for the next minute; and a claim with no filter could
+    // take either.
+    screenshotMocks.listPendingApplicationSubmissionScreenshotBatches.mockResolvedValue(
+      [
+        {
+          applyUrl: "https://example.com/apply/a",
+          batchId: "browser-a:1",
+          kind: "review",
+          scope: { userId: "user-1", workspaceId: "workspace-1" },
+        },
+        {
+          applyUrl: "https://example.com/apply/b",
+          batchId: "browser-b:1",
+          kind: "review",
+          scope: { userId: "user-1", workspaceId: "workspace-1" },
+        },
+      ]
+    );
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockImplementation(
+      async (_scope, filter?: { applyUrl?: string }) => [
+        {
+          applyUrl: filter?.applyUrl ?? "",
+          id: filter?.applyUrl?.endsWith("/a") ? 1 : 2,
+          kind: "review",
+          mimeType: "image/png",
+          png: Buffer.from(filter?.applyUrl ?? ""),
+          role: filter?.applyUrl?.endsWith("/a") ? "Analyst" : "Associate",
+          sessionId: "browser-1",
+        },
+      ]
+    );
+    linqThreadMocks.findLinqThread.mockResolvedValue("linq:dm:chat-1");
+    const post = vi
+      .fn<(message: unknown) => Promise<unknown>>()
+      .mockResolvedValue({ id: "sent" });
+    channelCapture.thread.mockReturnValue({
+      post,
+      toJSON: () => ({ currentMessage: { raw: { service: "iMessage" } } }),
+    });
+
+    await flushPendingLinqSubmissionScreenshots();
+
+    const claims =
+      screenshotMocks.claimPendingApplicationSubmissionScreenshots.mock.calls.map(
+        (call) => call[1]
+      );
+    expect(claims).toEqual([
+      { applyUrl: "https://example.com/apply/a" },
+      { applyUrl: "https://example.com/apply/b" },
+    ]);
+    const captions = post.mock.calls.map((call) => postedMarkdown(call[0]));
+    expect(captions[0]).toContain("analyst");
+    expect(captions[1]).toContain("associate");
   });
 });

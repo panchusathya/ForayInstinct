@@ -609,6 +609,7 @@ describe("database services", () => {
     await applyMigration(client, "0010_application_submission_screenshots.sql");
     await applyMigration(client, "0015_submission_review_screenshots.sql");
     await applyMigration(client, "0017_submission_screenshot_attribution.sql");
+    await applyMigration(client, "0025_submission_screenshot_batches.sql");
 
     const pgliteDatabase = drizzle(client, { schema });
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
@@ -721,6 +722,7 @@ describe("database services", () => {
     await applyMigration(client, "0010_application_submission_screenshots.sql");
     await applyMigration(client, "0015_submission_review_screenshots.sql");
     await applyMigration(client, "0017_submission_screenshot_attribution.sql");
+    await applyMigration(client, "0025_submission_screenshot_batches.sql");
 
     const pgliteDatabase = drizzle(client, { schema });
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
@@ -775,6 +777,7 @@ describe("database services", () => {
     await applyMigration(client, "0010_application_submission_screenshots.sql");
     await applyMigration(client, "0015_submission_review_screenshots.sql");
     await applyMigration(client, "0017_submission_screenshot_attribution.sql");
+    await applyMigration(client, "0025_submission_screenshot_batches.sql");
 
     const pgliteDatabase = drizzle(client, { schema });
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
@@ -1152,3 +1155,98 @@ function pdfFixture(literals: string[]) {
   const content = `BT /F1 12 Tf ${literals.map((line) => `(${line}) Tj`).join(" ")} ET`;
   return `%PDF-1.4\n1 0 obj\n<< /Length ${String(content.length)} >>\nstream\n${content}\nendstream\nendobj\n%%EOF`;
 }
+
+describe("screenshot batches", () => {
+  it("writes a review as one set and claims it whole, by posting or by batch", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0010_application_submission_screenshots.sql");
+    await applyMigration(client, "0015_submission_review_screenshots.sql");
+    await applyMigration(client, "0017_submission_screenshot_attribution.sql");
+    await applyMigration(client, "0025_submission_screenshot_batches.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, screenshots] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/application-submission-screenshots"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    const a = await screenshots.saveApplicationSubmissionScreenshotBatch(
+      alice,
+      "browser-a",
+      {
+        applyUrl: "https://example.com/apply/a",
+        kind: "review",
+        pngs: [Buffer.from("a-1"), Buffer.from("a-2"), Buffer.from("a-3")],
+        role: "Analyst",
+      }
+    );
+    expect(a.count).toBe(3);
+    const b = await screenshots.saveApplicationSubmissionScreenshotBatch(
+      alice,
+      "browser-b",
+      {
+        applyUrl: "https://example.com/apply/b",
+        kind: "review",
+        pngs: [Buffer.from("b-1"), Buffer.from("b-2"), Buffer.alloc(0)],
+        role: "Associate",
+      }
+    );
+    expect(b.count).toBe(2);
+
+    // Oldest first, one entry per pending application.
+    const pending =
+      await screenshots.listPendingApplicationSubmissionScreenshotBatches(
+        25,
+        alice
+      );
+    expect(pending.map((row) => [row.applyUrl, row.batchId])).toEqual([
+      ["https://example.com/apply/a", a.batchId],
+      ["https://example.com/apply/b", b.batchId],
+    ]);
+
+    // A filtered claim takes exactly that application's set, in page order.
+    const claimedA =
+      await screenshots.claimPendingApplicationSubmissionScreenshots(alice, {
+        applyUrl: "https://example.com/apply/a",
+      });
+    expect(claimedA.map((row) => row.png.toString())).toEqual([
+      "a-1",
+      "a-2",
+      "a-3",
+    ]);
+    expect(new Set(claimedA.map((row) => row.batchId))).toEqual(
+      new Set([a.batchId])
+    );
+
+    // A claim by batch id does the same for a set that names no posting.
+    const c = await screenshots.saveApplicationSubmissionScreenshotBatch(
+      alice,
+      "browser-c",
+      {
+        kind: "submitted",
+        pngs: [Buffer.from("c-1")],
+      }
+    );
+    const claimedC =
+      await screenshots.claimPendingApplicationSubmissionScreenshots(alice, {
+        batchId: c.batchId,
+      });
+    expect(claimedC.map((row) => row.png.toString())).toEqual(["c-1"]);
+
+    // What is left is B, and nothing else.
+    const rest =
+      await screenshots.claimPendingApplicationSubmissionScreenshots(alice);
+    expect(rest.map((row) => row.png.toString())).toEqual(["b-1", "b-2"]);
+    await expect(
+      screenshots.listPendingApplicationSubmissionScreenshotBatches(25, alice)
+    ).resolves.toEqual([]);
+  }, 20_000);
+});

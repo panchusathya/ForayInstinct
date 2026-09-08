@@ -58,6 +58,14 @@ const mocks = vi.hoisted(() => ({
         _screenshot: unknown
       ) => Promise<void>
     >(),
+  saveApplicationSubmissionScreenshotBatch:
+    vi.fn<
+      (
+        _scope: unknown,
+        _sessionId: string,
+        _input: { pngs: readonly Buffer[]; applyUrl?: string; role?: string }
+      ) => Promise<{ batchId: string; count: number }>
+    >(),
   snapshotKernelPage:
     vi.fn<(_input: unknown) => Promise<{ body: string; url: string }>>(),
 }));
@@ -70,6 +78,11 @@ vi.mock("@/agent/subagents/worker/lib/owned-browser", () => ({
   requireOwnedBrowserSession: mocks.requireOwnedBrowserSession,
 }));
 
+vi.mock("@/db/services/application-executions", () => ({
+  findApplicationExecutionByBrowserSession: vi.fn<() => Promise<undefined>>(
+    async () => undefined
+  ),
+}));
 vi.mock("@/db/services/browser-run-checkpoints", () => ({
   listBrowserRunCheckpoints: mocks.listBrowserRunCheckpoints,
   recordBrowserRunCheckpoint: mocks.recordBrowserRunCheckpoint,
@@ -78,6 +91,8 @@ vi.mock("@/db/services/browser-run-checkpoints", () => ({
 vi.mock("@/db/services/application-submission-screenshots", () => ({
   saveApplicationSubmissionScreenshot:
     mocks.saveApplicationSubmissionScreenshot,
+  saveApplicationSubmissionScreenshotBatch:
+    mocks.saveApplicationSubmissionScreenshotBatch,
 }));
 
 vi.mock("@/lib/kernel", () => ({
@@ -534,6 +549,10 @@ describe("the review gate pauses an application before its final submit", () => 
     });
     mocks.recordBrowserRunCheckpoint.mockResolvedValue();
     mocks.saveApplicationSubmissionScreenshot.mockResolvedValue();
+    mocks.saveApplicationSubmissionScreenshotBatch.mockResolvedValue({
+      batchId: "browser-1:batch",
+      count: 4,
+    });
     mocks.currentKernelPageUrl.mockResolvedValue(
       "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review?step=4"
     );
@@ -590,45 +609,24 @@ describe("the review gate pauses an application before its final submit", () => 
     // A 1800px scroll over a 900px container is four overlapping slices: the
     // top, two middles, and the submit control at the end.
     expect(result).toMatchObject({ captured: 4, status: "awaiting_approval" });
-    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(4);
-    for (const call of mocks.saveApplicationSubmissionScreenshot.mock.calls) {
-      // The role and apply URL travel with the image: the delivering channel
-      // captions by name, so a thread with two applications in flight can tell
-      // them apart instead of numbering both into one ambiguous run.
-      expect(call[2]).toMatchObject({
-        applyUrl:
-          "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
-        kind: "review",
-        page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review",
-        role: "Staff Engineer",
-      });
-    }
-    // Each slice is its own image, never the same shot stored four times.
-    const stored = mocks.saveApplicationSubmissionScreenshot.mock.calls.flatMap(
-      (call) => {
-        const screenshot: unknown = call[2];
-        if (typeof screenshot !== "object" || screenshot === null) return [];
-        const { png } = screenshot as { png?: unknown };
-        return Buffer.isBuffer(png) ? [png.toString("base64")] : [];
-      }
-    );
-    expect(new Set(stored).size).toBe(4);
-    // The trail is how the coordinator matches a paused worker to a posting.
-    expect(mocks.recordBrowserRunCheckpoint).toHaveBeenCalledWith(
-      { userId: "user-1", workspaceId: "workspace-1" },
-      "browser-1",
-      {
-        action: "review",
-        actions: [
-          "role: Staff Engineer",
-          "apply_url: https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
-          "review screenshots: 4",
-        ],
-        page: "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply/review",
-        phase: "submission_approval",
-        state: "awaiting_approval",
-      }
-    );
+    // One statement for the whole review: written a row at a time, a claim
+    // that landed between two writes delivered one page as the whole form.
+    expect(
+      mocks.saveApplicationSubmissionScreenshotBatch
+    ).toHaveBeenCalledTimes(1);
+    expect(mocks.saveApplicationSubmissionScreenshot).not.toHaveBeenCalled();
+    const batch =
+      mocks.saveApplicationSubmissionScreenshotBatch.mock.calls[0]?.[2];
+    expect(batch?.pngs).toHaveLength(4);
+    // The role and apply URL travel with the images: the delivering channel
+    // captions by name, so a thread with two applications in flight can tell
+    // them apart instead of numbering both into one ambiguous run.
+    expect(batch).toMatchObject({
+      applyUrl:
+        "https://intapp.wd1.myworkdayjobs.com/en-US/Intapp/job/role/apply",
+      kind: "review",
+      role: "Staff Engineer",
+    });
   });
 
   it("never reports a pause as an observed submission", async () => {
@@ -934,7 +932,12 @@ describe("the review gate pauses an application before its final submit", () => 
     );
 
     expect(result).toMatchObject({ captured: 4, capture_status: "captured" });
-    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(4);
+    expect(
+      mocks.saveApplicationSubmissionScreenshotBatch
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.saveApplicationSubmissionScreenshotBatch.mock.calls[0]?.[2]?.pngs
+    ).toHaveLength(4);
     expect(console.warn).toHaveBeenCalledWith(
       "[vault-screenshot-mask] could not apply",
       expect.objectContaining({ error: "mask execution rejected" })
@@ -974,7 +977,12 @@ describe("the review gate pauses an application before its final submit", () => 
     );
 
     expect(result).toMatchObject({ captured: 4, capture_status: "captured" });
-    expect(mocks.saveApplicationSubmissionScreenshot).toHaveBeenCalledTimes(4);
+    expect(
+      mocks.saveApplicationSubmissionScreenshotBatch
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.saveApplicationSubmissionScreenshotBatch.mock.calls[0]?.[2]?.pngs
+    ).toHaveLength(4);
     expect(console.warn).toHaveBeenCalledWith(
       "[vault-screenshot-mask] could not apply",
       expect.objectContaining({ error: "mask transport unavailable" })
