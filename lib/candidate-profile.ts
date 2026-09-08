@@ -274,6 +274,56 @@ export function parseProfilePatch(
   return { ok: true, patch: kept > 0 ? stated : undefined };
 }
 
+/**
+ * The fields of `next` that differ from `base`, as a patch. The profile page
+ * used to send its whole snapshot on every save, so a field left stale in one
+ * tab was written back over the answer given in another.
+ */
+export function profileDiff(
+  base: CandidateProfile,
+  next: CandidateProfile
+): CandidateProfilePatch {
+  const before: Record<string, unknown> = { ...base };
+  const after: Record<string, unknown> = { ...next };
+  const patch: Record<string, unknown> = {};
+  for (const key of Object.keys(candidateProfileSchema.shape)) {
+    if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+      patch[key] = after[key];
+    }
+  }
+  return profilePatchOf(patch) ?? {};
+}
+
+/**
+ * The candidate's own entries always win over anything read off a resume or
+ * a form. Links are the one list that merges: a LinkedIn URL found on the
+ * resume joins the links the candidate typed rather than being dropped
+ * because they typed any at all. An empty list counts as unset.
+ */
+export function onlyUnset(
+  stored: CandidateProfile,
+  patch: CandidateProfilePatch
+) {
+  const current: Record<string, unknown> = { ...stored };
+  const kept: Record<string, unknown> = {};
+  const { links, ...rest } = patch;
+  if (links) {
+    const known = new Set(stored.links.map((link) => link.url.toLowerCase()));
+    const added = links.filter((link) => !known.has(link.url.toLowerCase()));
+    if (added.length > 0) kept.links = [...stored.links, ...added];
+  }
+  for (const [key, value] of Object.entries(rest)) {
+    const existing = current[key];
+    const alreadySet = Array.isArray(existing)
+      ? existing.length > 0
+      : typeof existing === "string"
+        ? existing.trim() !== ""
+        : existing !== null && existing !== undefined;
+    if (!alreadySet) kept[key] = value;
+  }
+  return kept;
+}
+
 const candidateContactIdentitySchema = z.object({
   email: z.string().optional(),
   name: z.string(),
@@ -284,6 +334,12 @@ export const candidateProfileResponseSchema = z.object({
   identity: candidateContactIdentitySchema,
   kernelProfileId: z.string(),
   profile: candidateProfileSchema,
+  /**
+   * When the stored profile last changed, as the row records it. The page
+   * hands it back with a save so a write against a snapshot another save has
+   * replaced is refused instead of silently winning.
+   */
+  updatedAt: z.string().default(""),
 });
 
 export type CandidateContactIdentity = z.infer<

@@ -73,7 +73,8 @@ export function useCandidateDocuments() {
       const form = new FormData();
       form.set("file", file);
       form.set("kind", kind);
-      form.set("setDefault", kind === "resume" ? "true" : "false");
+      // The service makes a resume the default only when there is none; the
+      // page used to force it, so every upload displaced the chosen default.
       const response = await fetch("/api/documents", {
         body: form,
         method: "POST",

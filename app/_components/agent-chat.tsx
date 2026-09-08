@@ -389,7 +389,11 @@ async function resumeFormData(file: PromptInputMessage["files"][number]) {
       type: file.mediaType,
     })
   );
-  form.set("kind", inferCandidateDocumentKind(file.filename ?? "resume"));
+  // A file sent in chat is the resume the candidate means to apply with.
+  form.set(
+    "kind",
+    inferCandidateDocumentKind(file.filename ?? "resume") ?? "resume"
+  );
   form.set("setDefault", "true");
   return form;
 }

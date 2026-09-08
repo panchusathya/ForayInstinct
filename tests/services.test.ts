@@ -1603,3 +1603,137 @@ describe("a document's stored name and type", () => {
     expect(saved.document.mimeType).toBe("application/pdf");
   }, 15_000);
 });
+
+describe("saving the profile page", () => {
+  it("refuses a save made against a snapshot another save has replaced", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, candidateProfile] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/candidate-profile"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    // The first save of an empty profile carries the empty marker.
+    expect(
+      await candidateProfile.saveCandidateProfile(
+        alice,
+        { legalFirstName: "Ada" },
+        { expectUpdatedAt: "" }
+      )
+    ).toMatchObject({ stored: true });
+    const loaded = await candidateProfile.readCandidateProfileWithMeta(alice);
+    expect(loaded.updatedAt).not.toBe("");
+
+    // Another writer lands while this page is open.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await candidateProfile.saveCandidateProfile(alice, {
+      headline: "Engineer",
+    });
+
+    const stale = await candidateProfile.saveCandidateProfile(
+      alice,
+      { legalLastName: "Lovelace" },
+      { expectUpdatedAt: loaded.updatedAt }
+    );
+    expect(stale).toMatchObject({ conflict: true, stored: false });
+    expect(await candidateProfile.readCandidateProfile(alice)).toMatchObject({
+      headline: "Engineer",
+      legalLastName: "",
+    });
+
+    // Reloaded, the same save goes through, and a save that states no
+    // expectation still writes as it always did.
+    const fresh = await candidateProfile.readCandidateProfileWithMeta(alice);
+    expect(
+      await candidateProfile.saveCandidateProfile(
+        alice,
+        { legalLastName: "Lovelace" },
+        { expectUpdatedAt: fresh.updatedAt }
+      )
+    ).toMatchObject({ stored: true });
+    expect(
+      await candidateProfile.saveCandidateProfile(alice, { headline: "Lead" })
+    ).toMatchObject({ stored: true });
+  }, 15_000);
+});
+
+describe("filing a document by kind", () => {
+  it("keeps a cover letter apart from a byte-identical resume and leaves the default alone", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0011_candidate_documents.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, documents] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/candidate-documents"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+    const bytes = Buffer.from(pdfFixture(["Ada Lovelace"]));
+
+    const resume = await documents.saveCandidateDocument(alice, {
+      bytes,
+      filename: "Ada_Resume.pdf",
+      kind: "resume",
+      mimeType: "application/pdf",
+      source: "upload",
+    });
+    expect(resume.document.isDefault).toBe(true);
+
+    // The same bytes as a cover letter used to come back as the resume.
+    const letter = await documents.saveCandidateDocument(alice, {
+      bytes,
+      filename: "letter.pdf",
+      kind: "cover_letter",
+      mimeType: "application/pdf",
+      source: "upload",
+    });
+    expect(letter.created).toBe(true);
+    expect(letter.document).toMatchObject({
+      isDefault: false,
+      kind: "cover_letter",
+    });
+    expect(await documents.listCandidateDocuments(alice)).toHaveLength(2);
+
+    // A second resume does not displace the default unless asked to.
+    const second = await documents.saveCandidateDocument(alice, {
+      bytes: Buffer.from(pdfFixture(["Ada Lovelace", "2026"])),
+      filename: "Ada_Resume_2026.pdf",
+      kind: "resume",
+      mimeType: "application/pdf",
+      source: "upload",
+    });
+    expect(second.document.isDefault).toBe(false);
+    expect((await documents.readDefaultResume(alice))?.id).toBe(
+      resume.document.id
+    );
+    const promoted = await documents.saveCandidateDocument(alice, {
+      bytes: Buffer.from(pdfFixture(["Ada Lovelace", "2026"])),
+      filename: "Ada_Resume_2026.pdf",
+      kind: "resume",
+      mimeType: "application/pdf",
+      setDefault: true,
+      source: "upload",
+    });
+    expect(promoted.created).toBe(false);
+    expect(promoted.document.isDefault).toBe(true);
+    expect((await documents.readDefaultResume(alice))?.id).toBe(
+      second.document.id
+    );
+  }, 15_000);
+});

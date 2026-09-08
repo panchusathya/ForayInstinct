@@ -50,12 +50,27 @@ export function useCandidateProfile() {
     };
   }, [load]);
 
-  const save = async (profile: CandidateProfilePatch) => {
+  /**
+   * Writes a patch and returns the fresh snapshot, or nothing when the save
+   * was refused. `expectUpdatedAt` is the marker the page loaded; the server
+   * answers 409 when the profile has moved on since, and that message is
+   * surfaced like any other error.
+   */
+  const save = async (
+    profile: CandidateProfilePatch,
+    options: { readonly expectUpdatedAt?: string } = {}
+  ) => {
     setBusy(true);
     setError(undefined);
     try {
       const response = await fetch("/api/profile", {
-        body: JSON.stringify({ action: "save", profile }),
+        body: JSON.stringify({
+          action: "save",
+          profile,
+          ...(options.expectUpdatedAt === undefined
+            ? {}
+            : { expectUpdatedAt: options.expectUpdatedAt }),
+        }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       });
@@ -66,14 +81,15 @@ export function useCandidateProfile() {
             "Could not save profile."
         );
       }
-      setSnapshot(candidateProfileResponseSchema.parse(body));
-      return true;
+      const next = candidateProfileResponseSchema.parse(body);
+      setSnapshot(next);
+      return next;
     } catch (saveError) {
       setError(
         errorSchema.safeParse(saveError).data?.message ??
           "Could not save profile."
       );
-      return false;
+      return undefined;
     } finally {
       setBusy(false);
     }

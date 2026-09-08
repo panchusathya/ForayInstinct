@@ -57,12 +57,29 @@ export function SubagentPanel({
   const restoreFocusId = useRef<string | undefined>(undefined);
   const subscriptionKey = getSubagentSubscriptionKey(sessions);
 
+  // One stream per child, kept across re-renders: re-subscribing every child
+  // whenever the list changed replayed each stream from the start, so a
+  // long-running task's trace flickered and re-downloaded on every new task.
+  const controllers = useRef(new Map<string, AbortController>());
   useEffect(() => {
-    if (!subscriptionKey) return;
-    const controllers = subscriptionKey.split("\n").map((subscription) => {
-      const [encodedSessionId] = subscription.split(":");
-      const childSessionId = decodeURIComponent(encodedSessionId ?? "");
+    const wanted = new Set(
+      subscriptionKey === ""
+        ? []
+        : subscriptionKey.split("\n").map((subscription) => {
+            const [encodedSessionId] = subscription.split(":");
+            return decodeURIComponent(encodedSessionId ?? "");
+          })
+    );
+    const active = controllers.current;
+    for (const [childSessionId, controller] of active) {
+      if (wanted.has(childSessionId)) continue;
+      controller.abort();
+      active.delete(childSessionId);
+    }
+    for (const childSessionId of wanted) {
+      if (active.has(childSessionId)) continue;
       const controller = new AbortController();
+      active.set(childSessionId, controller);
       const child = client.sessions.attach(childSessionId);
 
       void (async () => {
@@ -104,14 +121,16 @@ export function SubagentPanel({
           }
         }
       })();
-
-      return controller;
-    });
-
-    return () => {
-      for (const controller of controllers) controller.abort();
-    };
+    }
   }, [subscriptionKey]);
+
+  useEffect(() => {
+    const active = controllers.current;
+    return () => {
+      for (const controller of active.values()) controller.abort();
+      active.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if (!window.matchMedia("(min-width: 48rem)").matches) return;

@@ -15,8 +15,10 @@ vi.mock("@/lib/model-config", () => ({
   chatLanguageModel: "text-model",
 }));
 
+import { candidateProfileSchema, profileLimits } from "@/lib/candidate-profile";
 import {
   extractProfileFromResume,
+  mergeResumeFacts,
   resumeContactFacts,
   resumeText,
 } from "@/lib/resume-profile";
@@ -181,5 +183,69 @@ describe("reading a profile off a resume", () => {
     const patch = await extractProfileFromResume(plainResume);
 
     expect(patch?.workHistory).toHaveLength(1);
+  });
+});
+
+describe("merging a resume into a profile", () => {
+  const position = (company: string, title: string, startYear?: number) => ({
+    company,
+    current: false,
+    description: "",
+    location: "",
+    ...(startYear === undefined ? {} : { startYear }),
+    title,
+  });
+
+  it("adds the positions the candidate had not listed and keeps every one they had", () => {
+    // A re-import used to hand back the resume's whole history and drop every
+    // position the candidate had typed or corrected themselves.
+    const stored = candidateProfileSchema.parse({
+      legalFirstName: "Ada",
+      workHistory: [position("Analytical Engines", "Mathematician", 1990)],
+    });
+
+    const patch = mergeResumeFacts(stored, {
+      legalFirstName: "Augusta",
+      legalLastName: "King",
+      workHistory: [
+        position("analytical engines", "MATHEMATICIAN", 1990),
+        position("Royal Society", "Fellow"),
+      ],
+    });
+
+    expect(patch.legalFirstName).toBeUndefined();
+    expect(patch.legalLastName).toBe("King");
+    expect(patch.workHistory?.map((entry) => entry.company)).toEqual([
+      "Analytical Engines",
+      "Royal Society",
+    ]);
+  });
+
+  it("says nothing about the history when the resume adds nothing to it", () => {
+    const stored = candidateProfileSchema.parse({
+      workHistory: [position("Analytical Engines", "Mathematician", 1990)],
+    });
+
+    expect(
+      mergeResumeFacts(stored, {
+        workHistory: [position("Analytical Engines", "Mathematician", 1990)],
+      })
+    ).toEqual({});
+  });
+
+  it("keeps the merged history within the profile's cap", () => {
+    const stored = candidateProfileSchema.parse({
+      workHistory: Array.from(
+        { length: profileLimits.workHistory - 1 },
+        (_, index) => position(`Company ${String(index)}`, "Role")
+      ),
+    });
+
+    const patch = mergeResumeFacts(stored, {
+      workHistory: [position("New A", "Role"), position("New B", "Role")],
+    });
+
+    expect(patch.workHistory).toHaveLength(profileLimits.workHistory);
+    expect(patch.workHistory?.at(-1)?.company).toBe("New A");
   });
 });

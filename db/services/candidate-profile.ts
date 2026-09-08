@@ -21,14 +21,26 @@ import {
 export async function readCandidateProfile(
   scope: AccessScope
 ): Promise<CandidateProfile> {
+  return (await readCandidateProfileWithMeta(scope)).profile;
+}
+
+/**
+ * The profile with the row's own change marker, for a writer that wants its
+ * save refused when the profile has moved on since it looked. `updatedAt` is
+ * empty when nothing is stored yet.
+ */
+export async function readCandidateProfileWithMeta(
+  scope: AccessScope
+): Promise<{ profile: CandidateProfile; updatedAt: string }> {
   const rows = await db
     .select()
     .from(candidateProfiles)
     .where(eq(candidateProfiles.workspaceId, scope.workspaceId))
     .limit(1);
   const row = rows[0];
-  if (row === undefined) return emptyCandidateProfile;
-  return parseStoredProfile(row);
+  if (row === undefined)
+    return { profile: emptyCandidateProfile, updatedAt: "" };
+  return { profile: parseStoredProfile(row), updatedAt: row.updatedAt };
 }
 
 /**
@@ -44,12 +56,23 @@ export async function readCandidateProfile(
  * given — the profile went backwards between applications no matter how
  * carefully each caller had trimmed its patch. An invalid patch still throws;
  * an empty one is a no-op.
+ *
+ * With `expectUpdatedAt`, the write lands only if the row still carries that
+ * marker (or, for an empty marker, if no row exists yet); otherwise the save
+ * is reported as a conflict and nothing changes. The profile page passes the
+ * marker it loaded, so two tabs cannot take turns overwriting each other.
  */
 export async function saveCandidateProfile(
   scope: AccessScope,
-  patch: CandidateProfilePatch
-): Promise<{ profile: CandidateProfile; stored: boolean }> {
-  const stored = await readCandidateProfile(scope);
+  patch: CandidateProfilePatch,
+  options: { readonly expectUpdatedAt?: string } = {}
+): Promise<{ conflict?: true; profile: CandidateProfile; stored: boolean }> {
+  const current = await readCandidateProfileWithMeta(scope);
+  const stored = current.profile;
+  const expected = options.expectUpdatedAt;
+  if (expected !== undefined && expected !== current.updatedAt) {
+    return { conflict: true, profile: stored, stored: false };
+  }
   const stated = profilePatchOf(patch);
   if (stated === undefined) {
     // Surface the validation error itself rather than a silent no-op.
@@ -62,7 +85,7 @@ export async function saveCandidateProfile(
   });
   const now = new Date().toISOString();
   try {
-    await db
+    const written = await db
       .insert(candidateProfiles)
       .values({
         ...merged,
@@ -76,7 +99,17 @@ export async function saveCandidateProfile(
           ...merged,
           updatedAt: now,
         },
-      });
+        // The check above and this predicate together: the read told us the
+        // marker matched, and the update still lands only on the row that
+        // carries it, so a save that slips in between is not overwritten.
+        ...(expected === undefined
+          ? {}
+          : { setWhere: eq(candidateProfiles.updatedAt, expected) }),
+      })
+      .returning({ workspaceId: candidateProfiles.workspaceId });
+    if (written.length === 0) {
+      return { conflict: true, profile: stored, stored: false };
+    }
     return { profile: merged, stored: true };
   } catch (error) {
     console.error("[candidate-profile] persistence failed", {

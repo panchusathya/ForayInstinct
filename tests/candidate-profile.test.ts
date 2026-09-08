@@ -7,7 +7,9 @@ import {
   emptyCandidateProfile,
   isPlaceholderName,
   missingProfileFields,
+  onlyUnset,
   parseProfilePatch,
+  profileDiff,
   profileLimits,
   profilePatchOf,
   storedCandidateProfileSchema,
@@ -206,5 +208,55 @@ describe("a profile that exceeds a limit", () => {
     expect(isPlaceholderName(" phone user ")).toBe(true);
     expect(isPlaceholderName("Ada")).toBe(false);
     expect(isPlaceholderName("")).toBe(false);
+  });
+});
+
+describe("the profile page's save", () => {
+  it("sends only the fields that changed", () => {
+    // The page used to send its whole snapshot, so a field left stale in one
+    // tab was written back over the answer given in another.
+    const base = candidateProfileSchema.parse({
+      legalFirstName: "Ada",
+      skills: ["Math"],
+    });
+
+    expect(profileDiff(base, base)).toEqual({});
+    expect(
+      profileDiff(base, {
+        ...base,
+        headline: "Engineer",
+        skills: ["Math", "Engines"],
+      })
+    ).toEqual({ headline: "Engineer", skills: ["Math", "Engines"] });
+    // Clearing a field is a change too.
+    expect(profileDiff(base, { ...base, legalFirstName: "" })).toEqual({
+      legalFirstName: "",
+    });
+  });
+
+  it("lets a fact fill only a gap, and reads an empty list as a gap", () => {
+    const stored = candidateProfileSchema.parse({
+      legalFirstName: "Ada",
+      links: [{ label: "Site", url: "https://ada.example" }],
+    });
+
+    expect(
+      onlyUnset(stored, {
+        legalFirstName: "Augusta",
+        legalLastName: "King",
+        links: [
+          { label: "Home", url: "https://ADA.example" },
+          { label: "LinkedIn", url: "https://linkedin.com/in/ada" },
+        ],
+        skills: ["Math"],
+      })
+    ).toEqual({
+      legalLastName: "King",
+      links: [
+        { label: "Site", url: "https://ada.example" },
+        { label: "LinkedIn", url: "https://linkedin.com/in/ada" },
+      ],
+      skills: ["Math"],
+    });
   });
 });

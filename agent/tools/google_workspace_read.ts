@@ -149,7 +149,10 @@ export default defineTool({
             {
               bytes,
               filename: input.filename,
-              kind: input.kind ?? inferCandidateDocumentKind(input.filename),
+              kind:
+                input.kind ??
+                inferCandidateDocumentKind(input.filename) ??
+                "resume",
               mimeType,
               setDefault: input.setDefault,
               source: "gmail",
