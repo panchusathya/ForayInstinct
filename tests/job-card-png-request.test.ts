@@ -7,6 +7,7 @@ vi.mock("@/lib/env", () => ({
   },
 }));
 
+import { jobCardSecret } from "@/lib/goforay/job-card-secret";
 import { renderJobCardPng } from "@/lib/goforay/request-job-card-png";
 
 const card = {
@@ -46,7 +47,8 @@ describe("job card png request", () => {
       expect.objectContaining({
         headers: {
           "content-type": "application/json",
-          "x-job-card-secret": "job-card-secret",
+          // Derived from the signing secret, never the signing secret itself.
+          "x-job-card-secret": jobCardSecret(),
         },
         method: "POST",
       })
@@ -98,5 +100,23 @@ describe("job card png request", () => {
       "[goforay] job-card PNG route unreachable",
       expect.objectContaining({ message: "ECONNREFUSED" })
     );
+  });
+});
+
+describe("the card route's secret", () => {
+  it("is not the session-signing secret, and is checked in constant time", async () => {
+    const { isJobCardSecret } = await import("@/lib/goforay/job-card-secret");
+    const secret = jobCardSecret();
+    expect(secret).not.toBe("job-card-secret");
+    expect(secret).toMatch(/^[0-9a-f]{64}$/u);
+    expect(isJobCardSecret(secret)).toBe(true);
+    expect(isJobCardSecret("job-card-secret")).toBe(false);
+    // Same length, one byte off.
+    expect(
+      isJobCardSecret(
+        `${secret.slice(0, -1)}${secret.endsWith("0") ? "1" : "0"}`
+      )
+    ).toBe(false);
+    expect(isJobCardSecret(null)).toBe(false);
   });
 });

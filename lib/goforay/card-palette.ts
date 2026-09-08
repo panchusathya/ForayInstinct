@@ -106,7 +106,9 @@ export function paletteFor(brand?: { accent?: string; primary?: string }) {
     }
   }
 
-  if (primary && contrastRatio(LIGHT_GROUND, INK_DARK) >= MIN_CONTRAST) {
+  // The light ground and dark ink are constants that meet the contrast bar
+  // by construction, so a readable primary is all this branch needs.
+  if (primary) {
     return {
       accent: readableAccent(LIGHT_GROUND, primary, INK_DARK),
       branded: true,

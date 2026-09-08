@@ -227,6 +227,9 @@ export class PostgresStateAdapter implements StateAdapter {
         "INSERT INTO chat_state_queue (thread_id, entry) VALUES ($1, $2::jsonb)",
         [threadId, JSON.stringify(entry)]
       );
+      // Past the cap the oldest entries go, not the newest: the queue holds
+      // turns a candidate sent while one was running, and the latest thing
+      // they said is the one to keep when there is not room for all of it.
       await client.query(
         `DELETE FROM chat_state_queue
          WHERE sequence IN (

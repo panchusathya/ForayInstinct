@@ -63,8 +63,13 @@ async function recordWebMessage(
   // rather than `linq`. The auth projection is the durable discriminator.
   // Linq records its own transport messages in the channel adapter, so the
   // global hook must not mirror them into a second web conversation.
-  if (initiator?.authenticator === "linq-message" || !body.trim()) return;
-  if (!initiator) return;
+  if (
+    !initiator ||
+    initiator.authenticator === "linq-message" ||
+    !body.trim()
+  ) {
+    return;
+  }
   try {
     const scope = scopeFromPrincipal(initiator);
     await recordConversationMessage({

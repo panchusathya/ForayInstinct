@@ -28,7 +28,8 @@ export default defineEval({
 
     const apply = await t.send("Let's apply to this one");
     apply.succeeded();
-    apply.calledSubagent("worker", { count: 1 });
+    // The worker subagent is retired; the runner is started by tool.
+    apply.calledTool("start_application");
     apply.notCalledTool("start_goforay_application");
     apply.notCalledTool("report_goforay_application_result");
     t.check(

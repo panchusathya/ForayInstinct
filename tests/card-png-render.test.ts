@@ -55,12 +55,16 @@ describe("job card png render", () => {
     expect(image.height).toBeGreaterThanOrEqual(image.width);
   }, 60000);
 
-  it("grows for the worst case instead of clipping it", async () => {
+  it("never clips the worst case, and never runs past the tall bound", async () => {
+    // Both fixtures fit the square minimum since reasons left the card, so
+    // the height only grows when the title wraps enough to need it; what the
+    // test guards is that a long card is never shorter than a short one and
+    // never taller than the bound.
     const [typicalImage, worstImage] = await Promise.all([
       render(typical),
       render(worstCase),
     ]);
-    expect(worstImage.height).toBeGreaterThan(typicalImage.height);
+    expect(worstImage.height).toBeGreaterThanOrEqual(typicalImage.height);
     expect(worstImage.height).toBeLessThanOrEqual(1180);
   }, 90000);
 

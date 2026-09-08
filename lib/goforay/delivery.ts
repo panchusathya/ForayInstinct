@@ -132,7 +132,8 @@ function splitBubbles(value: string) {
   // rather than transmitting a sixth message while the candidate is waiting.
   return [
     ...candidates.slice(0, 4),
-    candidates.slice(4).join(" ").slice(0, 600).trim(),
+    // By code point: a cut through an emoji left a lone surrogate.
+    Array.from(candidates.slice(4).join(" ")).slice(0, 600).join("").trim(),
   ];
 }
 

@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { jobCardSecret } from "./job-card-secret";
 import { jobCardFilename, type GoForayJobCard } from "./job-cards";
 
 const JOB_CARD_PNG_PATH = "/api/job-card-png";
@@ -24,7 +25,7 @@ export async function renderJobCardPng(
       body: JSON.stringify({ card, index, total }),
       headers: {
         "content-type": "application/json",
-        "x-job-card-secret": env.BETTER_AUTH_SECRET,
+        "x-job-card-secret": jobCardSecret(),
       },
       method: "POST",
     });

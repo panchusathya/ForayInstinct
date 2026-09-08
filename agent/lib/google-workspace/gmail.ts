@@ -355,14 +355,21 @@ async function findEmailOtp(
   return null;
 }
 
+/**
+ * Whether a message is recent enough to carry the code being waited for. A
+ * message with no readable date is not: the guard used to pass it through,
+ * which is the opposite of what a freshness check is for.
+ */
+export function isFreshEmailMessage(
+  internalDate: string | null | undefined,
+  now = Date.now()
+) {
+  const stamp = Number(internalDate);
+  return Number.isFinite(stamp) && stamp > 0 && now - stamp <= 15 * 60 * 1_000;
+}
+
 function emailOtpFromMessage(message: GmailMessage) {
-  const internalDate = Number(message.internalDate);
-  if (
-    Number.isFinite(internalDate) &&
-    Date.now() - internalDate > 15 * 60 * 1_000
-  ) {
-    return null;
-  }
+  if (!isFreshEmailMessage(message.internalDate)) return null;
   const subject = header(message.payload, "Subject");
   const code = extractEmailOtp(
     `${subject ?? ""}\n${plainText(message.payload)}`

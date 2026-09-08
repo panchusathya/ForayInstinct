@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isClosedPosting,
   locationFromResult,
+  matchedTokens,
   reasonsForCandidate,
   relevanceTokens,
   scoreRoleCandidate,
@@ -12,6 +13,24 @@ const wanted = relevanceTokens("strategic finance", "senior");
 function score(title: string, url: string, text = "") {
   return scoreRoleCandidate({ title, url, text, wanted });
 }
+
+describe("matching a wanted word", () => {
+  it("takes a single word only as a whole word, and a phrase as itself", () => {
+    // "data" inside "Metadata" is how a metadata role became a data analyst one.
+    expect(matchedTokens("Metadata Engineer", ["data", "analyst"])).toEqual([]);
+    expect(matchedTokens("Senior Data Analyst", ["data", "analyst"])).toEqual([
+      "analyst",
+      "data",
+    ]);
+    expect(matchedTokens("Lamb Chops Cook", ["ops"])).toEqual([]);
+    expect(
+      matchedTokens("Analyst, Strategic Finance", [
+        "strategic finance",
+        "finance",
+      ])
+    ).toEqual(["strategic finance", "finance"]);
+  });
+});
 
 describe("goforay role relevance", () => {
   describe("rejections", () => {
