@@ -39,6 +39,21 @@ describe("bounding a best-effort step", () => {
   });
 });
 
+describe("attachment downloads", () => {
+  it("are bounded, unredirected, and budgeted per message", () => {
+    // The one fetch with no limit of any kind held the webhook until the
+    // function was killed at five minutes, and the message was lost.
+    const importer = readFileSync("lib/linq-resume-import.ts", "utf8");
+    expect(importer).toContain(
+      "signal: AbortSignal.timeout(attachmentDownloadTimeoutMs)"
+    );
+    expect(importer).toContain('redirect: "error"');
+    const channel = readFileSync("agent/channels/linq-v2.ts", "utf8");
+    expect(channel).toContain("const ATTACHMENT_IMPORT_BUDGET_MS = 45_000;");
+    expect(channel).toContain("() => readLinqAttachment(attachment),");
+  });
+});
+
 describe("calls out to JuiceBox", () => {
   const bridge = readFileSync("lib/goforay/bridge.ts", "utf8");
 

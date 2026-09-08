@@ -66,6 +66,35 @@ describe("Linq input requests", () => {
     ]);
   });
 
+  it("answers with the prompt's own option ids, whatever they are named", async () => {
+    // Hardcoded "continue" and "stop" answered a prompt whose options had
+    // other ids with ids it did not have, and the session sat on it unseen.
+    const renamed = {
+      ...limitRequest,
+      options: [
+        { id: "opt_a", label: "Keep going" },
+        { id: "opt_b", label: "Stop the session" },
+      ],
+    };
+    await resolveSessionLimitPrompt({ requests: [renamed], sessionId: "s" });
+    expect(mocks.respond).toHaveBeenCalledWith([
+      { optionId: "opt_a", requestId: renamed.requestId },
+    ]);
+    mocks.respond.mockClear();
+    mocks.countRecentApplicationExecutionEvents.mockResolvedValueOnce(2);
+    await resolveSessionLimitPrompt({ requests: [renamed], sessionId: "s" });
+    expect(mocks.respond).toHaveBeenCalledWith([
+      { optionId: "opt_b", requestId: renamed.requestId },
+    ]);
+    mocks.respond.mockClear();
+    // A request with no options cannot be answered and is not.
+    await resolveSessionLimitPrompt({
+      requests: [{ ...limitRequest, options: [] }],
+      sessionId: "s",
+    });
+    expect(mocks.respond).not.toHaveBeenCalled();
+  });
+
   it("stops a run whose trace shows duplicate workers in the last hour", async () => {
     mocks.countRecentApplicationExecutionEvents.mockResolvedValueOnce(2);
     await expect(

@@ -14,9 +14,13 @@ export async function recordWorkerCancellationTurn(
   turnId: string,
   message: string
 ) {
-  const taskId = /^Background task (\S+) \(worker\) is cancelled\.$/u.exec(
-    message
-  )?.[1];
+  // The framework's own wording, matched loosely: an exact sentence broke on
+  // a trailing newline or a changed verb, and the raw envelope then reached
+  // the candidate as "background task tk_abc (worker) is cancelled."
+  const taskId =
+    /\bBackground task\s+(\S+?)\s*\((?:worker|application[-_ ]?runner)\)\s+(?:is|was|has been)\s+cancel+ed\b/iu
+      .exec(message)?.[1]
+      ?.replace(/[.,;:]+$/u, "");
   if (!taskId) return;
   const key = turnKey(sessionId, turnId);
   cancellationTurns.set(key, taskId);

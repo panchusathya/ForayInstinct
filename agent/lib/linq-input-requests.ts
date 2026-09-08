@@ -46,21 +46,40 @@ export async function resolveSessionLimitPrompt(input: {
   const healthy = await isSessionActivityHealthy(input.sessionId).catch(
     () => true
   );
-  const optionId = healthy ? "continue" : "stop";
-  await eveSessionClient()
-    .sessions.attach(input.sessionId)
-    .respond(
-      input.requests.map((request) => ({
-        optionId,
-        requestId: request.requestId,
-      }))
-    );
+  // The option ids are the prompt's own, read off each request. Hardcoded
+  // "continue" and "stop" answered a prompt whose options were named
+  // otherwise with ids it did not have, and the session sat on it unseen.
+  const responses = input.requests.flatMap((request) => {
+    const optionId = sessionLimitOptionId(request, healthy);
+    return optionId === undefined
+      ? []
+      : [{ optionId, requestId: request.requestId }];
+  });
+  if (responses.length > 0) {
+    await eveSessionClient()
+      .sessions.attach(input.sessionId)
+      .respond(responses);
+  }
   console.info("[linq-session] answered session-limit prompt", {
-    decision: optionId,
-    request_ids: input.requests.map((request) => request.requestId),
+    decision: healthy ? "approve" : "stop",
+    request_ids: responses.map((response) => response.requestId),
     session_id: input.sessionId,
+    unanswered: input.requests.length - responses.length,
   });
   return healthy ? "approved" : "stopped";
+}
+
+/** The request's own id for approving or stopping, by label first, then id. */
+function sessionLimitOptionId(request: InputRequestLike, approve: boolean) {
+  const options = request.options ?? [];
+  if (options.length === 0) return undefined;
+  const wording = approve
+    ? /continue|approve|keep|proceed|yes|allow/iu
+    : /stop|cancel|halt|end|no\b|deny/iu;
+  const named = options.find(
+    (option) => wording.test(option.label) || wording.test(option.id)
+  );
+  return (named ?? (approve ? options[0] : options.at(-1)))?.id;
 }
 
 export const sessionStoppedMessage =

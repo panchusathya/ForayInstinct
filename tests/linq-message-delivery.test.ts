@@ -188,7 +188,52 @@ describe("Linq message delivery", () => {
     );
 
     expect(post).not.toHaveBeenCalled();
+    // Kept, with the attempt counted: a race gets a few more tries, not
+    // forever.
     expect(state.pendingSubmissionScreenshot).toEqual({
+      attempts: 1,
+      turnId: "interrupted-turn",
+    });
+  });
+
+  it("gives up on a capture that never appears after a few tries", async () => {
+    const { context, post, state } = handlerContext("message-1", {
+      pendingSubmissionScreenshot: { attempts: 2, turnId: "interrupted-turn" },
+    });
+
+    await recoverPendingScreenshot(
+      { sequence: 0, turnId: "retry-turn" },
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(post).not.toHaveBeenCalled();
+    expect(state.pendingSubmissionScreenshot).toBeUndefined();
+  });
+
+  it("retries a capture for the application it was set for, not the newest one", async () => {
+    const { context, state } = handlerContext("message-1", {
+      pendingSubmissionScreenshot: {
+        applyUrl: "https://example.com/apply/a",
+        attempts: 0,
+        turnId: "interrupted-turn",
+      },
+    });
+
+    await recoverPendingScreenshot(
+      { sequence: 0, turnId: "retry-turn" },
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+
+    expect(
+      screenshotMocks.claimPendingApplicationSubmissionScreenshots
+    ).toHaveBeenCalledWith(expect.anything(), {
+      applyUrl: "https://example.com/apply/a",
+    });
+    expect(state.pendingSubmissionScreenshot).toEqual({
+      applyUrl: "https://example.com/apply/a",
+      attempts: 1,
       turnId: "interrupted-turn",
     });
   });
@@ -1580,3 +1625,144 @@ function postedMarkdown(message: unknown) {
   const parsed = z.object({ markdown: z.string() }).safeParse(message);
   return parsed.success ? parsed.data.markdown : undefined;
 }
+
+describe("role cards that must not be stranded", () => {
+  const toroCards = (turnId: string) => ({
+    result: {
+      callId: "call-roles",
+      kind: "tool-result" as const,
+      output: {
+        cards: [
+          {
+            company: "The Toro Company",
+            location: "Remote, USA",
+            reasons: ["M&A modeling"],
+            title: "Sr. Analyst, Corporate Development",
+            url: "https://jobs.thetorocompany.com/job/bloomington/corp-dev/1",
+          },
+        ],
+        source: "exa",
+      },
+      toolName: "find_goforay_roles" as const,
+    },
+    sequence: 0,
+    status: "completed" as const,
+    stepIndex: 0,
+    turnId,
+  });
+
+  it("delivers the cards when the turn's final message is empty", async () => {
+    // The delivery sat below `if (!event.message) return;`, so a turn whose
+    // final text was blank stranded its cards in channel state forever.
+    const { context, post, state } = handlerContext();
+    await trackWorkerCancellation(
+      toroCards("turn-cards"),
+      context,
+      sessionContext()
+    );
+    await deliverCompletedMessage(
+      completedEvent({ message: "", turnId: "turn-cards" }),
+      context,
+      sessionContext()
+    );
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(postedMarkdown(post.mock.calls[0]?.[0])).toContain(
+      "the toro company"
+    );
+    expect(state.pendingGoForayJobCards).toBeUndefined();
+  });
+
+  it("delivers the cards on a turn whose approval prose is suppressed", async () => {
+    // "apply to this and show me more" produced an approval pause and cards
+    // in one turn; the suppression return swallowed the cards.
+    const { context, post, state } = handlerContext("message-1", {
+      suppressedApprovalTurn: { turnId: "turn-cards" },
+    });
+    await trackWorkerCancellation(
+      toroCards("turn-cards"),
+      context,
+      sessionContext()
+    );
+    await deliverCompletedMessage(
+      completedEvent({
+        message: "here is your review and more roles",
+        turnId: "turn-cards",
+      }),
+      context,
+      sessionContext()
+    );
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(postedMarkdown(post.mock.calls[0]?.[0])).toContain(
+      "the toro company"
+    );
+    expect(state.pendingGoForayJobCards).toBeUndefined();
+    expect(state.suppressedApprovalTurn).toBeUndefined();
+  });
+
+  it("drops cards left by another turn and sends this turn's prose", async () => {
+    const { context, post, state } = handlerContext();
+    await trackWorkerCancellation(
+      toroCards("turn-old"),
+      context,
+      sessionContext()
+    );
+    await deliverCompletedMessage(
+      completedEvent({ message: "how else can i help?", turnId: "turn-new" }),
+      context,
+      sessionContext()
+    );
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(postedMarkdown(post.mock.calls[0]?.[0])).toBe(
+      "how else can i help?"
+    );
+    expect(state.pendingGoForayJobCards).toBeUndefined();
+  });
+});
+
+describe("a review only partly delivered", () => {
+  it("lets the coordinator's words stand rather than suppressing them", async () => {
+    // The tail of the delivery returned "blocked" for a partial review, and
+    // said so in a comment, but the caller suppressed on the page count.
+    const rows = [1, 2].map((id) => ({
+      applyUrl: "https://example.com/apply",
+      id,
+      kind: "review",
+      mimeType: "image/png",
+      png: Buffer.from(`review-${String(id)}`),
+      role: "Staff Engineer",
+      sessionId: "browser-1",
+    }));
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      rows
+    );
+    const { context, post } = handlerContext("message-1", {}, "iMessage");
+    post.mockImplementation(async (message: unknown) => {
+      const files = (message as { files?: { filename: string }[] }).files ?? [];
+      if (files.some((file) => file.filename.endsWith("-2.png"))) {
+        throw new Error("upload failed");
+      }
+      return undefined;
+    });
+    await trackWorkerCancellation(
+      submissionApprovalResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    post.mockClear();
+    post.mockResolvedValue(undefined);
+    // The lost page is still pending in the store, but nothing claims it on
+    // this turn\'s retry: the point is the partial delivery itself.
+    screenshotMocks.claimPendingApplicationSubmissionScreenshots.mockResolvedValue(
+      []
+    );
+    await deliverCompletedMessage(
+      completedEvent({
+        message: "ready to submit staff engineer at acme. reply yes.",
+      }),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    const prose = post.mock.calls.map((call) => postedMarkdown(call[0]));
+    expect(prose.some((line) => line?.includes("ready to submit"))).toBe(true);
+  });
+});

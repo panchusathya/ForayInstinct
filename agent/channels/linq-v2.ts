@@ -37,6 +37,10 @@ import {
   readLinqJobCards,
   rememberLinqJobCard,
 } from "@/lib/goforay/linq-job-card-state";
+import {
+  consumeLinqReviewDelivered,
+  rememberLinqReviewDelivered,
+} from "@/lib/goforay/linq-review-state";
 import { createPostgresState } from "@/lib/linq-state";
 import {
   normalizeLinqDocument,
@@ -58,6 +62,13 @@ import { withTimeout } from "@/lib/with-timeout";
 
 /** How long any one optional inbound step may take before it is abandoned. */
 const INBOUND_STEP_TIMEOUT_MS = 5_000;
+/**
+ * One attachment download, and all of a message's downloads together. The
+ * fetch had no bound at all, so a CDN that accepted the connection and went
+ * quiet held the webhook until the function was killed and the message lost.
+ */
+const ATTACHMENT_DOWNLOAD_TIMEOUT_MS = 30_000;
+const ATTACHMENT_IMPORT_BUDGET_MS = 45_000;
 import { saveCandidateDocument } from "@/db/services/candidate-documents";
 import { inferCandidateDocumentKind } from "@/lib/candidate-documents";
 import { Client } from "eve/client";
@@ -120,9 +131,19 @@ const pendingJobCardsSchema = z.object({
   cards: z.array(goForayJobCardSchema),
   turnId: z.string(),
 });
+/**
+ * A capture the channel still owes the candidate. `applyUrl` keeps a retry
+ * aimed at the application it was set for: an unfiltered claim took the
+ * workspace's newest pending row, which weeks later was another
+ * application's review. `attempts` bounds the retries, so a marker set for
+ * a capture that never happened cannot fire on every turn forever.
+ */
 const pendingSubmissionScreenshotSchema = z.object({
+  applyUrl: z.string().optional(),
+  attempts: z.number().int().nonnegative().default(0),
   turnId: z.string(),
 });
+const maxPendingScreenshotAttempts = 3;
 /** The turn whose approval prose the delivered form images already replaced. */
 const suppressedApprovalTurnSchema = z.object({
   turnId: z.string(),
@@ -197,15 +218,13 @@ const { bot, channel, send } = chatSdkChannel({
       const scope = scopeFromPrincipal(caller);
       const thread = await submissionDeliveryThread(context.thread, scope);
       if (!thread) return;
-      const delivery = await deliverSubmissionScreenshot(
+      await retryPendingScreenshot(
         thread,
         scope,
         event.turnId,
-        context.state
+        context.state,
+        pendingScreenshot.data
       );
-      if (delivery.status === "delivered") {
-        context.state.pendingSubmissionScreenshot = undefined;
-      }
     },
     async "input.requested"(event, context, session) {
       // Eve's default renders each request as a card with buttons, which Linq
@@ -308,19 +327,28 @@ const { bot, channel, send } = chatSdkChannel({
             : { reviewPages: 0, status: "blocked" };
         // Only retain a retry marker for outcomes known to have an expected
         // image. Ordinary worker tasks can legitimately have nothing queued.
+        // The marker carries the application it is for, so the retry claims
+        // that application's capture and not whatever is newest.
         if (
           delivery.status !== "delivered" &&
           (submitted || awaitingApproval)
         ) {
           context.state.pendingSubmissionScreenshot = {
+            ...(output.applyUrl ? { applyUrl: output.applyUrl } : {}),
+            attempts: 0,
             turnId: event.turnId,
           };
         }
         // The candidate is looking at the form itself, so a written recap of it
         // is the spam this gate is meant to avoid. Suppress the coordinator's
-        // prose for this turn only when the images actually arrived; a capture
-        // that never reached them still needs the words.
-        if (awaitingApproval && delivery.reviewPages > 0) {
+        // prose for this turn only when the images actually arrived, all of
+        // them: a partial review still needs the words, since the candidate
+        // has seen only part of the form they are being asked to approve.
+        if (
+          awaitingApproval &&
+          delivery.status === "delivered" &&
+          delivery.reviewPages > 0
+        ) {
           context.state.suppressedApprovalTurn = { turnId: event.turnId };
         }
         if (submitted || awaitingApproval) {
@@ -402,30 +430,62 @@ const { bot, channel, send } = chatSdkChannel({
 
       context.state.pendingToolCallMessage = null;
       if (!context.thread) return;
+      const caller =
+        session.session.auth?.current ?? session.session.auth?.initiator;
+
+      // Role cards first, before anything below can return. They were
+      // delivered after the empty-message and suppression returns, so a turn
+      // whose final text was blank, or which also produced an approval pause,
+      // stranded its cards in channel state forever.
+      const pendingCards = pendingJobCardsSchema.safeParse(
+        context.state.pendingGoForayJobCards
+      );
+      let deliveredCards = false;
+      if (pendingCards.success) {
+        context.state.pendingGoForayJobCards = undefined;
+        if (pendingCards.data.turnId === event.turnId) {
+          await deliverJobCards(
+            context.thread,
+            pendingCards.data.cards,
+            caller ? scopeFromPrincipal(caller) : undefined,
+            event.turnId,
+            context.state
+          );
+          deliveredCards = true;
+        } else {
+          console.warn("[goforay] dropping job cards left by another turn", {
+            pending_turn: pendingCards.data.turnId,
+            turn: event.turnId,
+          });
+        }
+      }
 
       const pendingScreenshot = pendingSubmissionScreenshotSchema.safeParse(
         context.state.pendingSubmissionScreenshot
       );
-      if (pendingScreenshot.success) {
-        const caller =
-          session.session.auth?.current ?? session.session.auth?.initiator;
-        const delivery =
-          caller &&
-          (await deliverSubmissionScreenshot(
-            context.thread,
-            scopeFromPrincipal(caller),
-            event.turnId,
-            context.state
-          ));
-        if (delivery?.status === "delivered") {
-          context.state.pendingSubmissionScreenshot = undefined;
-        }
+      if (pendingScreenshot.success && caller) {
+        const delivery = await retryPendingScreenshot(
+          context.thread,
+          scopeFromPrincipal(caller),
+          event.turnId,
+          context.state,
+          pendingScreenshot.data
+        );
         // A stranded review flushed here is the "show me the screenshots" turn,
         // whose prose is the narration about screenshots the candidate never
-        // asked for. The images answered them.
-        if (delivery && delivery.reviewPages > 0) {
+        // asked for. The images answered them, when all of them arrived.
+        if (delivery.status === "delivered" && delivery.reviewPages > 0) {
           context.state.suppressedApprovalTurn = { turnId: event.turnId };
         }
+      }
+      // A review the inbound webhook already posted for this very message
+      // answers the coordinator's recap of it too.
+      const reviewedInbound = await consumeLinqReviewDelivered(context.thread);
+      if (
+        reviewedInbound !== undefined &&
+        reviewedInbound === sourceMessageId
+      ) {
+        context.state.suppressedApprovalTurn = { turnId: event.turnId };
       }
 
       if (!event.message) return;
@@ -439,23 +499,8 @@ const { bot, channel, send } = chatSdkChannel({
         context.state.suppressedApprovalTurn = undefined;
         if (suppressedApproval.data.turnId === event.turnId) return;
       }
-
-      const pendingCards = pendingJobCardsSchema.safeParse(
-        context.state.pendingGoForayJobCards
-      );
-      if (pendingCards.success && pendingCards.data.turnId === event.turnId) {
-        context.state.pendingGoForayJobCards = undefined;
-        const caller =
-          session.session.auth?.current ?? session.session.auth?.initiator;
-        await deliverJobCards(
-          context.thread,
-          pendingCards.data.cards,
-          caller ? scopeFromPrincipal(caller) : undefined,
-          event.turnId,
-          context.state
-        );
-        return;
-      }
+      // The cards are the reply; the prose that came with them is not sent.
+      if (deliveredCards) return;
 
       const delivery = formatCandidateDelivery(event.message);
       if (!delivery.bubbles.length) return;
@@ -490,7 +535,8 @@ const { bot, channel, send } = chatSdkChannel({
 });
 
 bot.onDirectMessage(dispatchLinqMessage);
-bot.onNewMessage(/[\s\S]/u, dispatchLinqMessage);
+// Matches an empty text too: a resume sent with no words is still a message.
+bot.onNewMessage(/[\s\S]*/u, dispatchLinqMessage);
 // A thumbs-up on a role card is the candidate applying to that role. Reactions
 // are not eve session events, so this is the only place they arrive. The string
 // filter matches both the emoji name and Linq's own `like`.
@@ -718,6 +764,8 @@ async function inboundStep<T>(
 
 async function dispatchLinqMessage(thread: Thread, message: Message) {
   if (message.author.isBot) return;
+  // Nothing said and nothing sent is nothing to answer.
+  if (message.text.trim() === "" && message.attachments.length === 0) return;
 
   const replyTarget = await inboundStep("reply_target", message.id, () =>
     resolveLinqReplyTarget(message, thread)
@@ -731,7 +779,7 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
   // webhook has not yet restored the serialized thread. The inbound webhook
   // always has the real thread, so flush the newest pending review here before
   // the next model call has a chance to fail.
-  await inboundStep("review_recovery", message.id, () =>
+  const recovered = await inboundStep("review_recovery", message.id, () =>
     deliverSubmissionScreenshot(
       thread,
       inbound.scope,
@@ -739,6 +787,11 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
       {}
     )
   );
+  // The turn this message starts must not add a written recap to a review
+  // the candidate is already looking at; this is how message.completed hears.
+  if (recovered.status === "delivered" && recovered.reviewPages > 0) {
+    await rememberLinqReviewDelivered(thread, message.id);
+  }
 
   const restartQuery = applicationRestartQuery(message.text);
   if (restartQuery) {
@@ -786,7 +839,11 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
         // Persist attachments before this turn and place their extracted text
         // in workspace context. Passing the provider's raw PDF URL to the
         // model gateway makes every configured provider reject the request.
-        message: message.text || "The candidate attached a file.",
+        message:
+          message.text ||
+          (message.attachments.length > 0
+            ? "The candidate attached a file."
+            : "The candidate sent an empty message."),
       },
       { auth: inbound.auth, thread }
     )
@@ -1018,8 +1075,14 @@ async function importLinqResumes(
   const downloadFailures: string[] = [];
   const storageFailures: string[] = [];
   const skipped: string[] = [];
+  const deadline = Date.now() + ATTACHMENT_IMPORT_BUDGET_MS;
   for (const attachment of message.attachments) {
     const filename = attachment.name ?? filenameFromUrl(attachment.url ?? "");
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      downloadFailures.push(`${filename} (skipped: out of time)`);
+      continue;
+    }
     // Nothing below can drop an attachment silently: the model no longer sees
     // the raw attachment, so this loop is the only account of what arrived.
     if (attachment.type !== "file") {
@@ -1034,7 +1097,13 @@ async function importLinqResumes(
 
     let phase = "download";
     try {
-      const { bytes, resolvedMimeType } = await readLinqAttachment(attachment);
+      const read = await withTimeout(
+        () => readLinqAttachment(attachment),
+        Math.min(ATTACHMENT_DOWNLOAD_TIMEOUT_MS, remaining),
+        undefined
+      );
+      if (!read) throw new Error("download timed out");
+      const { bytes, resolvedMimeType } = read;
       // Linq reports an empty mime type as often as it omits it.
       const mimeType = attachment.mimeType || resolvedMimeType;
       const document = normalizeLinqDocument({ bytes, filename, mimeType });
@@ -1162,6 +1231,44 @@ async function reactToLinqMessage(
   } catch {
     // SMS/RCS and web paths do not guarantee reaction support.
   }
+}
+
+/**
+ * One more try at a capture the channel still owes, aimed at the application
+ * the marker was set for. Delivered or nothing left to deliver clears the
+ * marker; anything else counts an attempt, and the marker is dropped after a
+ * few, so a capture that never happened cannot be chased on every turn.
+ */
+async function retryPendingScreenshot(
+  thread: Parameters<typeof deliverSubmissionScreenshot>[0],
+  scope: ReturnType<typeof scopeFromPrincipal>,
+  turnId: string,
+  state: Record<string, unknown>,
+  marker: z.infer<typeof pendingSubmissionScreenshotSchema>
+): Promise<SubmissionScreenshotDelivery> {
+  const delivery = await deliverSubmissionScreenshot(
+    thread,
+    scope,
+    turnId,
+    state,
+    marker.applyUrl
+  );
+  if (delivery.status === "delivered") {
+    state.pendingSubmissionScreenshot = undefined;
+    return delivery;
+  }
+  const attempts = marker.attempts + 1;
+  if (attempts >= maxPendingScreenshotAttempts) {
+    console.warn("[submission-screenshot] giving up on a pending capture", {
+      attempts,
+      status: delivery.status,
+      workspaceId: scope.workspaceId,
+    });
+    state.pendingSubmissionScreenshot = undefined;
+    return delivery;
+  }
+  state.pendingSubmissionScreenshot = { ...marker, attempts };
+  return delivery;
 }
 
 async function deliverSubmissionScreenshot(
@@ -1494,14 +1601,4 @@ function rememberLinqService(
     fromThread ||
     (typeof state.lastLinqService === "string" ? state.lastLinqService : "")
   );
-}
-
-function isRichLinqThread(
-  thread: { toJSON: () => unknown },
-  state?: Record<string, unknown>
-) {
-  const service = state
-    ? rememberLinqService(thread, state)
-    : linqServiceFromUnknown(thread.toJSON());
-  return isRichLinqService(service);
 }

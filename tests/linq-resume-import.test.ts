@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  isAllowedLinqAttachmentUrl,
   normalizeLinqDocument,
   readLinqAttachment,
   retryLinqResumeSave,
@@ -31,6 +32,57 @@ describe("Linq resume import", () => {
 
     expect(fetchData).toHaveBeenCalledOnce();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("downloads only from Linq's own media host", async () => {
+    // The URL comes from the webhook body; fetching whatever it named made the
+    // webhook a way to have this server reach arbitrary addresses.
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      readLinqAttachment({
+        mimeType: "application/pdf",
+        type: "file",
+        url: "https://evil.example/resume.pdf",
+      })
+    ).rejects.toThrow(/not hosted by Linq/u);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(isAllowedLinqAttachmentUrl("https://cdn.linqapp.com/a/b.pdf")).toBe(
+      true
+    );
+    expect(
+      isAllowedLinqAttachmentUrl("https://media.cdn.linqapp.com/a.pdf")
+    ).toBe(true);
+    expect(isAllowedLinqAttachmentUrl("http://cdn.linqapp.com/a.pdf")).toBe(
+      false
+    );
+    expect(
+      isAllowedLinqAttachmentUrl("https://cdn.linqapp.com.evil.example/a.pdf")
+    ).toBe(false);
+    expect(
+      isAllowedLinqAttachmentUrl("https://files.sandbox.test/a.pdf", [
+        "files.sandbox.test",
+      ])
+    ).toBe(true);
+  });
+
+  it("bounds the download and never follows a redirect", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      new Response(Buffer.from("%PDF-1.4"), {
+        headers: { "content-type": "application/pdf" },
+        status: 200,
+      })
+    );
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      readLinqAttachment({
+        type: "file",
+        url: "https://cdn.linqapp.com/a/resume.pdf",
+      })
+    ).resolves.toMatchObject({ resolvedMimeType: "application/pdf" });
+    const init = fetch.mock.calls[0]?.[1];
+    expect(init?.redirect).toBe("error");
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("retries the same document save once after a transient database fault", async () => {

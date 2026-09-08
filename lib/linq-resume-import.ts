@@ -1,4 +1,35 @@
 import type { Attachment } from "chat";
+import { env } from "@/lib/env";
+
+/**
+ * Where Linq serves message media from. A download URL is taken from the
+ * webhook body, so it is fetched only from hosts known to be Linq's: anything
+ * else would make the webhook a way to have this server fetch arbitrary
+ * addresses. `LINQ_ATTACHMENT_HOSTS` adds sandbox hosts, comma-separated.
+ */
+const linqAttachmentHosts = ["cdn.linqapp.com"];
+const attachmentDownloadTimeoutMs = 20_000;
+const maxAttachmentBytes = 25 * 1024 * 1024;
+
+export function isAllowedLinqAttachmentUrl(
+  url: string,
+  extraHosts: readonly string[] = (env.LINQ_ATTACHMENT_HOSTS ?? "")
+    .split(",")
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean)
+) {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  const hostname = parsed.hostname.toLowerCase();
+  return [...linqAttachmentHosts, ...extraHosts].some(
+    (host) => hostname === host || hostname.endsWith(`.${host}`)
+  );
+}
 
 const docxMimeType =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -24,11 +55,29 @@ export async function readLinqAttachment(attachment: Attachment) {
     };
   }
   if (!attachment.url) throw new Error("the attachment has no download URL");
+  if (!isAllowedLinqAttachmentUrl(attachment.url)) {
+    throw new Error("the attachment is not hosted by Linq");
+  }
 
-  const response = await fetch(attachment.url);
-  if (!response.ok) throw new Error(`download failed (${response.status})`);
+  // Bounded and unredirected: the fetch had no limit of any kind, and a CDN
+  // that accepted the connection and went quiet held the webhook until the
+  // function was killed and the message was lost.
+  const response = await fetch(attachment.url, {
+    redirect: "error",
+    signal: AbortSignal.timeout(attachmentDownloadTimeoutMs),
+  });
+  if (!response.ok)
+    throw new Error(`download failed (${String(response.status)})`);
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (declared > maxAttachmentBytes) {
+    throw new Error("the attachment is larger than 25 MB");
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.byteLength > maxAttachmentBytes) {
+    throw new Error("the attachment is larger than 25 MB");
+  }
   return {
-    bytes: Buffer.from(await response.arrayBuffer()),
+    bytes,
     resolvedMimeType: response.headers.get("content-type") ?? "",
   };
 }
