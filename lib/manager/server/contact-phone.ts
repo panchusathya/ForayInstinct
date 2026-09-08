@@ -1,3 +1,4 @@
+import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
 import { ensureScope } from "@/db/services/scope";
 import type { AccessScope } from "@/lib/access-scope";
 import { readSecret, writeSecret } from "@/lib/manager/server/secret-store";
@@ -15,7 +16,7 @@ const contactPhoneId = "phone";
  * candidate texts from is their number; an answer to a Phone question is too.
  */
 export async function rememberContactPhone(scope: AccessScope, value: string) {
-  const phone = normalizeContactPhone(value);
+  const phone = normalizeAuthPhoneNumber(value);
   if (phone === undefined) return;
   await ensureScope(scope);
   await writeSecret({
@@ -39,11 +40,13 @@ export async function readContactPhone(
 }
 
 /**
- * A phone number as a form will take it: the digits with one leading plus
- * kept, at least seven of them. Anything else is not a phone number and is
- * not stored.
+ * A stored number as a form will take it. One written under the shared rule
+ * is E.164; one stored before it may lack its country code and is read as it
+ * was written, never rewritten.
  */
 function normalizeContactPhone(value: string): string | undefined {
+  const shared = normalizeAuthPhoneNumber(value);
+  if (shared) return shared;
   const trimmed = value.trim();
   const plus = trimmed.startsWith("+") ? "+" : "";
   const digits = trimmed.replace(/\D+/gu, "");

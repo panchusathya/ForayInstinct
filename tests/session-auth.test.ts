@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { accessScopeForPhone, accessScopeForUser } from "../lib/access-scope";
-import { normalizeAuthPhoneNumber } from "../auth/phone-number";
+import {
+  legacyNormalizeAuthPhoneNumber,
+  normalizeAuthPhoneNumber,
+} from "../auth/phone-number";
 
 describe("multi-user request identity", () => {
   it("derives stable personal workspaces without exposing provider ids", () => {
@@ -17,6 +20,19 @@ describe("multi-user request identity", () => {
     expect(normalizeAuthPhoneNumber("1 202 555 0123")).toBe("+12025550123");
     expect(normalizeAuthPhoneNumber("+44 7911 123456")).toBe("+447911123456");
     expect(normalizeAuthPhoneNumber("not-a-number")).toBeUndefined();
+  });
+
+  it("does not invent a US country code for a number that is not one", () => {
+    // A UK number texted without its country code became +107700900123: the
+    // candidate's workspace key and the phone typed into every form.
+    expect(normalizeAuthPhoneNumber("07700900123")).toBeUndefined();
+    expect(normalizeAuthPhoneNumber("+44 7700 900123")).toBe("+447700900123");
+    expect(normalizeAuthPhoneNumber("2025550123")).toBe("+12025550123");
+    expect(normalizeAuthPhoneNumber("12025550123")).toBe("+12025550123");
+    expect(normalizeAuthPhoneNumber("555-0123")).toBeUndefined();
+    // The old reading is kept only to find and adopt the workspace it keyed.
+    expect(legacyNormalizeAuthPhoneNumber("07700900123")).toBe("+107700900123");
+    expect(legacyNormalizeAuthPhoneNumber("2025550123")).toBe("+12025550123");
   });
 
   it("uses the normalized phone as one stable cross-channel workspace", () => {

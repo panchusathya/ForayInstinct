@@ -1,5 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   db,
@@ -24,7 +24,9 @@ import {
 import {
   completePendingRoleSearch,
   listPendingRoleSearches,
+  markPendingRoleSearch,
 } from "@/db/services/pending-role-searches";
+import { findWorkspaceOwnerUserId } from "@/db/services/scope";
 
 const issuer = "goforay-openinstinct";
 const juiceboxAudience = "juicebox";
@@ -394,6 +396,13 @@ export async function findGoforayRoles(
         feed.discovery?.state === "queued" ||
         feed.discovery?.state === "running"
       ) {
+        // Hand the search to the poller, which finishes it when the CRM has
+        // an answer. Nothing marked a search pending before, so the poller
+        // never had anything to deliver.
+        await markPendingRoleSearch(scope, {
+          location: input.location ?? "",
+          query: input.query ?? "",
+        }).catch(() => undefined);
         return { ...feed, searching: true, source: "juicebox" };
       }
       // The feed's own exclusion is capped, so re-check locally. Check every
@@ -461,14 +470,17 @@ export async function findGoforayRoles(
 export async function pollPendingGoforayRoleSearches(limit = 20) {
   const pending = await listPendingRoleSearches(limit);
   const deliveries: {
-    message: string;
+    cards?: GoForayJobCard[];
+    message?: string;
     scope: AccessScope;
     threadId: string;
     workspaceId: string;
   }[] = [];
   for (const search of pending) {
+    // The thread's own user. The workspace id stood in for it, which is a
+    // value no user record ever had except on phone-keyed workspaces.
     const scope = {
-      userId: search.workspaceId,
+      userId: search.userId || search.workspaceId,
       workspaceId: search.workspaceId,
     } satisfies AccessScope;
     const feed = await findGoforayRoles(scope, {
@@ -478,8 +490,11 @@ export async function pollPendingGoforayRoleSearches(limit = 20) {
     if (feed.searching) continue;
     await completePendingRoleSearch(search.workspaceId);
     if (feed.cards.length) {
+      // The cards themselves, for the channel to render as cards. Sent as a
+      // JSON message to the model they were either pasted as bullets or,
+      // per the model's instructions never to list roles, not sent at all.
       deliveries.push({
-        message: `A background JuiceBox role search has completed. Send these openings to the candidate as concise numbered cards with their apply URLs; do not run another search or use web_search:\n${JSON.stringify(feed.cards)}`,
+        cards: feed.cards,
         scope,
         threadId: search.threadId,
         workspaceId: search.workspaceId,
@@ -643,6 +658,7 @@ export async function recordConversationMessage({
       .values({
         id: entry.id,
         workspaceId: scope.workspaceId,
+        createdByUserId: scope.userId,
         candidateId: link?.candidateId,
         conversationId,
         channel,
@@ -678,6 +694,14 @@ async function syncConversationEvent(id: string) {
     const profile = await candidateProfile(item.workspaceId);
     if (!profile.identities.length)
       throw new Error("No verified candidate identity available.");
+    // The subject is the user who wrote the message. The workspace id stood
+    // here, which worked only where the two happen to be equal (phone-keyed
+    // workspaces) and was refused forever everywhere else.
+    const subjectUserId =
+      item.createdByUserId !== ""
+        ? item.createdByUserId
+        : ((await findWorkspaceOwnerUserId(item.workspaceId)) ??
+          item.workspaceId);
     const { apiUrl } = configured();
     const response = await fetch(
       `${apiUrl}/v1/internal/openinstinct/conversation-events`,
@@ -687,7 +711,7 @@ async function syncConversationEvent(id: string) {
         headers: {
           Authorization: `Bearer ${createBridgeToken({
             audience: juiceboxAudience,
-            subject: externalUserId(item.workspaceId),
+            subject: externalUserId(subjectUserId),
             ...(item.candidateId ? { candidateId: item.candidateId } : {}),
             identities: profile.identities,
           })}`,
@@ -720,18 +744,27 @@ async function syncConversationEvent(id: string) {
       })
       .where(eq(goforayWorkspaceSyncOutbox.id, item.id));
   } catch (error) {
+    // Back off: a row that cannot send yet is retried later, doubling each
+    // time up to six hours, instead of every sweep ahead of everything
+    // behind it.
+    const attempts = item.attempts + 1;
+    const delayMinutes = Math.min(2 ** attempts, 360);
     await db
       .update(goforayWorkspaceSyncOutbox)
       .set({
-        attempts: sql`${goforayWorkspaceSyncOutbox.attempts} + 1`,
+        attempts,
         lastError:
           error instanceof Error
             ? error.message.slice(0, 1_000)
             : "JuiceBox mirror failed.",
+        nextAttemptAt: new Date(Date.now() + delayMinutes * 60_000),
       })
       .where(eq(goforayWorkspaceSyncOutbox.id, item.id));
   }
 }
+
+/** Rows past this many failures stay put with their last error, for a person. */
+const maxOutboxAttempts = 8;
 
 /**
  * The next batch for the criteria already in play.
@@ -760,10 +793,21 @@ export async function nextGoforayRoles(
 
 /** Retry durable conversation events without delaying an active candidate turn. */
 export async function flushConversationSyncOutbox(limit = 50) {
+  // Only rows that can still send and are due. Fifty poison rows used to fill
+  // every sweep and nothing newer was ever reached.
   const rows = await db
     .select({ id: goforayWorkspaceSyncOutbox.id })
     .from(goforayWorkspaceSyncOutbox)
-    .where(isNull(goforayWorkspaceSyncOutbox.sentAt))
+    .where(
+      and(
+        isNull(goforayWorkspaceSyncOutbox.sentAt),
+        lt(goforayWorkspaceSyncOutbox.attempts, maxOutboxAttempts),
+        or(
+          isNull(goforayWorkspaceSyncOutbox.nextAttemptAt),
+          lte(goforayWorkspaceSyncOutbox.nextAttemptAt, new Date())
+        )
+      )
+    )
     .orderBy(asc(goforayWorkspaceSyncOutbox.createdAt))
     .limit(limit);
   await Promise.all(rows.map((row) => syncConversationEvent(row.id)));

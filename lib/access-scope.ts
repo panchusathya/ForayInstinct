@@ -1,3 +1,4 @@
+import { isE164PhoneNumber } from "@/auth/phone-number";
 import { createHash } from "node:crypto";
 import type { ConnectionPrincipal } from "eve/connections";
 import type { SessionAuthContext } from "eve/context";
@@ -36,7 +37,7 @@ export function accessScopeForUser(userId: string): AccessScope {
  */
 export function accessScopeForPhone(phoneNumber: string): AccessScope {
   const normalizedPhoneNumber = phoneNumber.trim();
-  if (!/^\+[1-9]\d{6,14}$/u.test(normalizedPhoneNumber)) {
+  if (!isE164PhoneNumber(normalizedPhoneNumber)) {
     throw new Error("A normalized phone number is required.");
   }
   const digest = createHash("sha256")

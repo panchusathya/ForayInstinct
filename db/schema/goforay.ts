@@ -96,6 +96,8 @@ export const goforayPendingRoleSearches = pgTable(
     location: text("location").notNull().default(""),
     pending: text("pending").notNull().default(""),
     phone: text("phone").notNull().default(""),
+    /** The user the thread belongs to, so a background search runs as them. */
+    userId: text("user_id").notNull().default(""),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -150,8 +152,12 @@ export const goforayWorkspaceSyncOutbox = pgTable(
     channel: text("channel").notNull(),
     direction: text("direction").$type<"inbound" | "outbound">().notNull(),
     body: text("body").notNull(),
+    /** Who wrote the message; the CRM subject is a user, never a workspace. */
+    createdByUserId: text("created_by_user_id").notNull().default(""),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error").notNull().default(""),
+    /** Not before this: failed rows back off instead of retrying every sweep. */
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()

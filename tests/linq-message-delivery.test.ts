@@ -1848,3 +1848,46 @@ describe("two applications pending in one thread", () => {
     expect(captions[1]).toContain("associate");
   });
 });
+
+describe("a background role search that has finished", () => {
+  it("posts its cards through the channel with the tapback mapping the cards need", async () => {
+    // Sent to the model as JSON they came back as bullets or not at all, and a
+    // thumbs-up on one resolved to nothing.
+    const { context, post, threadStore } = handlerContext(
+      "message-1",
+      {},
+      "iMessage"
+    );
+    channelCapture.thread.mockReset();
+    channelCapture.thread.mockReturnValue(context.thread);
+    post.mockResolvedValue({ id: "card-message-1" });
+    const { deliverLinqJobCardsToThread } =
+      await import("@/agent/channels/linq-v2");
+
+    await deliverLinqJobCardsToThread(
+      "linq:dm:chat-1",
+      [
+        {
+          company: "The Toro Company",
+          location: "Remote, USA",
+          reasons: ["M&A modeling"],
+          title: "Sr. Analyst, Corporate Development",
+          url: "https://jobs.thetorocompany.com/job/bloomington/corp-dev/1",
+        },
+      ],
+      { userId: "user-1", workspaceId: "workspace-1" }
+    );
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(postedMarkdown(post.mock.calls[0]?.[0])).toContain(
+      "the toro company"
+    );
+    const cards = await readLinqJobCards({
+      state: Promise.resolve(threadStore.get("linq:dm:chat-1")),
+      setState: async () => undefined,
+    });
+    expect(Object.values(cards).map((card) => card.company)).toEqual([
+      "The Toro Company",
+    ]);
+  });
+});
