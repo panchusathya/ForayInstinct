@@ -79,7 +79,6 @@ export function resolvePresentedRole(
       url: input.apply_url,
     };
   }
-  if (input.job_posting_id && cards.length === 0) return undefined;
   return undefined;
 }
 

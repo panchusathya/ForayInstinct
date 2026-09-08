@@ -163,13 +163,25 @@ export function relevanceTokens(role: string, seniority?: string) {
   return [...wanted];
 }
 
-function matchedIn(haystack: string, wanted: readonly string[]) {
+/**
+ * The wanted tokens a text contains. A single word matches only as a whole
+ * word: "data" is not in "Metadata" and "ops" is not in "Chops", which is
+ * how a metadata role arrived as a data analyst one. A phrase still matches
+ * as a substring, since its own spaces bound it.
+ */
+export function matchedTokens(haystack: string, wanted: readonly string[]) {
   const value = normalizePhrase(haystack);
   if (!value) return [];
+  const escape = (token: string) =>
+    token.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   // Longest first, so a card reports "strategic finance" over "finance".
   return [...wanted]
     .sort((a, b) => b.length - a.length)
-    .filter((token) => value.includes(token));
+    .filter((token) =>
+      token.includes(" ")
+        ? value.includes(token)
+        : new RegExp(`\\b${escape(token)}\\b`, "u").test(value)
+    );
 }
 
 function postingShape(url: string): "posting" | RoleRejection {
@@ -260,14 +272,14 @@ export function scoreRoleCandidate({
     return { verdict: "accept", reason: "ok", matched: [] };
   }
 
-  const inTitle = matchedIn(trimmedTitle, wanted);
+  const inTitle = matchedTokens(trimmedTitle, wanted);
   if (inTitle.length)
     return { verdict: "accept", reason: "ok", matched: inTitle };
 
   // Some ATS pages title themselves with just the company, so fall back to the
   // opening of the page body — but only for a title too short to judge.
   if (trimmedTitle.length <= 32) {
-    const inText = matchedIn(text.slice(0, 400), wanted);
+    const inText = matchedTokens(text.slice(0, 400), wanted);
     if (inText.length)
       return { verdict: "accept", reason: "ok", matched: inText };
   }
@@ -434,7 +446,8 @@ function roleSentence(text: string, wanted: readonly string[]) {
     // A run of pipes is a navigation bar, not prose.
     if ((sentence.match(/\|/gu) ?? []).length > 3) continue;
     const relevant =
-      ROLE_SENTENCE_RE.test(sentence) || matchedIn(sentence, wanted).length > 0;
+      ROLE_SENTENCE_RE.test(sentence) ||
+      matchedTokens(sentence, wanted).length > 0;
     if (relevant) return sentence;
   }
   return undefined;

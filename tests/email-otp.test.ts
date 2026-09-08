@@ -3,6 +3,7 @@ import {
   buildEmailOtpSearchQuery,
   extractEmailOtp,
 } from "@/agent/lib/google-workspace/email-otp";
+import { isFreshEmailMessage } from "@/agent/lib/google-workspace/gmail";
 
 describe("email OTP extraction", () => {
   it("reads labeled 4, 6, and 8 digit codes", () => {
@@ -48,5 +49,18 @@ describe("email OTP Gmail query", () => {
     expect(buildEmailOtpSearchQuery({ fromHint: "Workday" })).toContain(
       '"Workday"'
     );
+  });
+});
+
+describe("email OTP freshness", () => {
+  it("treats a message with no readable date as stale, not as fresh", () => {
+    // The guard used to skip itself when the date was missing.
+    const now = 1_800_000_000_000;
+    expect(isFreshEmailMessage(String(now - 60_000), now)).toBe(true);
+    expect(isFreshEmailMessage(String(now - 16 * 60_000), now)).toBe(false);
+    expect(isFreshEmailMessage(undefined, now)).toBe(false);
+    expect(isFreshEmailMessage(null, now)).toBe(false);
+    expect(isFreshEmailMessage("not a date", now)).toBe(false);
+    expect(isFreshEmailMessage("", now)).toBe(false);
   });
 });

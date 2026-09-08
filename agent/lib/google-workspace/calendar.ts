@@ -195,21 +195,34 @@ export async function checkCalendarAvailability(
   });
 }
 
+/**
+ * The calendars Google could read, with the ones it could not named beside
+ * them. One shared calendar the candidate had lost access to used to fail
+ * the whole check, primary included; only a check where nothing could be
+ * read is an error, since reporting that as free would be wrong.
+ */
 export function parseCalendarAvailability(
   value: calendar_v3.Schema$FreeBusyResponse
 ) {
-  const failures = Object.entries(value.calendars ?? {}).flatMap(
-    ([calendarId, calendar]) =>
-      (calendar.errors ?? []).map(
-        (error) => `${calendarId}: ${error.reason ?? error.domain ?? "unknown"}`
-      )
+  const entries = Object.entries(value.calendars ?? {});
+  const failures = entries.flatMap(([calendarId, calendar]) =>
+    (calendar.errors ?? []).map(
+      (error) => `${calendarId}: ${error.reason ?? error.domain ?? "unknown"}`
+    )
   );
-  if (failures.length > 0) {
+  const readable = entries.filter(
+    ([, calendar]) => (calendar.errors ?? []).length === 0
+  );
+  if (failures.length > 0 && readable.length === 0) {
     throw new Error(
       `Google Calendar could not read availability for ${failures.join(", ")}.`
     );
   }
-  return value;
+  return {
+    ...value,
+    calendars: Object.fromEntries(readable),
+    ...(failures.length > 0 ? { unreadableCalendars: failures } : {}),
+  };
 }
 
 export async function createCalendarEvent(

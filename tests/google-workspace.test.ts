@@ -243,6 +243,21 @@ describe("Google Workspace connection", () => {
       })
     ).toThrow(/missing@example\.com: notFound/u);
 
+    // One unreadable shared calendar no longer hides the ones that read.
+    expect(
+      parseCalendarAvailability({
+        calendars: {
+          "missing@example.com": {
+            errors: [{ domain: "global", reason: "notFound" }],
+          },
+          primary: { busy: [] },
+        },
+      })
+    ).toEqual({
+      calendars: { primary: { busy: [] } },
+      unreadableCalendars: ["missing@example.com: notFound"],
+    });
+
     expect(
       parseCalendarAvailability({
         calendars: {

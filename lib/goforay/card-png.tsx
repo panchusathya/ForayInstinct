@@ -42,9 +42,7 @@ const TILE = 88;
 const FONT_TITLE = 60; // 18pt
 const FONT_COMPANY = 42; // 12.6pt
 const FONT_META = 36; // 10.8pt
-const FONT_REASON = 36; // 10.8pt
 const FONT_FOOTER = 28; // 8.4pt
-const FONT_SOURCE = 24; // 7.2pt, all-caps tracking
 
 export async function renderJobCardPng(
   card: GoForayJobCard,
@@ -101,26 +99,14 @@ function wrappedLines(text: string, fontSize: number) {
  * are the real line heights set in the JSX below, so they have to move together.
  */
 function cardPngHeight(view: ReturnType<typeof jobCardView>, hasLogo: boolean) {
-  const header = Math.max(
-    hasLogo ? TILE : 0,
-    FONT_COMPANY * 1.25 + (view.sourceLabel ? 6 + FONT_SOURCE * 1.25 : 0)
-  );
+  const header = Math.max(hasLogo ? TILE : 0, FONT_COMPANY * 1.25);
   const title = 44 + wrappedLines(view.title, FONT_TITLE) * FONT_TITLE * 1.15;
   const meta = view.meta
     ? 22 + wrappedLines(view.meta, FONT_META) * FONT_META * 1.25
     : 0;
-  const reasons = view.reasons.length
-    ? 36 +
-      20 * (view.reasons.length - 1) +
-      view.reasons.reduce(
-        (total, reason) =>
-          total + wrappedLines(reason, FONT_REASON) * FONT_REASON * 1.3,
-        0
-      )
-    : 0;
   // paddingTop + rule + footer row + gap + hint row.
   const footer = 24 + 2 + FONT_FOOTER * 1.25 + 14 + FONT_FOOTER * 1.25;
-  const content = PAD * 2 + header + title + meta + reasons + footer;
+  const content = PAD * 2 + header + title + meta + footer;
   // Breathing room above the rule, plus slack for a wrap the estimate missed.
   return Math.round(
     Math.min(CARD_MAX_HEIGHT, Math.max(CARD_MIN_HEIGHT, content * 1.08 + 40))
@@ -214,19 +200,6 @@ function JobCardOg({
           >
             {view.company}
           </div>
-          {view.sourceLabel ? (
-            <div
-              style={{
-                color: palette.muted,
-                display: "flex",
-                fontSize: FONT_SOURCE,
-                letterSpacing: 2,
-                marginTop: 6,
-              }}
-            >
-              {view.sourceLabel}
-            </div>
-          ) : null}
         </div>
       </div>
       <div
@@ -260,43 +233,6 @@ function JobCardOg({
             }}
           >
             {view.meta}
-          </div>
-        ) : null}
-        {view.reasons.length ? (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 20,
-              marginTop: 36,
-            }}
-          >
-            {view.reasons.map((reason) => (
-              <div
-                key={reason}
-                style={{ alignItems: "flex-start", display: "flex", gap: 18 }}
-              >
-                <div
-                  style={{
-                    background: palette.accent,
-                    borderRadius: 3,
-                    flexShrink: 0,
-                    height: 12,
-                    marginTop: 14,
-                    width: 12,
-                  }}
-                />
-                <div
-                  style={{
-                    display: "flex",
-                    fontSize: FONT_REASON,
-                    lineHeight: 1.3,
-                  }}
-                >
-                  {reason}
-                </div>
-              </div>
-            ))}
           </div>
         ) : null}
       </div>

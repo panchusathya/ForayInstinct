@@ -82,9 +82,15 @@ export function cleanTitle(title: string, company: string) {
 
 function clipCardText(text: string, limit: number) {
   const value = text.split(/\s+/u).join(" ").trim();
-  return value.length <= limit
+  // By code point, not UTF-16 unit: a cut through an emoji left a lone
+  // surrogate that rendered as a replacement character.
+  const points = Array.from(value);
+  return points.length <= limit
     ? value
-    : `${value.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+    : `${points
+        .slice(0, Math.max(0, limit - 1))
+        .join("")
+        .trimEnd()}…`;
 }
 
 function applyReplyLine(index: number) {
@@ -118,9 +124,8 @@ export function jobCardView(
       total > 1 ? `${String(index)} of ${String(total)}` : "open role",
     meta,
     // Matching rationale and source-market labels help internal ranking, but
-    // read like system metadata on a candidate-facing card.
-    reasons: [] as string[],
-    sourceLabel: "",
+    // read like system metadata on a candidate-facing card, so the view
+    // carries neither.
     title,
     via: "via Foray",
   };
@@ -136,7 +141,6 @@ export function renderGoForayJobCard(
   const heading = [
     `${String(index)}/${String(total)}  ${view.title} · ${view.company}`,
     view.meta,
-    ...view.reasons.map((reason) => `· ${reason}`),
   ]
     .filter(Boolean)
     .join("\n")
@@ -149,7 +153,12 @@ export function renderGoForayJobCard(
 }
 
 export function jobCardFilename(card: GoForayJobCard) {
+  // Letters, digits and dashes only: the name goes into a header.
   const company =
-    card.company.toLowerCase().trim().replaceAll(/\s+/gu, "-") || "role";
+    card.company
+      .toLowerCase()
+      .trim()
+      .replaceAll(/\s+/gu, "-")
+      .replaceAll(/[^\p{L}\p{N}-]/gu, "") || "role";
   return `${company.slice(0, 80)}-role.png`;
 }

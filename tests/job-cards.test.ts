@@ -42,9 +42,11 @@ describe("job card projection", () => {
       2,
       3
     );
-    expect(view.reasons).toEqual([]);
+    // Reasons and source labels read like system metadata on a card, so the
+    // view carries neither.
+    expect(view).not.toHaveProperty("reasons");
+    expect(view).not.toHaveProperty("sourceLabel");
     expect(view.footerPosition).toBe("2 of 3");
-    expect(view.sourceLabel).toBe("");
     expect(view.applyReply).toBe("apply 2");
   });
 

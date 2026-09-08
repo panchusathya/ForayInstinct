@@ -47,11 +47,6 @@ function JobCard({
         ) : null}
         <div className="min-w-0">
           <p className="truncate type-label">{view.company}</p>
-          {view.sourceLabel ? (
-            <p className="mt-1 type-caption" style={{ color: palette.muted }}>
-              {view.sourceLabel}
-            </p>
-          ) : null}
         </div>
       </div>
       <h2 className="type-page-title text-balance">{view.title}</h2>
@@ -59,22 +54,6 @@ function JobCard({
         <p className="type-supporting-body" style={{ color: palette.muted }}>
           {view.meta}
         </p>
-      ) : null}
-      {view.reasons.length ? (
-        <ul className="flex flex-col gap-2">
-          {view.reasons.map((reason) => (
-            <li
-              className="type-supporting-body flex items-start gap-2.5"
-              key={reason}
-            >
-              <span
-                className="mt-1.5 size-2.5 shrink-0"
-                style={{ background: palette.accent }}
-              />
-              <span>{reason}</span>
-            </li>
-          ))}
-        </ul>
       ) : null}
       <div
         className="mt-auto flex flex-col gap-3 border-t pt-4"
