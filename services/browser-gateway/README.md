@@ -64,7 +64,11 @@ Windows the paths land on the current drive; fine for everything but staging).
 The gateway's Dockerfile lives at the **repo root**, which Railway picks up
 automatically with zero build configuration (the repo-root `railway.json`
 additionally pins `/health` checks, one replica, and no app sleep; the
-root `.dockerignore` keeps the build context to the two copied paths).
+root `.dockerignore` keeps the build context to the copied paths). The image
+copies the service sources plus the shared `lib/browser/contract.ts` and
+`lib/browser/domains.ts`; a new shared import must be added to both the
+`Dockerfile` and `.dockerignore`, or the gateway crashes at boot with
+`ERR_MODULE_NOT_FOUND` and the host answers every request with 502.
 Steps, all in the browser:
 
 1. Sign in at railway.com (GitHub login) and create a project → **Deploy from
@@ -90,7 +94,7 @@ at a branch you promote deliberately.
 ## Deploy (Fly.io, alternative)
 
 From the **repo root** (the Docker build context must include
-`lib/browser/contract.ts`):
+`lib/browser/contract.ts` and `lib/browser/domains.ts`):
 
 ```sh
 fly apps create foray-browser-gateway   # once
