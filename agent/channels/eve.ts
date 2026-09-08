@@ -1,13 +1,8 @@
 import { eveChannel } from "eve/channels/eve";
 import { ForbiddenError, vercelOidc } from "eve/channels/auth";
 import { isSessionOwned } from "@/db/services/sessions";
-import {
-  accessScopeForPhone,
-  accessScopeForUser,
-  type AccessScope,
-} from "@/lib/access-scope";
+import { scopesForAuthUser, type AccessScope } from "@/lib/access-scope";
 import { getAuthSession } from "@/auth/session";
-import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
 import { adoptLegacyWorkspace } from "@/db/services/adopt-legacy-workspace";
 
 export default eveChannel({
@@ -52,11 +47,10 @@ function sessionIdFromPath(pathname: string) {
 async function requestScopeFromRequest(request: Request) {
   const session = await getAuthSession(request.headers);
   if (!session) return;
-  const legacyScope = accessScopeForUser(`better-auth:${session.user.id}`);
-  const phoneNumber = normalizeAuthPhoneNumber(session.user.phoneNumber ?? "");
-  if (!phoneNumber) return legacyScope;
-  const scope = accessScopeForPhone(phoneNumber);
-  await adoptLegacyWorkspace(scope, [legacyScope]);
+  // The same derivation the API routes use, legacy-phone adoption included;
+  // this path used to adopt only the personal workspace.
+  const { legacyScopes, scope } = scopesForAuthUser(session.user);
+  if (legacyScopes.length > 0) await adoptLegacyWorkspace(scope, legacyScopes);
   return scope;
 }
 

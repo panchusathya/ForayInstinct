@@ -208,6 +208,8 @@ async function setupStart() {
   await applyMigration(client, "0021_application_leases.sql");
   await applyMigration(client, "0022_application_runner.sql");
   await applyMigration(client, "0023_little_sentinels.sql");
+  await applyMigration(client, "0001_better-auth.sql");
+  await applyMigration(client, "0027_adoption_and_phone_scope.sql");
 
   const pgliteDatabase = drizzle(client, { schema });
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double

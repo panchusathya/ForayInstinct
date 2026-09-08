@@ -1,6 +1,5 @@
 import { eq } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
-import { accessScopeForPhone } from "@/lib/access-scope";
 import { readContactPhone } from "@/lib/manager/server/contact-phone";
 import { candidateProfiles, db, user } from "@/db";
 import {
@@ -169,7 +168,9 @@ async function lookupAuthUserById(id: string) {
 
 /**
  * iMessage scopes are `phone:<hash>`, which is not a Better Auth user id.
- * Match the verified phone number whose digest produced this scope.
+ * The database keeps that digest beside every verified number, so the row is
+ * one indexed read; this used to select every verified user and hash each
+ * number in turn.
  */
 async function lookupAuthUserByPhoneScope(userId: string) {
   if (!userId.startsWith("phone:")) return undefined;
@@ -182,20 +183,9 @@ async function lookupAuthUserByPhoneScope(userId: string) {
       phoneNumberVerified: user.phoneNumberVerified,
     })
     .from(user)
-    .where(eq(user.phoneNumberVerified, true));
-  return rows.find((row) => matchesPhoneScope(userId, row));
-}
-
-function matchesPhoneScope(
-  userId: string,
-  row: NonNullable<Awaited<ReturnType<typeof lookupAuthUserById>>>
-) {
-  if (!row.phoneNumber) return false;
-  try {
-    return accessScopeForPhone(row.phoneNumber).userId === userId;
-  } catch {
-    return false;
-  }
+    .where(eq(user.phoneScope, userId))
+    .limit(1);
+  return rows[0];
 }
 
 function authUserId(userId: string) {

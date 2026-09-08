@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { accessScopeForPhone, accessScopeForUser } from "../lib/access-scope";
+import {
+  accessScopeForPhone,
+  accessScopeForUser,
+  scopesForAuthUser,
+} from "../lib/access-scope";
 import {
   legacyNormalizeAuthPhoneNumber,
   normalizeAuthPhoneNumber,
@@ -44,5 +48,46 @@ describe("multi-user request identity", () => {
     expect(fromText).toEqual(fromWeb);
     expect(fromText.workspaceId).toMatch(/^phone:[a-f0-9]{32}$/u);
     expect(fromText.workspaceId).not.toContain("2025550123");
+  });
+});
+
+describe("one scope derivation for a signed-in user", () => {
+  it("keys a verified US number by phone and adopts the personal workspace", () => {
+    const scopes = scopesForAuthUser({ id: "u1", phoneNumber: "+12125550123" });
+
+    expect(scopes.scope).toEqual(accessScopeForPhone("+12125550123"));
+    expect(scopes.legacyScopes).toEqual([accessScopeForUser("better-auth:u1")]);
+  });
+
+  it("keeps a UK candidate in the workspace the old +1 reading gave them", () => {
+    // The old rule put +1 in front of anything without a country code, so a
+    // UK candidate who typed their number without one was keyed by a
+    // US-shaped number. The corrected rule reads nothing from that input, so
+    // the workspace they already have stays theirs.
+    const scopes = scopesForAuthUser({ id: "u2", phoneNumber: "447700900123" });
+
+    expect(scopes.scope).toEqual(accessScopeForPhone("+1447700900123"));
+    expect(scopes.legacyScopes).toEqual([]);
+
+    // Written with its country code, the number keys the corrected workspace.
+    const corrected = scopesForAuthUser({
+      id: "u2",
+      phoneNumber: "+447700900123",
+    });
+    expect(corrected.scope).toEqual(accessScopeForPhone("+447700900123"));
+    expect(corrected.legacyScopes).toEqual([
+      accessScopeForUser("better-auth:u2"),
+    ]);
+  });
+
+  it("keeps the personal workspace when there is no usable number", () => {
+    expect(scopesForAuthUser({ id: "u4" })).toEqual({
+      legacyScopes: [],
+      scope: accessScopeForUser("better-auth:u4"),
+    });
+    expect(scopesForAuthUser({ id: "u4", phoneNumber: "12" })).toEqual({
+      legacyScopes: [],
+      scope: accessScopeForUser("better-auth:u4"),
+    });
   });
 });

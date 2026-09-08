@@ -22,6 +22,14 @@ export const workspaces = pgTable("workspaces", {
   id: text("id").primaryKey(),
   createdAt: text("created_at").notNull(),
   kernelProfileId: text("kernel_profile_id").notNull().default(""),
+  /**
+   * The canonical workspace this one was absorbed into, once adoption has
+   * copied everything across. The row stays: deleting it cascades into
+   * application executions and leases that adoption does not re-home.
+   */
+  adoptedIntoWorkspaceId: text("adopted_into_workspace_id")
+    .notNull()
+    .default(""),
 });
 
 export const workspaceMemberships = pgTable(
