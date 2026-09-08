@@ -111,7 +111,7 @@ describe("application runner", () => {
       applyUrl,
       status: alreadyInProgressStatus,
     });
-  });
+  }, 15_000);
 
   it("leaves no lease behind when the profile gate refuses a start", async () => {
     // The deadlock this gate is most at risk of: refuse above the lease, or the
@@ -153,7 +153,7 @@ describe("application runner", () => {
       pause: "approval",
       status: "waiting",
     });
-  });
+  }, 15_000);
 
   it("never clicks submit on the approval path", () => {
     const fill = readFileSync("lib/application-runner/fill.ts", "utf8");

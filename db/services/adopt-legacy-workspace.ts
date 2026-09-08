@@ -24,7 +24,10 @@ import {
   listCandidateDocuments,
   saveCandidateDocument,
 } from "./candidate-documents";
-import { reencryptSecretForWorkspace } from "@/lib/manager/server/secret-store";
+import {
+  canDecryptSecret,
+  reencryptSecretForWorkspace,
+} from "@/lib/manager/server/secret-store";
 import type { SecretNamespace } from "@/db/services/secrets";
 
 /**
@@ -136,8 +139,11 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
       .from(encryptedSecrets)
       .where(eq(encryptedSecrets.workspaceId, legacy.workspaceId));
     for (const secret of legacySecrets) {
-      const existing = await transaction
-        .select({ updatedAt: encryptedSecrets.updatedAt })
+      const existingRows = await transaction
+        .select({
+          encryptedValue: encryptedSecrets.encryptedValue,
+          updatedAt: encryptedSecrets.updatedAt,
+        })
         .from(encryptedSecrets)
         .where(
           and(
@@ -147,28 +153,14 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
           )
         )
         .limit(1);
-      if (!existing[0] || secret.updatedAt > existing[0].updatedAt) {
-        let encryptedValue = secret.encryptedValue;
-        if (isSecretNamespace(secret.namespace)) {
-          try {
-            encryptedValue = reencryptSecretForWorkspace({
-              ciphertext: secret.encryptedValue,
-              from: legacy,
-              id: secret.id,
-              namespace: secret.namespace,
-              to: target,
-            });
-          } catch (error) {
-            console.error(
-              "[adopt-legacy-workspace] could not re-encrypt secret",
-              {
-                error: error instanceof Error ? error.message : String(error),
-                namespace: secret.namespace,
-              }
-            );
-          }
-        }
-        await transaction
+      const existing = existingRows.at(0);
+      const legacyNewer =
+        existing === undefined || secret.updatedAt > existing.updatedAt;
+      const upsert = (
+        encryptedValue: string,
+        updatedAt: typeof secret.updatedAt
+      ) =>
+        transaction
           .insert(encryptedSecrets)
           .values({
             ...secret,
@@ -181,12 +173,48 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
               encryptedSecrets.namespace,
               encryptedSecrets.id,
             ],
-            set: {
-              encryptedValue,
-              updatedAt: secret.updatedAt,
-            },
+            set: { encryptedValue, updatedAt },
           });
+      if (!isSecretNamespace(secret.namespace)) {
+        if (legacyNewer) await upsert(secret.encryptedValue, secret.updatedAt);
+        continue;
       }
+      // A target row its own AAD cannot open is a verbatim copy from before
+      // secrets were re-bound on adoption. A legacy value that still reads
+      // repairs it, whatever the two clocks say.
+      if (
+        !legacyNewer &&
+        canDecryptSecret({
+          ciphertext: existing.encryptedValue,
+          id: secret.id,
+          namespace: secret.namespace,
+          scope: target,
+        })
+      ) {
+        continue;
+      }
+      let encryptedValue: string;
+      try {
+        encryptedValue = reencryptSecretForWorkspace({
+          ciphertext: secret.encryptedValue,
+          from: legacy,
+          id: secret.id,
+          namespace: secret.namespace,
+          to: target,
+        });
+      } catch (error) {
+        // Storing the legacy bytes under the target's AAD would leave a row
+        // nothing can ever open, and one that shadows a later real save.
+        console.error("[adopt-legacy-workspace] could not re-encrypt secret", {
+          error: error instanceof Error ? error.message : String(error),
+          namespace: secret.namespace,
+        });
+        continue;
+      }
+      await upsert(
+        encryptedValue,
+        legacyNewer ? secret.updatedAt : existing.updatedAt
+      );
     }
 
     await transaction

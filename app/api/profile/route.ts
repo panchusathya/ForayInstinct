@@ -15,7 +15,7 @@ import { readWorkspaceKernelProfileId } from "@/db/services/workspaces";
 import { browserProvider, isGatewayProvider } from "@/lib/browser";
 import {
   candidateProfileResponseSchema,
-  profilePatchOf,
+  parseProfilePatch,
 } from "@/lib/candidate-profile";
 import {
   clearWorkspaceBrowserState,
@@ -55,13 +55,15 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const scope = await requireRequestScope();
+    // Origin first: resolving the scope runs legacy-workspace adoption, which
+    // a cross-site request must not be able to trigger.
     if (!isSameOrigin(request)) {
       return Response.json(
         { error: "Cross-origin profile writes are blocked." },
         { status: 403 }
       );
     }
+    const scope = await requireRequestScope();
     const mutation = mutationSchema.parse(await request.json());
     if (mutation.action === "sign_out_everywhere") {
       if (isGatewayProvider(browserProvider)) {
@@ -73,11 +75,17 @@ export async function POST(request: Request) {
         headers: { "Cache-Control": "no-store" },
       });
     }
-    const patch = profilePatchOf(mutation.profile);
-    if (patch === undefined && Object.keys(mutation.profile).length > 0) {
-      return profileError("Could not save profile.");
+    const parsed = parseProfilePatch(mutation.profile);
+    if (!parsed.ok) {
+      return Response.json(
+        {
+          error: `Could not save profile: ${describeIssues(parsed.issues)}`,
+          issues: parsed.issues,
+        },
+        { status: 400 }
+      );
     }
-    const saved = await saveCandidateProfile(scope, patch ?? {});
+    const saved = await saveCandidateProfile(scope, parsed.patch ?? {});
     if (!saved.stored) {
       return profileError("Could not save profile.");
     }
@@ -143,4 +151,14 @@ function seedLegalName(
 
 function profileError(message: string) {
   return Response.json({ error: message }, { status: 400 });
+}
+
+/** The first few refused fields, named, so the candidate knows what to fix. */
+function describeIssues(issues: readonly { message: string; path: string }[]) {
+  return issues
+    .slice(0, 3)
+    .map((issue) =>
+      issue.path === "" ? issue.message : `${issue.path} ${issue.message}`
+    )
+    .join("; ");
 }

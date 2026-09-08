@@ -34,6 +34,53 @@ export function isCandidateDocumentFile(filename: string, mimeType: string) {
   );
 }
 
+const mimeTypeByExtension: Readonly<Record<string, string>> = {
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  md: "text/markdown",
+  pdf: "application/pdf",
+  txt: "text/plain",
+};
+const fallbackMimeType = "application/octet-stream";
+
+/**
+ * The type a document is stored and served as. The name decides when it has
+ * a known extension, the upload's own claim counts only when it is a type we
+ * accept, and anything else is an opaque download: the claimed type used to
+ * be stored as given and echoed back as the download's `Content-Type`, so a
+ * "resume.pdf" uploaded as `text/html` came back as a page.
+ */
+export function canonicalDocumentMimeType(filename: string, mimeType: string) {
+  const extension = /\.([a-z0-9]+)$/iu
+    .exec(filename.trim())?.[1]
+    ?.toLowerCase();
+  const byExtension = extension ? mimeTypeByExtension[extension] : undefined;
+  if (byExtension !== undefined) return byExtension;
+  const claimed = mimeType.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (resumeTypes.has(claimed)) return claimed;
+  if (claimed.startsWith("text/")) return "text/plain";
+  return fallbackMimeType;
+}
+
+/**
+ * A `Content-Disposition` the filename cannot break out of: quotes,
+ * backslashes and control characters are dropped from the plain parameter,
+ * and the full name travels percent-encoded in `filename*`.
+ */
+export function documentContentDisposition(
+  filename: string,
+  disposition: "attachment" | "inline" = "attachment"
+) {
+  const clean = filename.replaceAll(/\p{Cc}/gu, "").trim() || "document";
+  const ascii = clean
+    .replaceAll(/["\\]/gu, "")
+    .replaceAll(/[^\x20-\x7e]/gu, "_");
+  const encoded = encodeURIComponent(clean).replaceAll(
+    /[!'()*]/gu,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+  return `${disposition}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}
+
 export function inferCandidateDocumentKind(
   filename: string
 ): CandidateDocumentKind {

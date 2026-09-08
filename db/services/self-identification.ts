@@ -1,10 +1,14 @@
 import { and, eq } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
-import { db, settings, user } from "@/db";
+import { db, settings } from "@/db";
 import {
   type SelfIdentification,
   selfIdentificationSchema,
 } from "@/lib/self-identification";
+import {
+  readCandidateContactIdentity,
+  readCandidateProfile,
+} from "./candidate-profile";
 
 const selfIdentificationKey = "self_identification";
 
@@ -68,14 +72,17 @@ export async function saveSelfIdentification(
   }
 }
 
-/** The name the candidate signs a disability self-identification form with. */
+/**
+ * The name the candidate signs a disability self-identification form with:
+ * the legal name on their profile, else the name on their login. It used to
+ * look the scope's user id up in the Better Auth table, where a prefixed or
+ * phone-derived id never matched, so every form was signed with "".
+ */
 export async function readSelfIdentificationSignatureName(
   scope: AccessScope
 ): Promise<string> {
-  const rows = await db
-    .select({ name: user.name })
-    .from(user)
-    .where(eq(user.id, scope.userId))
-    .limit(1);
-  return rows[0]?.name.trim() ?? "";
+  const profile = await readCandidateProfile(scope);
+  const legal = `${profile.legalFirstName} ${profile.legalLastName}`.trim();
+  if (legal !== "") return legal;
+  return (await readCandidateContactIdentity(scope)).name;
 }

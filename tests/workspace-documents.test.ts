@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 import {
+  canonicalDocumentMimeType,
+  documentContentDisposition,
   inferCandidateDocumentKind,
   isCandidateDocumentFile,
 } from "../lib/candidate-documents";
@@ -26,6 +28,36 @@ describe("candidate documents", () => {
     expect(inferCandidateDocumentKind("notes.txt")).toBe("other");
     expect(isCandidateDocumentFile("resume.pdf", "application/pdf")).toBe(true);
     expect(isCandidateDocumentFile("photo.png", "image/png")).toBe(false);
+  });
+
+  it("serves a file as what its name says it is, never as what the upload claimed", () => {
+    expect(canonicalDocumentMimeType("resume.pdf", "text/html")).toBe(
+      "application/pdf"
+    );
+    expect(
+      canonicalDocumentMimeType("notes.txt", "text/plain; charset=utf-8")
+    ).toBe("text/plain");
+    expect(canonicalDocumentMimeType("Resume.PDF", "")).toBe("application/pdf");
+    expect(canonicalDocumentMimeType("resume", "application/pdf")).toBe(
+      "application/pdf"
+    );
+    // Any text is served as plain text, never as a page.
+    expect(canonicalDocumentMimeType("resume", "text/html")).toBe("text/plain");
+    expect(
+      canonicalDocumentMimeType("resume", "application/x-msdownload")
+    ).toBe("application/octet-stream");
+  });
+
+  it("keeps a filename inside its Content-Disposition header", () => {
+    expect(documentContentDisposition('Ada "Résumé"\r\n.pdf')).toBe(
+      `attachment; filename="Ada R_sum_.pdf"; filename*=UTF-8''Ada%20%22R%C3%A9sum%C3%A9%22.pdf`
+    );
+    expect(documentContentDisposition("it's (final)*.pdf")).toBe(
+      `attachment; filename="it's (final)*.pdf"; filename*=UTF-8''it%27s%20%28final%29%2A.pdf`
+    );
+    expect(documentContentDisposition("\u0000", "inline")).toBe(
+      `inline; filename="document"; filename*=UTF-8''document`
+    );
   });
 
   it("extracts readable text from a plain-text file and a tiny PDF", () => {

@@ -3,6 +3,7 @@ import { deflateSync } from "node:zlib";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { db } from "@/db";
 import * as schema from "../db/schema";
 
@@ -403,6 +404,23 @@ describe("database services", () => {
         workspaceId: phoneScope.workspaceId,
       })
     ).resolves.toEqual({ name: "" });
+
+    // The name Better Auth gives a phone sign-up is a placeholder, and it
+    // reached ATS forms as the legal name "Phone" "user".
+    const placeholderPhone = "+12125550177";
+    const placeholderScope = access.accessScopeForPhone(placeholderPhone);
+    await scope.ensureScope(placeholderScope);
+    await client.exec(`
+      INSERT INTO "user" (
+        id, name, email, "emailVerified", "phoneNumber", "phoneNumberVerified"
+      ) VALUES (
+        'auth-placeholder', 'Phone user', 'phone-x@local-vault.invalid', false,
+        '${placeholderPhone}', true
+      );
+    `);
+    await expect(
+      candidateProfile.readCandidateContactIdentity(placeholderScope)
+    ).resolves.toEqual({ name: "", phone: placeholderPhone });
 
     // An iMessage-only candidate has no web account row at all. The number
     // they text from is remembered, and the identity carries it.
@@ -1111,6 +1129,25 @@ async function applyInitialMigration(database: PGlite) {
   await applyMigration(database, "0024_contact_and_answers_namespaces.sql");
 }
 
+/** The whole schema, in journal order, for services that touch most of it. */
+async function applyEveryMigration(database: PGlite) {
+  const journal = journalSchema.parse(
+    JSON.parse(
+      await readFile(
+        new URL("../db/migrations/meta/_journal.json", import.meta.url),
+        "utf8"
+      )
+    )
+  );
+  for (const entry of journal.entries) {
+    await applyMigration(database, `${entry.tag}.sql`);
+  }
+}
+
+const journalSchema = z.object({
+  entries: z.array(z.object({ tag: z.string() })),
+});
+
 /**
  * A single-page PDF whose only content stream is Flate-compressed and whose
  * text is a UTF-16BE literal, matching what a real word processor exports.
@@ -1350,4 +1387,190 @@ describe("a background role search", () => {
     await searches.completePendingRoleSearch("personal:ada");
     await expect(searches.listPendingRoleSearches()).resolves.toEqual([]);
   }, 20_000);
+});
+
+describe("adopting a legacy workspace's secrets", () => {
+  it("never copies ciphertext the target cannot open, and repairs a copy it already holds", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyEveryMigration(client);
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, secrets, store, adoption] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/secrets"),
+      import("@/lib/manager/server/secret-store"),
+      import("@/db/services/adopt-legacy-workspace"),
+    ]);
+    const legacy = {
+      userId: "better-auth:legacy",
+      workspaceId: "workspace:legacy",
+    };
+    const target = { userId: "phone:abc", workspaceId: "workspace:phone" };
+    await scope.ensureScope(legacy);
+    await scope.ensureScope(target);
+
+    // A legacy row nothing can decrypt any more: it used to be stored under
+    // the target as-is when re-encryption failed, and shadowed later saves.
+    await secrets.writeEncryptedSecret(
+      legacy,
+      "vault",
+      "broken",
+      "v1.bm90.cmVhbA.Ynl0ZXM"
+    );
+    // A readable legacy login whose bytes were once copied verbatim onto the
+    // target, where its AAD cannot open them; the copy is the newer row.
+    await store.writeSecret({
+      id: "login-1",
+      namespace: "vault",
+      scope: legacy,
+      value: "hunter2",
+    });
+    const ciphertext = await secrets.readEncryptedSecret(
+      legacy,
+      "vault",
+      "login-1"
+    );
+    expect(typeof ciphertext).toBe("string");
+    if (typeof ciphertext !== "string") return;
+    await secrets.writeEncryptedSecret(target, "vault", "login-1", ciphertext);
+    await expect(
+      store.readSecret({ id: "login-1", namespace: "vault", scope: target })
+    ).rejects.toThrow(/authenticate|unsupported/iu);
+
+    await adoption.adoptLegacyWorkspace(target, [legacy]);
+
+    expect(
+      await secrets.readEncryptedSecret(target, "vault", "broken")
+    ).toBeUndefined();
+    await expect(
+      store.readSecret({ id: "login-1", namespace: "vault", scope: target })
+    ).resolves.toBe("hunter2");
+
+    // Running again is a no-op on a repaired row.
+    await adoption.adoptLegacyWorkspace(target, [legacy]);
+    await expect(
+      store.readSecret({ id: "login-1", namespace: "vault", scope: target })
+    ).resolves.toBe("hunter2");
+  }, 20_000);
+});
+
+describe("saved browser state", () => {
+  it("drops a blob it cannot decrypt instead of failing every browser", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, secrets, browserState] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/secrets"),
+      import("@/lib/manager/server/browser-state"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+    await secrets.writeEncryptedSecret(
+      alice,
+      "browser-state",
+      "storage-state",
+      "v1.bm90.cmVhbA.Ynl0ZXM"
+    );
+
+    expect(await browserState.hasWorkspaceBrowserState(alice)).toBe(true);
+    await expect(
+      browserState.readWorkspaceBrowserState(alice)
+    ).resolves.toBeUndefined();
+    expect(await browserState.hasWorkspaceBrowserState(alice)).toBe(false);
+  }, 15_000);
+});
+
+describe("the disability form signature", () => {
+  it("signs with the profile's legal name, then the login name, never a placeholder", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0001_better-auth.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, candidateProfile, selfIdentification, access] =
+      await Promise.all([
+        import("@/db/services/scope"),
+        import("@/db/services/candidate-profile"),
+        import("@/db/services/self-identification"),
+        import("@/lib/access-scope"),
+      ]);
+    const phone = "+12125550123";
+    const phoneScope = access.accessScopeForPhone(phone);
+    await scope.ensureScope(phoneScope);
+    await client.exec(`
+      INSERT INTO "user" (
+        id, name, email, "emailVerified", "phoneNumber", "phoneNumberVerified"
+      ) VALUES (
+        'auth-ada', 'Phone user', 'phone-ada@local-vault.invalid', false,
+        '${phone}', true
+      );
+    `);
+
+    // The lookup used to take the scope's user id to the Better Auth table,
+    // where a phone-derived id never matched, so every form was signed "".
+    expect(
+      await selfIdentification.readSelfIdentificationSignatureName(phoneScope)
+    ).toBe("");
+    await client.exec(
+      `UPDATE "user" SET name = 'Ada Lovelace' WHERE id = 'auth-ada';`
+    );
+    expect(
+      await selfIdentification.readSelfIdentificationSignatureName(phoneScope)
+    ).toBe("Ada Lovelace");
+    await candidateProfile.saveCandidateProfile(phoneScope, {
+      legalFirstName: "Augusta",
+      legalLastName: "King",
+    });
+    expect(
+      await selfIdentification.readSelfIdentificationSignatureName(phoneScope)
+    ).toBe("Augusta King");
+  }, 15_000);
+});
+
+describe("a document's stored name and type", () => {
+  it("keeps header-breaking characters and a lying content type out of the row", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0011_candidate_documents.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, documents] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/candidate-documents"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+
+    const saved = await documents.saveCandidateDocument(alice, {
+      bytes: Buffer.from("%PDF-1.4 not really"),
+      filename: "resume\r\nX-Injected: yes.pdf",
+      mimeType: "text/html",
+      source: "upload",
+    });
+
+    expect(saved.document.filename).toBe("resumeX-Injected: yes.pdf");
+    expect(saved.document.mimeType).toBe("application/pdf");
+  }, 15_000);
 });

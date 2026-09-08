@@ -119,6 +119,25 @@ export function reencryptSecretForWorkspace(input: {
   return encryptSecret(input.to, input.namespace, input.id, plaintext);
 }
 
+/**
+ * Whether this ciphertext opens under this scope's AAD. A row copied verbatim
+ * from another workspace does not, and is worth replacing when the original
+ * still can be read.
+ */
+export function canDecryptSecret(input: {
+  ciphertext: string;
+  id: string;
+  namespace: SecretNamespace;
+  scope: AccessScope;
+}) {
+  try {
+    decryptSecret(input.scope, input.namespace, input.id, input.ciphertext);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function decryptSecret(
   scope: AccessScope,
   namespace: SecretNamespace,

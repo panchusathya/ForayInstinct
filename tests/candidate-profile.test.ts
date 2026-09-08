@@ -5,8 +5,12 @@ import {
   candidateProfileSchema,
   candidateProfileSummary,
   emptyCandidateProfile,
+  isPlaceholderName,
   missingProfileFields,
+  parseProfilePatch,
+  profileLimits,
   profilePatchOf,
+  storedCandidateProfileSchema,
 } from "../lib/candidate-profile";
 
 describe("candidate profile", () => {
@@ -137,5 +141,70 @@ describe("writing a partial profile", () => {
     expect(
       profilePatchOf({ workAuthorization: "not-an-option" })
     ).toBeUndefined();
+  });
+});
+
+describe("a profile that exceeds a limit", () => {
+  const oversized = {
+    workHistory: [
+      {
+        company: "Acme",
+        description: "x".repeat(profileLimits.description + 1),
+        title: "Engineer",
+      },
+    ],
+  };
+
+  it("names the field instead of blanking the section", () => {
+    // The array schemas used to `.catch([])`, so this patch parsed as an empty
+    // work history and was saved as one, under a "Saved." message.
+    const result = parseProfilePatch(oversized);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues[0]?.path).toBe("workHistory.0.description");
+    expect(result.issues[0]?.message).toMatch(/4000/u);
+    expect(profilePatchOf(oversized)).toBeUndefined();
+    expect(candidateProfileSchema.safeParse(oversized).success).toBe(false);
+  });
+
+  it("reports an empty patch as nothing to save, not as a failure", () => {
+    expect(parseProfilePatch({})).toEqual({ ok: true, patch: undefined });
+    expect(parseProfilePatch({ legalFirstName: "Ada" })).toEqual({
+      ok: true,
+      patch: { legalFirstName: "Ada" },
+    });
+  });
+
+  it("reads a stored profile leniently, keeping the entries that still parse", () => {
+    const stored = storedCandidateProfileSchema.parse({
+      links: "nope",
+      salaryMin: "lots",
+      skills: ["TypeScript", "", 7, "SQL"],
+      summary: "s".repeat(profileLimits.summary + 5),
+      workAuthorization: "bogus",
+      workHistory: Array.from(
+        { length: profileLimits.workHistory + 1 },
+        (_, index) => ({ company: `Company ${String(index)}`, title: "Role" })
+      ),
+    });
+
+    expect(stored.skills).toEqual(["TypeScript", "SQL"]);
+    expect(stored.links).toEqual([]);
+    expect(stored.salaryMin).toBeNull();
+    expect(stored.summary).toHaveLength(profileLimits.summary);
+    expect(stored.workAuthorization).toBe("");
+    expect(stored.workHistory).toHaveLength(profileLimits.workHistory);
+    expect(stored.workHistory[0]?.company).toBe("Company 0");
+    expect(storedCandidateProfileSchema.parse({})).toEqual(
+      emptyCandidateProfile
+    );
+  });
+
+  it("treats the phone sign-up placeholder as no name at all", () => {
+    expect(isPlaceholderName("Phone user")).toBe(true);
+    expect(isPlaceholderName(" phone user ")).toBe(true);
+    expect(isPlaceholderName("Ada")).toBe(false);
+    expect(isPlaceholderName("")).toBe(false);
   });
 });

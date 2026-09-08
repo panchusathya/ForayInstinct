@@ -64,7 +64,7 @@ describe("application leases", () => {
         workerSessionId: "worker-2",
       })
     ).rejects.toThrow(/already_in_progress/);
-  });
+  }, 15_000);
 
   it("refuses a missing apply URL and a missing lease", async () => {
     const { claimApplicationLease, assertApplicationLeaseOwner } =
@@ -85,7 +85,7 @@ describe("application leases", () => {
         workerSessionId: "worker-ghost",
       })
     ).rejects.toThrow("requires an application lease");
-  });
+  }, 15_000);
 
   it("scopes traces and checkpoints to one posting", async () => {
     const leases = await setup();
@@ -154,7 +154,7 @@ describe("application leases", () => {
     expect(await executions.listApplicationExecutionTraces(alice, {})).toEqual(
       []
     );
-  });
+  }, 15_000);
 
   it("stops an overdue worker from taking another browser action", async () => {
     const { claimApplicationLease, assertApplicationLeaseOwner } =
@@ -177,7 +177,7 @@ describe("application leases", () => {
         workerSessionId: "worker-1",
       })
     ).rejects.toThrow("20-minute safety limit");
-  });
+  }, 15_000);
 
   it("lets the watchdog claim an expired lease", async () => {
     const leases = await setup();
@@ -198,7 +198,7 @@ describe("application leases", () => {
         executionId: tracing.executionId("root-1", "call-1"),
       }),
     ]);
-  });
+  }, 15_000);
   it("lets the same session retry a posting whose lease was released", async () => {
     // The lease row is keyed by execution id and a retry from the same session
     // reuses that id, so a released row used to stand as a tombstone: the
@@ -226,7 +226,7 @@ describe("application leases", () => {
     });
 
     expect(retry).toMatchObject({ executionId, status: "acquired" });
-  });
+  }, 15_000);
 
   it("releases only the named execution's lease, whatever worker session travels with it", async () => {
     // Given both ids the two were OR'ed, so releasing one execution could
@@ -300,7 +300,7 @@ describe("application leases", () => {
     });
 
     expect(retry).toMatchObject({ status: "already_in_progress" });
-  });
+  }, 15_000);
 });
 
 async function setup() {

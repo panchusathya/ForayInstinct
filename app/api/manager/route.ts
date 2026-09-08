@@ -29,9 +29,11 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const scope = await requireRequestScope();
+    // Origin first: resolving the scope runs legacy-workspace adoption, which
+    // a cross-site request must not be able to trigger.
     const denied = denyCrossOriginMutation(request);
     if (denied) return denied;
+    const scope = await requireRequestScope();
     const mutation = managerMutationSchema.parse(await request.json());
     return Response.json(await applyManagerMutation(scope, mutation), {
       headers: { "Cache-Control": "no-store" },

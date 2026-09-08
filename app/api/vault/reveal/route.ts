@@ -18,13 +18,15 @@ const requestSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const scope = await requireRequestScope();
+    // Origin first: resolving the scope runs legacy-workspace adoption, which
+    // a cross-site request must not be able to trigger.
     if (!isSameOrigin(request)) {
       return Response.json(
         { error: "Cross-origin vault reads are blocked." },
         { status: 403 }
       );
     }
+    const scope = await requireRequestScope();
     const { id } = requestSchema.parse(await request.json());
     const item = await readVaultItem(scope, id);
     if (item?.kind !== "login") {

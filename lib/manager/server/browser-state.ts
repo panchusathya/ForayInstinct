@@ -5,6 +5,7 @@ import {
 import { sanitizeStorageState } from "@/lib/browser/storage-state";
 import {
   deleteSecret,
+  hasSecret,
   readSecret,
   writeSecret,
 } from "@/lib/manager/server/secret-store";
@@ -23,18 +24,21 @@ export async function readWorkspaceBrowserState(
   scope: AccessScope
 ): Promise<GatewayStorageState | undefined> {
   await ensureScope(scope);
-  const raw = await readSecret({
-    id: storageStateSecretId,
-    namespace: "browser-state",
-    scope,
-  });
-  if (raw === undefined) return undefined;
   try {
+    // Decryption is inside the try as well: a blob written under another
+    // workspace's key, or an old encryption key, threw out of here and failed
+    // every browser this workspace tried to open.
+    const raw = await readSecret({
+      id: storageStateSecretId,
+      namespace: "browser-state",
+      scope,
+    });
+    if (raw === undefined) return undefined;
     // What a browser will refuse is known before it is asked; a stale or
     // malformed cookie in this blob otherwise fails every session it seeds.
     return sanitizeStorageState(storageStateSchema.parse(JSON.parse(raw)));
   } catch {
-    // A malformed blob must not block creating a browser; drop it.
+    // A blob that cannot be read must not block creating a browser; drop it.
     await clearWorkspaceBrowserState(scope).catch(() => undefined);
     return undefined;
   }
@@ -65,11 +69,11 @@ export async function clearWorkspaceBrowserState(scope: AccessScope) {
 
 export async function hasWorkspaceBrowserState(scope: AccessScope) {
   await ensureScope(scope);
-  return (
-    (await readSecret({
-      id: storageStateSecretId,
-      namespace: "browser-state",
-      scope,
-    })) !== undefined
-  );
+  // Existence only: the profile page asks this on every load, and decrypting
+  // the blob there made an unreadable one fail the whole page.
+  return hasSecret({
+    id: storageStateSecretId,
+    namespace: "browser-state",
+    scope,
+  });
 }
