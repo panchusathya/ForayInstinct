@@ -105,15 +105,41 @@ function extractDocxUris(bytes: Buffer) {
   return uris;
 }
 
+const namedXmlEntities: Readonly<Record<string, string>> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  quot: '"',
+};
+
+/**
+ * The five XML entities plus numeric references, decimal and hex, by code
+ * point. Two copies of this used to exist, neither read `&#x2014;`, and both
+ * turned an astral code point into a lone surrogate.
+ */
 function decodeXmlEntities(value: string) {
-  return value
-    .replace(/&amp;/gu, "&")
-    .replace(/&lt;/gu, "<")
-    .replace(/&gt;/gu, ">")
-    .replace(/&quot;/gu, '"')
-    .replace(/&#(\d+);/gu, (_, code: string) =>
-      String.fromCharCode(Number(code))
-    );
+  return value.replace(
+    /&(?:#x([0-9a-f]{1,6})|#(\d{1,7})|([a-z]+));/giu,
+    (
+      entity: string,
+      hex: string | undefined,
+      decimal: string | undefined,
+      name: string | undefined
+    ) => {
+      if (name !== undefined) return namedXmlEntities[name] ?? entity;
+      const code =
+        hex !== undefined ? Number.parseInt(hex, 16) : Number(decimal);
+      if (!Number.isInteger(code) || code < 0 || code > 0x10_ff_ff) {
+        return "";
+      }
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return "";
+      }
+    }
+  );
 }
 
 function clipExtractedText(value: string) {
@@ -337,18 +363,17 @@ function unescapePdfBytes(value: string) {
 function extractDocxText(bytes: Buffer) {
   const xml = zipEntry(bytes, "word/document.xml");
   if (!xml) return "";
-  return xml
-    .toString("utf8")
-    .replace(/<w:tab\b[^/]*\/>/gu, "\t")
-    .replace(/<\/w:p>/gu, "\n")
-    .replace(/<[^>]+>/gu, "")
-    .replace(/&amp;/gu, "&")
-    .replace(/&lt;/gu, "<")
-    .replace(/&gt;/gu, ">")
-    .replace(/&quot;/gu, '"')
-    .replace(/&#(\d+);/gu, (_, code: string) =>
-      String.fromCharCode(Number(code))
-    );
+  return decodeXmlEntities(
+    xml
+      .toString("utf8")
+      // Tracked deletions are still in the file; a resume saved with changes
+      // pending read as its old and new wording run together.
+      .replace(/<w:del\b[\s\S]*?<\/w:del>/gu, "")
+      .replace(/<w:delText\b[\s\S]*?<\/w:delText>/gu, "")
+      .replace(/<w:tab\b[^/]*\/>/gu, "\t")
+      .replace(/<\/w:p>/gu, "\n")
+      .replace(/<[^>]+>/gu, "")
+  );
 }
 
 /** A truncated or corrupt entry yields no text rather than failing the read. */

@@ -1737,3 +1737,62 @@ describe("filing a document by kind", () => {
     );
   }, 15_000);
 });
+
+describe("rotating the encryption key", () => {
+  it("re-seals a secret under the current key the first time it is read", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+
+    const [scope, secrets, store] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/secrets"),
+      import("@/lib/manager/server/secret-store"),
+    ]);
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    await scope.ensureScope(alice);
+    await store.writeSecret({
+      id: "login-1",
+      namespace: "vault",
+      scope: alice,
+      value: "hunter2",
+    });
+    const before = await secrets.readEncryptedSecret(alice, "vault", "login-1");
+    expect(before?.startsWith("v2.v1.")).toBe(true);
+
+    // A new primary key arrives; the old one stays as the legacy key.
+    vi.stubEnv(
+      "SECRET_ENCRYPTION_KEYS",
+      `k2=${Buffer.alloc(32, 2).toString("base64")}`
+    );
+    try {
+      vi.resetModules();
+      vi.doMock("@/db", () => ({ ...schema, db: database }));
+      const rotated = await import("@/lib/manager/server/secret-store");
+      await expect(
+        rotated.readSecret({ id: "login-1", namespace: "vault", scope: alice })
+      ).resolves.toBe("hunter2");
+      const after = await secrets.readEncryptedSecret(
+        alice,
+        "vault",
+        "login-1"
+      );
+      expect(after?.startsWith("v2.k2.")).toBe(true);
+      expect(after).not.toBe(before);
+      // Reading again is stable, and the value is unchanged.
+      await expect(
+        rotated.readSecret({ id: "login-1", namespace: "vault", scope: alice })
+      ).resolves.toBe("hunter2");
+      expect(await secrets.readEncryptedSecret(alice, "vault", "login-1")).toBe(
+        after
+      );
+    } finally {
+      vi.stubEnv("SECRET_ENCRYPTION_KEYS", "");
+    }
+  }, 15_000);
+});

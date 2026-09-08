@@ -143,6 +143,27 @@ describe("candidate documents", () => {
     expect(extracted).toBe("Staff engineer in Austin");
   });
 
+  it("decodes hex entities by code point and drops tracked deletions from a DOCX", () => {
+    const xml = [
+      "<w:document><w:body>",
+      "<w:p><w:r><w:t>Ada &#x2014; Lovelace &amp; Co &#128640; &apos;go&apos;</w:t></w:r></w:p>",
+      "<w:p><w:del><w:r><w:delText>Junior Analyst</w:delText></w:r></w:del>",
+      "<w:ins><w:r><w:t>Staff Engineer</w:t></w:r></w:ins></w:p>",
+      "</w:body></w:document>",
+    ].join("");
+
+    const extracted = extractDocumentText(
+      storedDocxFixture(xml),
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "resume.docx"
+    );
+
+    expect(extracted).toContain("Ada — Lovelace & Co 🚀 'go'");
+    expect(extracted).toContain("Staff Engineer");
+    expect(extracted).not.toContain("Junior Analyst");
+    expect(extracted).not.toMatch(/[\uD800-\uDFFF]/u);
+  });
+
   it("returns no text for a corrupt DOCX instead of throwing", () => {
     expect(() =>
       extractDocumentText(
@@ -215,6 +236,19 @@ function pdfUtf16Literal(text: string) {
     literal += String.fromCharCode(byte);
   }
   return `(${literal})`;
+}
+
+/** A one-entry zip holding `word/document.xml` uncompressed. */
+function storedDocxFixture(xml: string) {
+  const name = Buffer.from("word/document.xml", "utf8");
+  const payload = Buffer.from(xml, "utf8");
+  const header = Buffer.alloc(30);
+  header.writeUInt32LE(0x04034b50, 0);
+  header.writeUInt16LE(0, 8);
+  header.writeUInt32LE(payload.byteLength, 18);
+  header.writeUInt32LE(payload.byteLength, 22);
+  header.writeUInt16LE(name.byteLength, 26);
+  return Buffer.concat([header, name, payload]);
 }
 
 /** A zip local header that promises deflate data but carries garbage. */
