@@ -7,10 +7,12 @@ import {
   candidateProfilePatchSchema,
   candidateProfileSchema,
   emptyCandidateProfile,
+  isPlaceholderName,
   type CandidateContactIdentity,
   type CandidateProfile,
   type CandidateProfilePatch,
   profilePatchOf,
+  storedCandidateProfileSchema,
 } from "@/lib/candidate-profile";
 
 /**
@@ -107,14 +109,20 @@ export async function readCandidateContactIdentity(
     verifiedPhone ?? (await readContactPhone(scope).catch(() => undefined));
   if (row === undefined) return { name: "", ...(phone ? { phone } : {}) };
   return {
-    name: row.name.trim(),
+    // The sign-up placeholder is not the candidate's name; every reader of
+    // this identity (legal-name seeding, the EEO signature, account creation)
+    // would otherwise carry "Phone user" onto a form.
+    name: isPlaceholderName(row.name) ? "" : row.name.trim(),
     ...(row.emailVerified && row.email ? { email: row.email } : {}),
     ...(phone ? { phone } : {}),
   };
 }
 
-function parseStoredProfile(row: typeof candidateProfiles.$inferSelect) {
-  return candidateProfileSchema.catch(emptyCandidateProfile).parse({
+function parseStoredProfile(
+  row: typeof candidateProfiles.$inferSelect
+): CandidateProfile {
+  // Field by field: one stale entry costs that entry, not the whole profile.
+  return storedCandidateProfileSchema.parse({
     contactEmail: row.contactEmail,
     earliestStartDate: row.earliestStartDate,
     education: row.education,

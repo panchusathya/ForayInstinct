@@ -7,6 +7,28 @@ import { z } from "zod";
  * references, and any password are excluded on purpose.
  */
 
+/**
+ * Every bound the profile enforces, in one place, so the form can stop input
+ * at the same length the schema refuses and the two never disagree.
+ */
+export const profileLimits = {
+  code: 8,
+  description: 4_000,
+  education: 20,
+  linkLabel: 80,
+  links: 20,
+  locality: 120,
+  name: 80,
+  postalCode: 20,
+  shortText: 200,
+  skill: 80,
+  skills: 40,
+  startDate: 80,
+  summary: 8_000,
+  url: 500,
+  workHistory: 30,
+} as const;
+
 const boundedText = (max: number) => z.string().trim().max(max).default("");
 const monthSchema = z.number().int().min(1).max(12);
 const yearSchema = z.number().int().min(1900).max(2100);
@@ -31,40 +53,59 @@ const workArrangementSchema = z.enum([
 ]);
 
 const workHistoryEntrySchema = z.object({
-  company: boundedText(200),
+  company: boundedText(profileLimits.shortText),
   current: z.boolean().default(false),
-  description: boundedText(4_000),
+  description: boundedText(profileLimits.description),
   endMonth: monthSchema.optional(),
   endYear: yearSchema.optional(),
-  location: boundedText(200),
+  location: boundedText(profileLimits.shortText),
   startMonth: monthSchema.optional(),
   startYear: yearSchema.optional(),
-  title: boundedText(200),
+  title: boundedText(profileLimits.shortText),
 });
 
 const educationEntrySchema = z.object({
   current: z.boolean().default(false),
-  degree: boundedText(200),
+  degree: boundedText(profileLimits.shortText),
   endMonth: monthSchema.optional(),
   endYear: yearSchema.optional(),
-  field: boundedText(200),
-  school: boundedText(200),
+  field: boundedText(profileLimits.shortText),
+  school: boundedText(profileLimits.shortText),
   startMonth: monthSchema.optional(),
   startYear: yearSchema.optional(),
 });
 
 const profileLinkSchema = z.object({
-  label: boundedText(80),
-  url: boundedText(500),
+  label: boundedText(profileLimits.linkLabel),
+  url: boundedText(profileLimits.url),
 });
 
-const skillsSchema = z
-  .array(z.string().trim().min(1).max(80))
-  .max(40)
-  .catch([]);
-const linksSchema = z.array(profileLinkSchema).max(20).catch([]);
-const workHistorySchema = z.array(workHistoryEntrySchema).max(30).catch([]);
-const educationSchema = z.array(educationEntrySchema).max(20).catch([]);
+// A write that fails validation fails: these arrays used to `.catch([])`, so
+// one over-long description turned the whole work history into an empty
+// array that was then saved, under a "Saved." message. The lenient reading
+// of what is already stored lives in `storedCandidateProfileSchema`.
+const skillSchema = z.string().trim().min(1).max(profileLimits.skill);
+const skillsSchema = z.array(skillSchema).max(profileLimits.skills).default([]);
+const linksSchema = z
+  .array(profileLinkSchema)
+  .max(profileLimits.links)
+  .default([]);
+const workHistorySchema = z
+  .array(workHistoryEntrySchema)
+  .max(profileLimits.workHistory)
+  .default([]);
+const educationSchema = z
+  .array(educationEntrySchema)
+  .max(profileLimits.education)
+  .default([]);
+
+const salaryAmountSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(10_000_000)
+  .nullable()
+  .default(null);
 
 export const candidateProfileSchema = z.object({
   /**
@@ -74,25 +115,25 @@ export const candidateProfileSchema = z.object({
    * value to draw on and was asked for on every posting.
    */
   contactEmail: boundedText(320),
-  earliestStartDate: boundedText(80),
+  earliestStartDate: boundedText(profileLimits.startDate),
   education: educationSchema,
-  headline: boundedText(200),
-  legalFirstName: boundedText(80),
-  legalLastName: boundedText(80),
+  headline: boundedText(profileLimits.shortText),
+  legalFirstName: boundedText(profileLimits.name),
+  legalLastName: boundedText(profileLimits.name),
   links: linksSchema,
-  locationCity: boundedText(120),
-  locationCountryCode: boundedText(8),
-  locationPostalCode: boundedText(20),
-  locationRegion: boundedText(120),
-  preferredName: boundedText(80),
+  locationCity: boundedText(profileLimits.locality),
+  locationCountryCode: boundedText(profileLimits.code),
+  locationPostalCode: boundedText(profileLimits.postalCode),
+  locationRegion: boundedText(profileLimits.locality),
+  preferredName: boundedText(profileLimits.name),
   requiresSponsorshipFuture: yesNoBlankSchema.default(""),
   requiresSponsorshipNow: yesNoBlankSchema.default(""),
-  salaryCurrency: boundedText(8).default("USD"),
-  salaryMax: z.number().int().min(0).max(10_000_000).nullable().default(null),
-  salaryMin: z.number().int().min(0).max(10_000_000).nullable().default(null),
+  salaryCurrency: boundedText(profileLimits.code).default("USD"),
+  salaryMax: salaryAmountSchema,
+  salaryMin: salaryAmountSchema,
   salaryPeriod: salaryPeriodSchema.default(""),
   skills: skillsSchema,
-  summary: boundedText(8_000),
+  summary: boundedText(profileLimits.summary),
   willingToRelocate: yesNoBlankSchema.default(""),
   workArrangement: workArrangementSchema.default(""),
   workAuthorization: workAuthorizationSchema.default(""),
@@ -111,6 +152,74 @@ export const emptyCandidateProfile: CandidateProfile =
 export const candidateProfilePatchSchema = candidateProfileSchema.partial();
 export type CandidateProfilePatch = z.infer<typeof candidateProfilePatchSchema>;
 
+/** Stored text is clipped to the bound, never dropped for exceeding it. */
+const storedText = (max: number, fallback = "") =>
+  z
+    .string()
+    .catch(fallback)
+    .transform((value) => value.trim().slice(0, max));
+
+/**
+ * Keeps the entries that still parse and drops the rest, one element at a
+ * time. A whole-array `.catch([])` read thirty positions as none the moment
+ * one of them had gone stale.
+ */
+function tolerantArray<T extends z.ZodType>(item: T, max: number) {
+  return z
+    .array(z.unknown())
+    .catch([])
+    .transform((entries) =>
+      entries
+        .flatMap((entry) => {
+          const parsed = item.safeParse(entry);
+          return parsed.success ? [parsed.data] : [];
+        })
+        .slice(0, max)
+    );
+}
+
+/**
+ * How a row already in the database is read: every field on its own, with
+ * the empty value standing in for one that no longer parses. Writes go
+ * through `candidateProfileSchema` and are refused instead.
+ */
+export const storedCandidateProfileSchema = z.object({
+  contactEmail: storedText(320),
+  earliestStartDate: storedText(profileLimits.startDate),
+  education: tolerantArray(educationEntrySchema, profileLimits.education),
+  headline: storedText(profileLimits.shortText),
+  legalFirstName: storedText(profileLimits.name),
+  legalLastName: storedText(profileLimits.name),
+  links: tolerantArray(profileLinkSchema, profileLimits.links),
+  locationCity: storedText(profileLimits.locality),
+  locationCountryCode: storedText(profileLimits.code),
+  locationPostalCode: storedText(profileLimits.postalCode),
+  locationRegion: storedText(profileLimits.locality),
+  preferredName: storedText(profileLimits.name),
+  requiresSponsorshipFuture: yesNoBlankSchema.catch(""),
+  requiresSponsorshipNow: yesNoBlankSchema.catch(""),
+  salaryCurrency: storedText(profileLimits.code, "USD"),
+  salaryMax: salaryAmountSchema.catch(null),
+  salaryMin: salaryAmountSchema.catch(null),
+  salaryPeriod: salaryPeriodSchema.catch(""),
+  skills: tolerantArray(skillSchema, profileLimits.skills),
+  summary: storedText(profileLimits.summary),
+  willingToRelocate: yesNoBlankSchema.catch(""),
+  workArrangement: workArrangementSchema.catch(""),
+  workAuthorization: workAuthorizationSchema.catch(""),
+  workHistory: tolerantArray(workHistoryEntrySchema, profileLimits.workHistory),
+  yearsExperience: z.number().int().min(0).max(80).nullable().catch(null),
+});
+
+/**
+ * The name Better Auth gives a phone sign-up before the candidate has said
+ * theirs. It is not a name: seeded into a legal-name field it reached ATS
+ * forms as "Phone" "user".
+ */
+export function isPlaceholderName(name: string) {
+  return /^phone user$/iu.test(name.trim());
+}
+
 /**
  * Validates a patch without inventing the keys it did not mention.
  *
@@ -123,6 +232,20 @@ export type CandidateProfilePatch = z.infer<typeof candidateProfilePatchSchema>;
 export function profilePatchOf(
   input: Record<string, unknown>
 ): CandidateProfilePatch | undefined {
+  const parsed = parseProfilePatch(input);
+  return parsed.ok ? parsed.patch : undefined;
+}
+
+/**
+ * `profilePatchOf`, with the reason when the patch is refused: which field,
+ * and what was wrong with it. A form that saved thirty positions and one
+ * over-long description was told only "Could not save profile."
+ */
+export function parseProfilePatch(
+  input: Record<string, unknown>
+):
+  | { ok: true; patch: CandidateProfilePatch | undefined }
+  | { ok: false; issues: { message: string; path: string }[] } {
   // A key carrying `undefined` was not stated either: the patch schema would
   // hand it the default, and that default would then clear a stored answer.
   const provided = new Set(
@@ -130,9 +253,17 @@ export function profilePatchOf(
       .filter(([, value]) => value !== undefined)
       .map(([key]) => key)
   );
-  if (provided.size === 0) return undefined;
+  if (provided.size === 0) return { ok: true, patch: undefined };
   const parsed = candidateProfilePatchSchema.safeParse(input);
-  if (!parsed.success) return undefined;
+  if (!parsed.success) {
+    return {
+      issues: parsed.error.issues.map((issue) => ({
+        message: issue.message,
+        path: issue.path.map(String).join("."),
+      })),
+      ok: false,
+    };
+  }
   const stated: CandidateProfilePatch = {};
   let kept = 0;
   for (const [key, value] of Object.entries(parsed.data)) {
@@ -140,7 +271,7 @@ export function profilePatchOf(
     Object.assign(stated, { [key]: value });
     kept += 1;
   }
-  return kept > 0 ? stated : undefined;
+  return { ok: true, patch: kept > 0 ? stated : undefined };
 }
 
 const candidateContactIdentitySchema = z.object({

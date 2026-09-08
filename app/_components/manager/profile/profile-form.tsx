@@ -16,10 +16,11 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { VaultFormField } from "@/app/_components/manager/vault-form-field";
-import type {
-  EducationEntry,
-  ProfileLink,
-  WorkHistoryEntry,
+import {
+  type EducationEntry,
+  type ProfileLink,
+  profileLimits,
+  type WorkHistoryEntry,
 } from "@/lib/candidate-profile";
 import { CandidateDocumentsPanel } from "./documents-panel";
 import { useCandidateProfile } from "./use-candidate-profile";
@@ -118,6 +119,7 @@ function ProfileEditor({
           <VaultFormField
             id="profile-legal-first"
             label="Legal first name"
+            maxLength={profileLimits.name}
             onChange={(legalFirstName) =>
               setForm((current) => ({ ...current, legalFirstName }))
             }
@@ -126,6 +128,7 @@ function ProfileEditor({
           <VaultFormField
             id="profile-legal-last"
             label="Legal last name"
+            maxLength={profileLimits.name}
             onChange={(legalLastName) =>
               setForm((current) => ({ ...current, legalLastName }))
             }
@@ -134,6 +137,7 @@ function ProfileEditor({
           <VaultFormField
             id="profile-preferred"
             label="Preferred name"
+            maxLength={profileLimits.name}
             onChange={(preferredName) =>
               setForm((current) => ({ ...current, preferredName }))
             }
@@ -147,6 +151,7 @@ function ProfileEditor({
           <VaultFormField
             id="profile-city"
             label="City"
+            maxLength={profileLimits.locality}
             onChange={(locationCity) =>
               setForm((current) => ({ ...current, locationCity }))
             }
@@ -155,6 +160,7 @@ function ProfileEditor({
           <VaultFormField
             id="profile-region"
             label="Region / state"
+            maxLength={profileLimits.locality}
             onChange={(locationRegion) =>
               setForm((current) => ({ ...current, locationRegion }))
             }
@@ -163,6 +169,7 @@ function ProfileEditor({
           <VaultFormField
             id="profile-postal"
             label="Postal code"
+            maxLength={profileLimits.postalCode}
             onChange={(locationPostalCode) =>
               setForm((current) => ({ ...current, locationPostalCode }))
             }
@@ -171,6 +178,7 @@ function ProfileEditor({
           <VaultFormField
             id="profile-country"
             label="Country code"
+            maxLength={profileLimits.code}
             onChange={(locationCountryCode) =>
               setForm((current) => ({
                 ...current,
@@ -239,6 +247,7 @@ function ProfileEditor({
           <VaultFormField
             id="profile-salary-currency"
             label="Currency"
+            maxLength={profileLimits.code}
             onChange={(salaryCurrency) =>
               setForm((current) => ({ ...current, salaryCurrency }))
             }
@@ -261,6 +270,7 @@ function ProfileEditor({
           <VaultFormField
             id="profile-start"
             label="Earliest start"
+            maxLength={profileLimits.startDate}
             onChange={(earliestStartDate) =>
               setForm((current) => ({ ...current, earliestStartDate }))
             }
@@ -293,6 +303,7 @@ function ProfileEditor({
           <VaultFormField
             id="profile-headline"
             label="Headline"
+            maxLength={profileLimits.shortText}
             onChange={(headline) =>
               setForm((current) => ({ ...current, headline }))
             }
@@ -310,6 +321,7 @@ function ProfileEditor({
             <FieldLabel htmlFor="profile-summary">Summary</FieldLabel>
             <Textarea
               id="profile-summary"
+              maxLength={profileLimits.summary}
               onChange={(event) =>
                 setForm((current) => ({
                   ...current,
@@ -359,17 +371,23 @@ function ProfileEditor({
         >
           <Input
             aria-label="Add a skill"
+            maxLength={profileLimits.skill}
             onChange={(event) => setSkillDraft(event.target.value)}
             placeholder="Add a skill"
             value={skillDraft}
           />
-          <Button type="submit" variant="outline">
+          <Button
+            disabled={form.skills.length >= profileLimits.skills}
+            type="submit"
+            variant="outline"
+          >
             Add
           </Button>
         </form>
       </Section>
 
       <Section
+        addDisabled={links.length >= profileLimits.links}
         onAdd={() => setLinks((current) => [...current, keyed(emptyLink())])}
         title="Links"
       >
@@ -381,12 +399,14 @@ function ProfileEditor({
               <VaultFormField
                 id={`${entry.key}-label`}
                 label="Label"
+                maxLength={profileLimits.linkLabel}
                 onChange={(label) => update({ ...entry.value, label })}
                 value={entry.value.label}
               />
               <VaultFormField
                 id={`${entry.key}-url`}
                 label="URL"
+                maxLength={profileLimits.url}
                 onChange={(url) => update({ ...entry.value, url })}
                 value={entry.value.url}
               />
@@ -396,6 +416,7 @@ function ProfileEditor({
       </Section>
 
       <Section
+        addDisabled={workHistory.length >= profileLimits.workHistory}
         onAdd={() =>
           setWorkHistory((current) => [...current, keyed(emptyWork())])
         }
@@ -411,6 +432,7 @@ function ProfileEditor({
       </Section>
 
       <Section
+        addDisabled={education.length >= profileLimits.education}
         onAdd={() =>
           setEducation((current) => [...current, keyed(emptyEducation())])
         }
@@ -458,10 +480,12 @@ function ProfileEditor({
 }
 
 function Section({
+  addDisabled = false,
   children,
   onAdd,
   title,
 }: {
+  readonly addDisabled?: boolean;
   readonly children: React.ReactNode;
   readonly onAdd?: () => void;
   readonly title: string;
@@ -473,7 +497,13 @@ function Section({
           {title}
         </h2>
         {onAdd ? (
-          <Button onClick={onAdd} size="sm" type="button" variant="ghost">
+          <Button
+            disabled={addDisabled}
+            onClick={onAdd}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
             <PlusIcon />
             Add
           </Button>
@@ -562,12 +592,14 @@ function WorkHistoryFields({
         <VaultFormField
           id={`${entry.key}-title`}
           label="Title"
+          maxLength={profileLimits.shortText}
           onChange={(title) => onChange({ ...value, title })}
           value={value.title}
         />
         <VaultFormField
           id={`${entry.key}-company`}
           label="Company"
+          maxLength={profileLimits.shortText}
           onChange={(company) => onChange({ ...value, company })}
           value={value.company}
         />
@@ -575,6 +607,7 @@ function WorkHistoryFields({
       <VaultFormField
         id={`${entry.key}-location`}
         label="Location"
+        maxLength={profileLimits.shortText}
         onChange={(location) => onChange({ ...value, location })}
         value={value.location}
       />
@@ -585,6 +618,7 @@ function WorkHistoryFields({
         </FieldLabel>
         <Textarea
           id={`${entry.key}-description`}
+          maxLength={profileLimits.description}
           onChange={(event) =>
             onChange({ ...value, description: event.target.value })
           }
@@ -609,6 +643,7 @@ function EducationFields({
       <VaultFormField
         id={`${entry.key}-school`}
         label="School"
+        maxLength={profileLimits.shortText}
         onChange={(school) => onChange({ ...value, school })}
         value={value.school}
       />
@@ -616,12 +651,14 @@ function EducationFields({
         <VaultFormField
           id={`${entry.key}-degree`}
           label="Degree"
+          maxLength={profileLimits.shortText}
           onChange={(degree) => onChange({ ...value, degree })}
           value={value.degree}
         />
         <VaultFormField
           id={`${entry.key}-field`}
           label="Field"
+          maxLength={profileLimits.shortText}
           onChange={(field) => onChange({ ...value, field })}
           value={value.field}
         />

@@ -5,6 +5,7 @@ import {
   candidateDocumentKindSchema,
   candidateDocumentMetaSchema,
   candidateDocumentSourceSchema,
+  canonicalDocumentMimeType,
   MAX_CANDIDATE_DOCUMENT_BYTES,
   MAX_CANDIDATE_DOCUMENTS,
   type CandidateDocumentKind,
@@ -127,11 +128,10 @@ export async function saveCandidateDocument(
   const now = new Date().toISOString();
   const id = randomUUID();
   const filename = safeFilename(input.filename);
-  const extractedText = readExtractedText(
-    input.bytes,
-    input.mimeType,
-    filename
-  );
+  // Stored as what the file is, not as what the upload said it was: the row's
+  // type is echoed back as the download's Content-Type.
+  const mimeType = canonicalDocumentMimeType(filename, input.mimeType);
+  const extractedText = readExtractedText(input.bytes, mimeType, filename);
 
   await db.transaction(async (transaction) => {
     if (shouldDefault) {
@@ -155,7 +155,7 @@ export async function saveCandidateDocument(
       id,
       isDefault: shouldDefault ? "yes" : "",
       kind,
-      mimeType: input.mimeType || "application/octet-stream",
+      mimeType,
       sha256,
       source,
       updatedAt: now,
@@ -303,6 +303,8 @@ function parseDocumentMeta(row: {
 }
 
 function safeFilename(value: string) {
-  const trimmed = value.replaceAll("\0", "").trim() || "document";
+  // Every control character, not only NUL: a CR LF in the name reached the
+  // download's Content-Disposition header as a line of its own.
+  const trimmed = value.replaceAll(/\p{Cc}/gu, "").trim() || "document";
   return trimmed.slice(-180);
 }

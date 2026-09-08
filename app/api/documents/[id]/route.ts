@@ -10,7 +10,11 @@ import {
   readCandidateDocument,
   setDefaultCandidateDocument,
 } from "@/db/services/candidate-documents";
-import { candidateDocumentMetaSchema } from "@/lib/candidate-documents";
+import {
+  candidateDocumentMetaSchema,
+  canonicalDocumentMimeType,
+  documentContentDisposition,
+} from "@/lib/candidate-documents";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -37,8 +41,14 @@ export async function GET(
     return new Response(new Uint8Array(document.bytes), {
       headers: {
         "Cache-Control": "no-store",
-        "Content-Disposition": `attachment; filename="${document.filename.replaceAll('"', "")}"`,
-        "Content-Type": document.mimeType,
+        "Content-Disposition": documentContentDisposition(document.filename),
+        // Rows written before types were canonicalised still carry the
+        // upload's claim; never serve a stored file as a page.
+        "Content-Type": canonicalDocumentMimeType(
+          document.filename,
+          document.mimeType
+        ),
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch (error) {
