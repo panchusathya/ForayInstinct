@@ -1250,3 +1250,104 @@ describe("screenshot batches", () => {
     ).resolves.toEqual([]);
   }, 20_000);
 });
+
+describe("the CRM mirror outbox", () => {
+  it("skips rows that failed too often or are not yet due, and backs the rest off", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0013_pending_role_searches.sql");
+    await applyMigration(client, "0014_phone_conversation_sync.sql");
+    await applyMigration(client, "0026_goforay_owner_ids.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const [scope, bridge] = await Promise.all([
+        import("@/db/services/scope"),
+        import("@/lib/goforay/bridge"),
+      ]);
+      const alice = { userId: "alice", workspaceId: "workspace:alice" };
+      await scope.ensureScope(alice);
+      const soon = new Date(Date.now() + 60 * 60_000);
+      await client.exec(`
+        INSERT INTO goforay_workspace_sync_outbox
+          (id, workspace_id, created_by_user_id, conversation_id, channel, direction, body, attempts, next_attempt_at)
+        VALUES
+          ('poison', 'workspace:alice', 'alice', 'c', 'linq', 'inbound', 'x', 8, NULL),
+          ('later', 'workspace:alice', 'alice', 'c', 'linq', 'inbound', 'y', 1, '${soon.toISOString()}'),
+          ('fresh', 'workspace:alice', 'alice', 'c', 'linq', 'inbound', 'z', 0, NULL);
+      `);
+
+      await bridge.flushConversationSyncOutbox();
+
+      const rows = await client.query<{
+        attempts: number;
+        id: string;
+        next_attempt_at: string | null;
+      }>(
+        "SELECT id, attempts, next_attempt_at FROM goforay_workspace_sync_outbox ORDER BY id"
+      );
+      const byId = new Map(rows.rows.map((row) => [row.id, row]));
+      // Only the fresh row was attempted; it failed and now waits.
+      expect(byId.get("fresh")?.attempts).toBe(1);
+      expect(byId.get("fresh")?.next_attempt_at).not.toBeNull();
+      expect(byId.get("poison")?.attempts).toBe(8);
+      expect(byId.get("later")?.attempts).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 20_000);
+});
+
+describe("a background role search", () => {
+  it("is marked pending for the poller, under the user the thread belongs to", async () => {
+    const client = new PGlite();
+    databases.push(client);
+    await applyInitialMigration(client);
+    await applyMigration(client, "0013_pending_role_searches.sql");
+    await applyMigration(client, "0014_phone_conversation_sync.sql");
+    await applyMigration(client, "0026_goforay_owner_ids.sql");
+
+    const pgliteDatabase = drizzle(client, { schema });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
+    const database = pgliteDatabase as unknown as typeof db;
+    vi.doMock("@/db", () => ({ ...schema, db: database }));
+    const [scope, searches] = await Promise.all([
+      import("@/db/services/scope"),
+      import("@/db/services/pending-role-searches"),
+    ]);
+    const ada = { userId: "better-auth:ada", workspaceId: "personal:ada" };
+    await scope.ensureScope(ada);
+    await searches.rememberLinqRoleSearchThread(
+      ada,
+      "linq:dm:chat-1",
+      "+12025550123"
+    );
+    await expect(searches.listPendingRoleSearches()).resolves.toEqual([]);
+
+    await searches.markPendingRoleSearch(ada, {
+      location: "Boston",
+      query: "analyst",
+    });
+
+    const pending = await searches.listPendingRoleSearches();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      location: "Boston",
+      pending: "yes",
+      query: "analyst",
+      threadId: "linq:dm:chat-1",
+      userId: "better-auth:ada",
+      workspaceId: "personal:ada",
+    });
+    await searches.completePendingRoleSearch("personal:ada");
+    await expect(searches.listPendingRoleSearches()).resolves.toEqual([]);
+  }, 20_000);
+});

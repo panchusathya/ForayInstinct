@@ -9,11 +9,42 @@ export async function rememberLinqRoleSearchThread(
 ) {
   await db
     .insert(goforayPendingRoleSearches)
-    .values({ phone: phone ?? "", threadId, workspaceId: scope.workspaceId })
+    .values({
+      phone: phone ?? "",
+      threadId,
+      userId: scope.userId,
+      workspaceId: scope.workspaceId,
+    })
     .onConflictDoUpdate({
       target: goforayPendingRoleSearches.workspaceId,
-      set: { phone: phone ?? "", threadId, updatedAt: new Date() },
+      set: {
+        phone: phone ?? "",
+        threadId,
+        updatedAt: new Date(),
+        userId: scope.userId,
+      },
     });
+}
+
+/**
+ * Marks the thread's search as one the poller should finish. Nothing wrote
+ * this before, so the poller that delivers a background search's cards was
+ * never given anything to deliver.
+ */
+export async function markPendingRoleSearch(
+  scope: AccessScope,
+  search: { location: string; query: string }
+) {
+  await db
+    .update(goforayPendingRoleSearches)
+    .set({
+      location: search.location,
+      pending: "yes",
+      query: search.query,
+      updatedAt: new Date(),
+      userId: scope.userId,
+    })
+    .where(eq(goforayPendingRoleSearches.workspaceId, scope.workspaceId));
 }
 
 /** The latest candidate thread is also where browser review media belongs. */

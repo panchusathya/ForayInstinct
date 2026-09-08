@@ -6,7 +6,10 @@ import { chatSdkChannel } from "eve/channels/chat-sdk";
 import type { Message, ReactionEvent, Thread } from "chat";
 import { z } from "zod";
 import { auth } from "@/auth";
-import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
+import {
+  legacyNormalizeAuthPhoneNumber,
+  normalizeAuthPhoneNumber,
+} from "@/auth/phone-number";
 import { rememberContactPhone } from "@/lib/manager/server/contact-phone";
 import {
   accessScopeForPhone,
@@ -603,10 +606,24 @@ function linqPrincipalFromAuthor(input: { author: Message["author"] }) {
     typeof authorUserName === "string"
       ? normalizeAuthPhoneNumber(authorUserName)
       : undefined;
+  // The number as the old rule read it, which put +1 in front of anything
+  // without a country code. A candidate keyed by that reading keeps their
+  // workspace: it is adopted into the one the corrected reading gives, or,
+  // when the corrected reading gives nothing, stays their workspace.
+  const legacyPhone =
+    typeof authorUserName === "string"
+      ? legacyNormalizeAuthPhoneNumber(authorUserName)
+      : undefined;
+  const legacyPhoneScope =
+    legacyPhone && legacyPhone !== phoneNumber
+      ? accessScopeForPhone(legacyPhone)
+      : undefined;
   const legacyScope = accessScopeForUser(auth.principalId);
   // A Linq text is possession of the phone number. Do not split storage based
   // on whether the optional web account happened to be found this turn.
-  const scope = phoneNumber ? accessScopeForPhone(phoneNumber) : legacyScope;
+  const scope = phoneNumber
+    ? accessScopeForPhone(phoneNumber)
+    : (legacyPhoneScope ?? legacyScope);
   return {
     auth: {
       ...auth,
@@ -622,6 +639,7 @@ function linqPrincipalFromAuthor(input: { author: Message["author"] }) {
       // because it was fixed for a text and missed for a tapback.
       principalId: scope.userId,
     },
+    legacyPhoneScope: phoneNumber ? legacyPhoneScope : undefined,
     legacyScope,
     phoneNumber,
     scope,
@@ -920,7 +938,7 @@ async function prepareInboundMessage(
   thread: Thread,
   replyTarget: LinqReplyTarget | undefined
 ) {
-  const { auth, legacyScope, phoneNumber, scope } =
+  const { auth, legacyPhoneScope, legacyScope, phoneNumber, scope } =
     linqPrincipalFromAuthor(message);
   const verifiedUser = phoneNumber
     ? await findVerifiedAuthUserIdByPhoneNumber(phoneNumber)
@@ -928,6 +946,7 @@ async function prepareInboundMessage(
   if (phoneNumber) {
     await adoptLegacyWorkspace(scope, [
       legacyScope,
+      ...(legacyPhoneScope ? [legacyPhoneScope] : []),
       ...(verifiedUser
         ? [accessScopeForUser(`better-auth:${verifiedUser.id}`)]
         : []),
@@ -1433,6 +1452,25 @@ async function submissionDeliveryThread(
 }
 
 /** Flushes the durable screenshot outbox without starting an agent turn. */
+/**
+ * Posts role cards to a thread from outside a turn, for the background
+ * search poller. Same renderer and the same tapback mapping as cards posted
+ * from a turn, so a thumbs-up on one applies.
+ */
+export async function deliverLinqJobCardsToThread(
+  threadId: string,
+  cards: GoForayJobCard[],
+  scope: ReturnType<typeof scopeFromPrincipal>
+) {
+  await deliverJobCards(
+    bot.thread(threadId),
+    cards,
+    scope,
+    `linq:role-search:${scope.workspaceId}:${String(Date.now())}`,
+    {}
+  );
+}
+
 export async function flushPendingLinqSubmissionScreenshots() {
   // Every pending set, each on its own, in order within a thread: two
   // applications in flight arrive as two captioned reviews, not as whichever

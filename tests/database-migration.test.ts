@@ -311,6 +311,35 @@ describe("database migrations", () => {
     expect(await pendingConstraintCount(database)).toBe(0);
   }, 20_000);
 
+  it("records who wrote each CRM mirror row and which user a thread belongs to", async () => {
+    const database = createDatabase();
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(database, "0013_pending_role_searches.sql");
+    await applyMigration(database, "0014_phone_conversation_sync.sql");
+    await applyMigration(database, "0026_goforay_owner_ids.sql");
+    await applyMigration(database, "0026_goforay_owner_ids.sql");
+    await database.exec(`
+      INSERT INTO workspaces VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO goforay_pending_role_searches (workspace_id, thread_id)
+        VALUES ('workspace-1', 'linq:dm:chat-1');
+      INSERT INTO goforay_workspace_sync_outbox (id, workspace_id, conversation_id, channel, direction, body)
+        VALUES ('m-1', 'workspace-1', 'linq:workspace-1', 'linq', 'inbound', 'hello');
+    `);
+    await expect(
+      database.query<{ user_id: string }>(
+        "SELECT user_id FROM goforay_pending_role_searches"
+      )
+    ).resolves.toMatchObject({ rows: [{ user_id: "" }] });
+    await expect(
+      database.query<{ created_by_user_id: string; next_attempt_at: null }>(
+        "SELECT created_by_user_id, next_attempt_at FROM goforay_workspace_sync_outbox"
+      )
+    ).resolves.toMatchObject({
+      rows: [{ created_by_user_id: "", next_attempt_at: null }],
+    });
+    expect(await pendingConstraintCount(database)).toBe(0);
+  }, 15_000);
+
   it("stores the candidate ATS profile beside the workspace Kernel profile id", async () => {
     const database = createDatabase();
 

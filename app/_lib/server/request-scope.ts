@@ -5,17 +5,32 @@ import {
   type AccessScope,
 } from "@/lib/access-scope";
 import { getAuthSession } from "@/auth/session";
-import { normalizeAuthPhoneNumber } from "@/auth/phone-number";
+import {
+  legacyNormalizeAuthPhoneNumber,
+  normalizeAuthPhoneNumber,
+} from "@/auth/phone-number";
 import { adoptLegacyWorkspace } from "@/db/services/adopt-legacy-workspace";
 
 export async function requireRequestScope(): Promise<AccessScope> {
   const session = await getAuthSession(await headers());
   if (!session) throw new UnauthenticatedError();
   const legacyScope = accessScopeForUser(`better-auth:${session.user.id}`);
-  const phoneNumber = normalizeAuthPhoneNumber(session.user.phoneNumber ?? "");
-  if (!phoneNumber) return legacyScope;
+  const stored = session.user.phoneNumber ?? "";
+  const phoneNumber = normalizeAuthPhoneNumber(stored);
+  // A workspace keyed by the old reading of the number (which put +1 in
+  // front of anything without a country code) is adopted into the corrected
+  // one, or kept when the corrected reading gives nothing.
+  const legacyPhone = legacyNormalizeAuthPhoneNumber(stored);
+  const legacyPhoneScope =
+    legacyPhone && legacyPhone !== phoneNumber
+      ? accessScopeForPhone(legacyPhone)
+      : undefined;
+  if (!phoneNumber) return legacyPhoneScope ?? legacyScope;
   const scope = accessScopeForPhone(phoneNumber);
-  await adoptLegacyWorkspace(scope, [legacyScope]);
+  await adoptLegacyWorkspace(scope, [
+    legacyScope,
+    ...(legacyPhoneScope ? [legacyPhoneScope] : []),
+  ]);
   return scope;
 }
 
