@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { headers } from "next/headers";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { accessScopeForUser } from "@/lib/access-scope";
+import { scopesForAuthUser } from "@/lib/access-scope";
 import { getAuthSession } from "@/auth/session";
 import { env } from "@/lib/env";
 import "./globals.css";
@@ -20,8 +20,11 @@ export default async function RootLayout({
   readonly children: ReactNode;
 }) {
   const session = await getAuthSession(await headers());
-  const workspaceId = session?.user?.id
-    ? accessScopeForUser(`better-auth:${session.user.id}`).workspaceId
+  // The canonical workspace, the same one the API routes resolve: the page
+  // used to stamp the pre-phone personal id, so client-side state keyed by
+  // it never lined up with the workspace the server was writing to.
+  const workspaceId = session?.user
+    ? scopesForAuthUser(session.user).scope.workspaceId
     : undefined;
 
   return (

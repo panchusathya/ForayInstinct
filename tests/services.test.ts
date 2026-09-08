@@ -367,7 +367,6 @@ describe("database services", () => {
     const client = new PGlite();
     databases.push(client);
     await applyInitialMigration(client);
-    await applyMigration(client, "0001_better-auth.sql");
 
     const pgliteDatabase = drizzle(client, { schema });
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double
@@ -1123,10 +1122,12 @@ async function applyMigration(database: PGlite, name: string) {
 
 async function applyInitialMigration(database: PGlite) {
   await applyMigration(database, "0000_fluffy_the_spike.sql");
+  await applyMigration(database, "0001_better-auth.sql");
   await applyMigration(database, "0009_candidate_profile.sql");
   await applyMigration(database, "0023_little_sentinels.sql");
   await applyMigration(database, "0018_browser_state_namespace.sql");
   await applyMigration(database, "0024_contact_and_answers_namespaces.sql");
+  await applyMigration(database, "0027_adoption_and_phone_scope.sql");
 }
 
 /** The whole schema, in journal order, for services that touch most of it. */
@@ -1456,6 +1457,35 @@ describe("adopting a legacy workspace's secrets", () => {
     await expect(
       store.readSecret({ id: "login-1", namespace: "vault", scope: target })
     ).resolves.toBe("hunter2");
+
+    // The legacy workspace is marked as absorbed, so later requests skip the
+    // copy entirely: a login saved to the legacy workspace afterwards stays
+    // there, and two adoptions racing each other both complete.
+    await expect(
+      client.query(
+        `SELECT adopted_into_workspace_id FROM workspaces WHERE id = 'workspace:legacy'`
+      )
+    ).resolves.toMatchObject({
+      rows: [{ adopted_into_workspace_id: "workspace:phone" }],
+    });
+    await store.writeSecret({
+      id: "login-2",
+      namespace: "vault",
+      scope: legacy,
+      value: "later",
+    });
+    await Promise.all([
+      adoption.adoptLegacyWorkspace(target, [legacy]),
+      adoption.adoptLegacyWorkspace(target, [legacy]),
+    ]);
+    expect(
+      await secrets.readEncryptedSecret(target, "vault", "login-2")
+    ).toBeUndefined();
+    // A legacy workspace that was never created costs nothing and adopts
+    // nothing.
+    await adoption.adoptLegacyWorkspace(target, [
+      { userId: "ghost", workspaceId: "workspace:ghost" },
+    ]);
   }, 20_000);
 });
 
@@ -1497,7 +1527,6 @@ describe("the disability form signature", () => {
     const client = new PGlite();
     databases.push(client);
     await applyInitialMigration(client);
-    await applyMigration(client, "0001_better-auth.sql");
 
     const pgliteDatabase = drizzle(client, { schema });
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double

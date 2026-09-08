@@ -308,12 +308,14 @@ async function setup() {
   const client = new PGlite();
   databases.push(client);
   await applyMigration(client, "0000_fluffy_the_spike.sql");
+  await applyMigration(client, "0001_better-auth.sql");
   await applyMigration(client, "0009_candidate_profile.sql");
   await applyMigration(client, "0023_little_sentinels.sql");
   await applyMigration(client, "0005_browser_run_checkpoints.sql");
   await applyMigration(client, "0019_application_execution_traces.sql");
   await applyMigration(client, "0021_application_leases.sql");
   await applyMigration(client, "0022_application_runner.sql");
+  await applyMigration(client, "0027_adoption_and_phone_scope.sql");
 
   const pgliteDatabase = drizzle(client, { schema });
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- adapter-compatible integration test double

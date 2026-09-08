@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, describe, expect, it } from "vitest";
+import { accessScopeForPhone } from "../lib/access-scope";
 
 const databases: PGlite[] = [];
 
@@ -567,6 +568,67 @@ describe("database migrations", () => {
         )
       `)
     ).rejects.toThrow(/foreign key constraint/);
+  }, 15_000);
+
+  it("marks adopted workspaces, indexes the phone scope, and clears the placeholder name", async () => {
+    const database = createDatabase();
+    await applyMigration(database, "0000_fluffy_the_spike.sql");
+    await applyMigration(database, "0001_better-auth.sql");
+    await applyMigration(database, "0009_candidate_profile.sql");
+    await database.exec(`
+      INSERT INTO workspaces (id, created_at) VALUES ('workspace-1', '2026-01-01');
+      INSERT INTO candidate_profiles (workspace_id, legal_first_name, legal_last_name, created_at, updated_at)
+        VALUES ('workspace-1', 'Phone', 'user', '2026-01-01', '2026-01-01');
+      INSERT INTO "user" (id, name, email, "emailVerified", "phoneNumber", "phoneNumberVerified")
+        VALUES ('verified', 'Ada', 'ada@example.com', true, '+12125550123', true),
+               ('unverified', 'Bob', 'bob@example.com', true, '+12125550124', false),
+               ('no-phone', 'Cy', 'cy@example.com', true, NULL, NULL);
+    `);
+
+    await applyMigration(database, "0027_adoption_and_phone_scope.sql");
+    await applyMigration(database, "0027_adoption_and_phone_scope.sql");
+
+    // The database's digest is the application's digest, or the indexed
+    // lookup finds nobody.
+    const scopes = await database.query<{
+      id: string;
+      phoneScope: string | null;
+    }>(`SELECT id, "phoneScope" FROM "user" ORDER BY id`);
+    expect(scopes.rows).toEqual([
+      { id: "no-phone", phoneScope: null },
+      { id: "unverified", phoneScope: null },
+      {
+        id: "verified",
+        phoneScope: accessScopeForPhone("+12125550123").userId,
+      },
+    ]);
+    // Verification later fills it in without an application write.
+    await database.exec(
+      `UPDATE "user" SET "phoneNumberVerified" = true WHERE id = 'unverified'`
+    );
+    await expect(
+      database.query(`SELECT "phoneScope" FROM "user" WHERE id = 'unverified'`)
+    ).resolves.toMatchObject({
+      rows: [{ phoneScope: accessScopeForPhone("+12125550124").userId }],
+    });
+    await expect(
+      database.query(
+        `SELECT indexname FROM pg_indexes WHERE indexname = 'user_phoneScope_idx'`
+      )
+    ).resolves.toMatchObject({ rows: [{ indexname: "user_phoneScope_idx" }] });
+
+    await expect(
+      database.query(
+        `SELECT adopted_into_workspace_id FROM workspaces WHERE id = 'workspace-1'`
+      )
+    ).resolves.toMatchObject({ rows: [{ adopted_into_workspace_id: "" }] });
+    await expect(
+      database.query(
+        `SELECT legal_first_name, legal_last_name FROM candidate_profiles WHERE workspace_id = 'workspace-1'`
+      )
+    ).resolves.toMatchObject({
+      rows: [{ legal_first_name: "", legal_last_name: "" }],
+    });
   }, 15_000);
 
   it("carries already-shown roles into the source-agnostic presented table", async () => {

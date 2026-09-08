@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { AccessScope } from "@/lib/access-scope";
 import {
   agentSessions,
@@ -32,23 +32,65 @@ import type { SecretNamespace } from "@/db/services/secrets";
 
 /**
  * Moves data from the provider-specific workspaces created before phone
- * identity became canonical. This is intentionally idempotent: it runs on
- * every compatible sign-in/text but only changes records that still belong to
- * the legacy scope.
+ * identity became canonical. Idempotent, and now convergent: a legacy
+ * workspace that does not exist, or that is already marked as adopted into
+ * this target, costs one probe query and nothing else. The full copy used to
+ * run on every request, forever, because nothing recorded that it had run.
  */
 export async function adoptLegacyWorkspace(
   target: AccessScope,
   legacyScopes: readonly AccessScope[]
 ) {
   await ensureScope(target);
-  for (const legacy of legacyScopes) {
-    if (legacy.workspaceId === target.workspaceId) continue;
+  const candidates = legacyScopes.filter(
+    (legacy) => legacy.workspaceId !== target.workspaceId
+  );
+  if (candidates.length === 0) return;
+  const pending = await pendingAdoptions(target, candidates);
+  for (const legacy of pending) {
     await adoptOneWorkspace(target, legacy);
   }
 }
 
+/** The legacy workspaces that exist and have not yet been absorbed here. */
+async function pendingAdoptions(
+  target: AccessScope,
+  candidates: readonly AccessScope[]
+) {
+  const rows = await db
+    .select({
+      adoptedInto: workspaces.adoptedIntoWorkspaceId,
+      id: workspaces.id,
+    })
+    .from(workspaces)
+    .where(
+      inArray(
+        workspaces.id,
+        candidates.map((legacy) => legacy.workspaceId)
+      )
+    );
+  return candidates.filter((legacy) =>
+    rows.some(
+      (row) =>
+        row.id === legacy.workspaceId && row.adoptedInto !== target.workspaceId
+    )
+  );
+}
+
 async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
-  await db.transaction(async (transaction) => {
+  const copied = await db.transaction(async (transaction) => {
+    // Two requests from the same candidate can arrive together; only one of
+    // them copies, the other waits and then finds the marker set.
+    await transaction.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${target.workspaceId}))`
+    );
+    const [marker] = await transaction
+      .select({ adoptedInto: workspaces.adoptedIntoWorkspaceId })
+      .from(workspaces)
+      .where(eq(workspaces.id, legacy.workspaceId))
+      .limit(1);
+    if (!marker || marker.adoptedInto === target.workspaceId) return false;
+
     // Browser/session ownership rows reference memberships. Retain every
     // legacy principal as an owner of the canonical workspace before rehoming
     // those records.
@@ -285,7 +327,9 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
           .onConflictDoNothing();
       }
     }
+    return true;
   });
+  if (!copied) return;
 
   // Documents are copied through their service so byte hashing/default rules
   // remain identical to a normal upload. Deleting only after a successful
@@ -317,6 +361,13 @@ async function adoptOneWorkspace(target: AccessScope, legacy: AccessScope) {
         )
       );
   }
+
+  // Marked only once everything, documents included, is across: a failure
+  // above leaves the marker clear and the next request tries again.
+  await db
+    .update(workspaces)
+    .set({ adoptedIntoWorkspaceId: target.workspaceId })
+    .where(eq(workspaces.id, legacy.workspaceId));
 }
 
 function isSecretNamespace(value: string): value is SecretNamespace {

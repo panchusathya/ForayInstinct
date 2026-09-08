@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   boolean,
   index,
@@ -23,6 +23,15 @@ export const user = pgTable("user", {
     .notNull(),
   phoneNumber: text("phoneNumber").unique(),
   phoneNumberVerified: boolean("phoneNumberVerified"),
+  /**
+   * `accessScopeForPhone(phoneNumber).userId` for a verified number, kept by
+   * the database so an iMessage scope finds its login row by index instead
+   * of hashing every verified user's number. Null until the number is
+   * verified. The expression is owned by migration 0027.
+   */
+  phoneScope: text("phoneScope").generatedAlwaysAs(
+    sql`CASE WHEN "phoneNumberVerified" IS TRUE AND "phoneNumber" ~ '^\\+[1-9][0-9]{6,14}$' THEN 'phone:' || left(encode(sha256(decode("phoneNumber", 'escape')), 'hex'), 32) END`
+  ),
 });
 
 export const session = pgTable(
