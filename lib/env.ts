@@ -88,6 +88,8 @@ export const env = createEnv({
     // endpoint itself instead of forwarding through Connect.
     LINQ_API_KEY: requiredValue.optional(),
     LINQ_WEBHOOK_SECRET: requiredValue.optional(),
+    /** Extra media hosts attachments may be downloaded from; sandbox only. */
+    LINQ_ATTACHMENT_HOSTS: z.string().optional(),
     LINQ_CONNECTOR: requiredValue.optional(),
     LINQ_PHONE_NUMBER: requiredValue
       .refine(
