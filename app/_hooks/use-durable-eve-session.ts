@@ -15,6 +15,7 @@ import {
 } from "eve/client";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { followDurableSession } from "@/app/_lib/follow-durable-session";
+import { singleFlight } from "@/app/_lib/single-flight";
 
 const messageReducer = defaultMessageReducer();
 
@@ -46,6 +47,7 @@ export function useDurableEveSession({
   readonly onSessionChange?: (session: ClientSessionState) => void;
 }) {
   const [client] = useState(() => new Client({ host: "" }));
+  const [createFlight] = useState(() => singleFlight<ClientSessionState>());
   const commandSessionRef = useRef<ClientSession | undefined>(undefined);
   const streamAbortRef = useRef<AbortController | undefined>(undefined);
   const streamGenerationRef = useRef(0);
@@ -141,16 +143,29 @@ export function useDurableEveSession({
           return;
         }
 
-        const created = await client.sessions.create({ message, ...options });
-        const createdSession = created.session.state;
-        onSessionChangeRef.current?.(createdSession);
-        followSession(createdSession.sessionId);
+        // A second send while the first is still creating the session waits
+        // for it and goes to that session, instead of creating another.
+        if (createFlight.pending) {
+          await createFlight.pending;
+          await commandSessionRef.current?.send(message, options);
+          return;
+        }
+        await createFlight.run(async () => {
+          const created = await client.sessions.create({
+            message,
+            ...options,
+          });
+          const createdSession = created.session.state;
+          onSessionChangeRef.current?.(createdSession);
+          followSession(createdSession.sessionId);
+          return createdSession;
+        });
       } catch (error) {
         dispatch({ error: toError(error), type: "request.failed" });
         throw error;
       }
     },
-    [client, followSession]
+    [client, createFlight, followSession]
   );
 
   const respond = useCallback(

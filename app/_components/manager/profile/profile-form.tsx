@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ArrowDownIcon, ArrowUpIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ import { VaultFormField } from "@/app/_components/manager/vault-form-field";
 import {
   type EducationEntry,
   type ProfileLink,
+  profileDiff,
   profileLimits,
   type WorkHistoryEntry,
 } from "@/lib/candidate-profile";
@@ -83,16 +84,37 @@ function ProfileEditor({
   const [links, setLinks] = useState(() => withKeys(snapshot.profile.links));
   const [skillDraft, setSkillDraft] = useState("");
   const [saved, setSaved] = useState(false);
+  // What this page last knew the server to hold. A save sends only the fields
+  // that differ from it, and the marker it carries, so a field left stale in
+  // another tab is neither written back over a newer answer nor allowed to
+  // overwrite a profile that changed underneath this page.
+  const baseline = useRef({
+    profile: snapshot.profile,
+    updatedAt: snapshot.updatedAt,
+  });
 
   const submit = async () => {
     setSaved(false);
-    const ok = await save({
+    const next = {
       ...form,
       education: education.map((entry) => entry.value),
       links: links.map((entry) => entry.value),
       workHistory: workHistory.map((entry) => entry.value),
+    };
+    const patch = profileDiff(baseline.current.profile, next);
+    if (Object.keys(patch).length === 0) {
+      setSaved(true);
+      return;
+    }
+    const result = await save(patch, {
+      expectUpdatedAt: baseline.current.updatedAt,
     });
-    if (ok) setSaved(true);
+    if (!result) return;
+    baseline.current = {
+      profile: result.profile,
+      updatedAt: result.updatedAt,
+    };
+    setSaved(true);
   };
 
   return (

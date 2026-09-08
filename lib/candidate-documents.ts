@@ -81,14 +81,20 @@ export function documentContentDisposition(
   return `${disposition}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
+/**
+ * What a file is, when its name says. A bare PDF or Word file says nothing:
+ * every one of them used to be filed as a resume and made the default, so a
+ * cover letter uploaded on the profile page was what the next application
+ * attached. Callers with context (a resume sent in chat) supply the default.
+ */
 export function inferCandidateDocumentKind(
   filename: string
-): CandidateDocumentKind {
+): CandidateDocumentKind | undefined {
   const name = filename.toLowerCase();
   if (/(cover.?letter|letter.?of.?interest)/u.test(name)) return "cover_letter";
   if (/(transcript|grades?)/u.test(name)) return "transcript";
-  if (/\.(pdf|docx)$/iu.test(name) || /(resume|cv)/u.test(name))
-    return "resume";
+  if (/(resume|cv)/u.test(name)) return "resume";
+  if (/\.(pdf|docx)$/iu.test(name)) return undefined;
   return "other";
 }
 

@@ -97,19 +97,29 @@ export async function saveCandidateDocument(
   }
 
   const sha256 = createHash("sha256").update(input.bytes).digest("hex");
+  // The same bytes filed as a different kind are a different document: a
+  // cover letter that happened to match a stored resume byte for byte used
+  // to be returned as that resume, and promoted to default on the way.
   const existing = await db
     .select(metadataColumns)
     .from(candidateDocuments)
     .where(
       and(
         eq(candidateDocuments.workspaceId, scope.workspaceId),
-        eq(candidateDocuments.sha256, sha256)
+        eq(candidateDocuments.sha256, sha256),
+        eq(candidateDocuments.kind, kind)
       )
     )
     .limit(1);
   const duplicate = existing[0];
   if (duplicate !== undefined) {
-    if (input.setDefault || kind === "resume") {
+    // Re-uploading a resume makes it the default only when asked to, or when
+    // there is none; it no longer displaces the one the candidate chose.
+    if (
+      kind === "resume" &&
+      !duplicate.isDefault &&
+      (input.setDefault === true || !(await hasDefaultResume(scope)))
+    ) {
       await setDefaultCandidateDocument(scope, duplicate.id);
     }
     const refreshed = await readCandidateDocument(scope, duplicate.id);

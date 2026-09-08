@@ -1177,7 +1177,8 @@ async function saveLinqResumeWithRetry(
   return retryLinqResumeSave(() =>
     saveCandidateDocument(scope, {
       ...input,
-      kind: inferCandidateDocumentKind(input.filename),
+      // A file texted to the agent is the resume to apply with.
+      kind: inferCandidateDocumentKind(input.filename) ?? "resume",
       setDefault: true,
       source: "linq",
     })

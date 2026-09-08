@@ -4,6 +4,8 @@ import { chatLanguageModel } from "@/lib/model-config";
 import {
   type CandidateProfile,
   type CandidateProfilePatch,
+  onlyUnset,
+  profileLimits,
   profilePatchOf,
 } from "@/lib/candidate-profile";
 import {
@@ -170,6 +172,45 @@ export async function extractProfileFromResume(
   });
   const parsed = extractedSchema.safeParse(parseJsonObject(reply));
   return toProfilePatch({ ...(parsed.success ? parsed.data : {}), ...exact });
+}
+
+/**
+ * What a resume read adds to a stored profile. Scalars and links follow
+ * `onlyUnset`; positions are appended, not replaced: a re-import used to hand
+ * back the resume's whole history and drop every position the candidate had
+ * typed or corrected themselves. A position already listed (same company,
+ * title and start year, case aside) is not added twice, and the list keeps
+ * the profile's cap.
+ */
+export function mergeResumeFacts(
+  stored: CandidateProfile,
+  patch: CandidateProfilePatch
+): CandidateProfilePatch {
+  const { workHistory, ...rest } = patch;
+  const kept: Record<string, unknown> = onlyUnset(stored, rest);
+  if (workHistory && workHistory.length > 0) {
+    const known = new Set(stored.workHistory.map(positionKey));
+    const added = workHistory.filter((entry) => !known.has(positionKey(entry)));
+    if (added.length > 0) {
+      kept.workHistory = [...stored.workHistory, ...added].slice(
+        0,
+        profileLimits.workHistory
+      );
+    }
+  }
+  return profilePatchOf(kept) ?? {};
+}
+
+function positionKey(entry: {
+  readonly company: string;
+  readonly startYear?: number;
+  readonly title: string;
+}) {
+  return [
+    entry.company.trim().toLowerCase(),
+    entry.title.trim().toLowerCase(),
+    entry.startYear === undefined ? "" : String(entry.startYear),
+  ].join("|");
 }
 
 /** Only fields the profile actually stores, and only where the resume spoke. */

@@ -26,6 +26,11 @@ describe("candidate documents", () => {
       "transcript"
     );
     expect(inferCandidateDocumentKind("notes.txt")).toBe("other");
+    // A bare PDF or Word file says nothing about itself; every one used to be
+    // filed as a resume and made the default.
+    expect(inferCandidateDocumentKind("document.pdf")).toBeUndefined();
+    expect(inferCandidateDocumentKind("Ada Lovelace.docx")).toBeUndefined();
+    expect(inferCandidateDocumentKind("ada_cv.pdf")).toBe("resume");
     expect(isCandidateDocumentFile("resume.pdf", "application/pdf")).toBe(true);
     expect(isCandidateDocumentFile("photo.png", "image/png")).toBe(false);
   });

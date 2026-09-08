@@ -49,7 +49,7 @@ import {
   passLoginWall,
 } from "@/lib/application-runner/account";
 import { closeApplicationBrowser } from "@/lib/application-runner/browser";
-import { onlyUnset } from "@/lib/application-runner/profile-gate";
+import { onlyUnset } from "@/lib/candidate-profile";
 import { fillRepeaters } from "@/lib/application-runner/repeaters";
 import type {
   ApplicationPauseReason,

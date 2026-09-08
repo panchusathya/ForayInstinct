@@ -7,12 +7,12 @@ import type { AccessScope } from "@/lib/access-scope";
 import { applicationExecutionLog } from "@/lib/application-execution";
 import {
   type CandidateProfile,
-  type CandidateProfilePatch,
   missingProfileFields,
 } from "@/lib/candidate-profile";
 import {
   contactFactsPatch,
   extractProfileFromResume,
+  mergeResumeFacts,
   type ResumeSource,
   resumeText,
   resumeUris,
@@ -105,7 +105,7 @@ async function adoptResumeFacts(
     const extracted = wantsModel
       ? await extractProfileFromResume(resume)
       : contactFactsPatch(resume);
-    const patch = extracted ? onlyUnset(stored, extracted) : {};
+    const patch = extracted ? mergeResumeFacts(stored, extracted) : {};
     // Field names and sizes, never values. Without this there is no telling a
     // model that failed from a resume that said nothing from a patch correctly
     // skipped because the candidate had already answered — and no telling a
@@ -129,36 +129,6 @@ async function adoptResumeFacts(
     });
     return stored;
   }
-}
-
-/**
- * The candidate's own entries always win over anything read off a resume.
- * Links are the one list that merges: a LinkedIn URL found on the resume joins
- * the links the candidate typed rather than being dropped because they typed
- * any at all.
- */
-export function onlyUnset(
-  stored: CandidateProfile,
-  patch: CandidateProfilePatch
-) {
-  const current: Record<string, unknown> = { ...stored };
-  const kept: Record<string, unknown> = {};
-  const { links, ...rest } = patch;
-  if (links) {
-    const known = new Set(stored.links.map((link) => link.url.toLowerCase()));
-    const added = links.filter((link) => !known.has(link.url.toLowerCase()));
-    if (added.length > 0) kept.links = [...stored.links, ...added];
-  }
-  for (const [key, value] of Object.entries(rest)) {
-    const existing = current[key];
-    const alreadySet = Array.isArray(existing)
-      ? existing.length > 0
-      : typeof existing === "string"
-        ? existing.trim() !== ""
-        : existing !== null && existing !== undefined;
-    if (!alreadySet) kept[key] = value;
-  }
-  return kept;
 }
 
 /** Candidate-facing copy naming every gap at once, never one per message. */

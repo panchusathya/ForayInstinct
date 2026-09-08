@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     const saved = await saveCandidateDocument(scope, {
       bytes: Buffer.from(await value.arrayBuffer()),
       filename,
-      kind: inferCandidateDocumentKind(filename),
+      kind: inferCandidateDocumentKind(filename) ?? "resume",
       mimeType: value.type,
       setDefault: true,
       source: "upload",

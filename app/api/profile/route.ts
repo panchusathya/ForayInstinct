@@ -7,7 +7,7 @@ import {
 import { isSameOrigin } from "@/app/_lib/server/same-origin";
 import {
   readCandidateContactIdentity,
-  readCandidateProfile,
+  readCandidateProfileWithMeta,
   saveCandidateProfile,
 } from "@/db/services/candidate-profile";
 import { ensureScope } from "@/db/services/scope";
@@ -34,6 +34,9 @@ export const runtime = "nodejs";
 const mutationSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("save"),
+    // The `updatedAt` the page loaded; the save is refused when the stored
+    // profile has moved on since.
+    expectUpdatedAt: z.string().optional(),
     profile: z.record(z.string(), z.unknown()),
   }),
   z.object({ action: z.literal("sign_out_everywhere") }),
@@ -85,7 +88,22 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
-    const saved = await saveCandidateProfile(scope, parsed.patch ?? {});
+    const saved = await saveCandidateProfile(
+      scope,
+      parsed.patch ?? {},
+      mutation.expectUpdatedAt === undefined
+        ? {}
+        : { expectUpdatedAt: mutation.expectUpdatedAt }
+    );
+    if (saved.conflict) {
+      return Response.json(
+        {
+          error:
+            "The profile changed since this page loaded. Reload to see the latest, then save again.",
+        },
+        { status: 409 }
+      );
+    }
     if (!saved.stored) {
       return profileError("Could not save profile.");
     }
@@ -104,8 +122,8 @@ async function readProfileSnapshot(
   scope: Awaited<ReturnType<typeof requireRequestScope>>
 ) {
   await ensureScope(scope);
-  const [profile, identity, kernelProfileId] = await Promise.all([
-    readCandidateProfile(scope),
+  const [stored, identity, kernelProfileId] = await Promise.all([
+    readCandidateProfileWithMeta(scope),
     readCandidateContactIdentity(scope),
     // The field gates the "Sign out everywhere" button; on the gateway the
     // saved storage state plays the role the Kernel profile did.
@@ -118,7 +136,8 @@ async function readProfileSnapshot(
   return candidateProfileResponseSchema.parse({
     identity: seedIdentity(identity),
     kernelProfileId,
-    profile: seedLegalName(profile, identity.name),
+    profile: seedLegalName(stored.profile, identity.name),
+    updatedAt: stored.updatedAt,
   });
 }
 
@@ -135,7 +154,7 @@ function seedIdentity(identity: {
 }
 
 function seedLegalName(
-  profile: Awaited<ReturnType<typeof readCandidateProfile>>,
+  profile: Awaited<ReturnType<typeof readCandidateProfileWithMeta>>["profile"],
   name: string
 ) {
   if (profile.legalFirstName || profile.legalLastName || !name.trim()) {

@@ -1,21 +1,35 @@
 "use client";
 
-import { useRef } from "react";
-import { Trash2Icon } from "lucide-react";
+import { useRef, useState } from "react";
+import { Trash2Icon, XIcon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  type CandidateDocumentKind,
+  type CandidateDocumentMeta,
   formatDocumentBytes,
   inferCandidateDocumentKind,
-  type CandidateDocumentMeta,
 } from "@/lib/candidate-documents";
 import { useCandidateDocuments } from "./use-candidate-documents";
+
+const kindChoices: readonly {
+  readonly kind: CandidateDocumentKind;
+  readonly label: string;
+}[] = [
+  { kind: "resume", label: "Resume" },
+  { kind: "cover_letter", label: "Cover letter" },
+  { kind: "transcript", label: "Transcript" },
+  { kind: "other", label: "Other" },
+];
 
 export function CandidateDocumentsPanel() {
   const { busy, documents, error, remove, setDefault, upload } =
     useCandidateDocuments();
   const inputRef = useRef<HTMLInputElement>(null);
+  // A file whose name does not say what it is waits here until the candidate
+  // does; every bare PDF used to be filed as a resume and made the default.
+  const [pending, setPending] = useState<File>();
 
   return (
     <section className="space-y-3">
@@ -45,11 +59,48 @@ export function CandidateDocumentsPanel() {
           const file = event.target.files?.[0];
           event.target.value = "";
           if (!file) return;
-          void upload(file, inferCandidateDocumentKind(file.name));
+          const kind = inferCandidateDocumentKind(file.name);
+          if (kind) {
+            void upload(file, kind);
+            return;
+          }
+          setPending(file);
         }}
         ref={inputRef}
         type="file"
       />
+      {pending ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 px-3 py-2">
+          <p className="type-supporting-body min-w-0 flex-1 truncate">
+            What is {pending.name}?
+          </p>
+          {kindChoices.map((choice) => (
+            <Button
+              disabled={busy}
+              key={choice.kind}
+              onClick={() => {
+                const file = pending;
+                setPending(undefined);
+                void upload(file, choice.kind);
+              }}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              {choice.label}
+            </Button>
+          ))}
+          <Button
+            aria-label="Cancel upload"
+            onClick={() => setPending(undefined)}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            <XIcon />
+          </Button>
+        </div>
+      ) : null}
       {error ? (
         <Alert variant="destructive">
           <AlertTitle>Documents unavailable</AlertTitle>

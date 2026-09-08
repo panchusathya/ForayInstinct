@@ -1,6 +1,7 @@
 import type { ClientSession, MessageStreamEvent } from "eve/client";
 import { describe, expect, it } from "vitest";
 import { followDurableSession } from "@/app/_lib/follow-durable-session";
+import { singleFlight } from "@/app/_lib/single-flight";
 
 describe("durable chat session stream", () => {
   it("keeps consuming after background-task waiting boundaries", async () => {
@@ -78,3 +79,33 @@ function waitingEvent(id: string): MessageStreamEvent {
     type: "session.waiting",
   };
 }
+
+describe("creating the chat session", () => {
+  it("runs one create for two sends that race, then starts fresh", async () => {
+    // Two sends before a session existed each created one, and the first
+    // message and its correction landed in different conversations.
+    const flight = singleFlight<string>();
+    let created = 0;
+    const create = () =>
+      new Promise<string>((resolve) => {
+        created += 1;
+        const id = `session-${String(created)}`;
+        setTimeout(() => resolve(id), 0);
+      });
+
+    const [first, second] = await Promise.all([
+      flight.run(create),
+      flight.run(create),
+    ]);
+
+    expect([first, second]).toEqual(["session-1", "session-1"]);
+    expect(created).toBe(1);
+    expect(flight.pending).toBeUndefined();
+
+    await expect(
+      flight.run(() => Promise.reject(new Error("offline")))
+    ).rejects.toThrow("offline");
+    expect(flight.pending).toBeUndefined();
+    await expect(flight.run(create)).resolves.toBe("session-2");
+  });
+});
