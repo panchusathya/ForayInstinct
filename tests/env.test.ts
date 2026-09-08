@@ -17,6 +17,7 @@ describe("environment", () => {
       vi.stubEnv(name, value);
     }
     vi.stubEnv("KERNEL_PROXY_ID", "");
+    vi.stubEnv("SECRET_ENCRYPTION_KEYS", "");
     vi.stubEnv("LINQ_CONNECTOR", "");
     vi.stubEnv("LINQ_API_KEY", "");
     vi.stubEnv("LINQ_WEBHOOK_SECRET", "");
@@ -172,6 +173,30 @@ describe("environment", () => {
       await expect(import("../lib/env")).rejects.toThrow(errorMessage);
     }
   );
+
+  it("accepts a rotation keyring of kid=key pairs", async () => {
+    const keyring = `k2=${Buffer.alloc(32, 2).toString("base64")}, k3=${Buffer.alloc(32, 3).toString("base64url")}`;
+    vi.stubEnv("SECRET_ENCRYPTION_KEYS", keyring);
+
+    const { env } = await import("../lib/env");
+    expect(env.SECRET_ENCRYPTION_KEYS).toBe(keyring);
+  });
+
+  it.each([
+    ["a short key", "k2=c2hvcnQ"],
+    [
+      "a repeated id",
+      `k2=${Buffer.alloc(32, 2).toString("base64")},k2=${Buffer.alloc(32, 3).toString("base64")}`,
+    ],
+    ["the reserved legacy id", `v1=${Buffer.alloc(32, 2).toString("base64")}`],
+    ["a key without an id", Buffer.alloc(32, 2).toString("base64")],
+  ])("rejects a keyring with %s", async (_label, keyring) => {
+    vi.stubEnv("SECRET_ENCRYPTION_KEYS", keyring);
+
+    await expect(import("../lib/env")).rejects.toThrow(
+      "Invalid environment variables"
+    );
+  });
 
   it("rejects an encryption key that does not decode to 32 bytes", async () => {
     vi.stubEnv("SECRET_ENCRYPTION_KEY", Buffer.alloc(31, 1).toString("base64"));

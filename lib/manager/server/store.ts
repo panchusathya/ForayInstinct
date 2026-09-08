@@ -68,11 +68,14 @@ async function createVaultItem(
 ) {
   const id = randomUUID();
   const now = new Date().toISOString();
+  // Parsed once, and before the secret is written: an invalid payload used to
+  // be parsed twice and to fail only after its ciphertext was stored.
+  const account = vaultAccountHint(input);
   await writeSecret({ id, namespace: "vault", scope, value: input.secret });
 
   try {
     await insertVaultItem(scope, {
-      account: vaultAccountHint(input),
+      account,
       createdAt: now,
       id,
       kind: input.kind,
@@ -84,7 +87,7 @@ async function createVaultItem(
     throw error;
   }
 
-  return { account: vaultAccountHint(input), id, label: input.label };
+  return { account, id, label: input.label };
 }
 
 function vaultAccountHint(

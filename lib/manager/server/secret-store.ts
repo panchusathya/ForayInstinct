@@ -6,7 +6,8 @@ import {
   type SecretNamespace,
 } from "@/db/services/secrets";
 import type { AccessScope } from "../../access-scope";
-import { env } from "@/lib/env";
+import { legacySecretKeyId } from "@/lib/secret-encryption-keys";
+import { secretKeyring } from "./secret-keyring";
 
 export function secretStoreStatus() {
   return {
@@ -46,7 +47,21 @@ export async function readSecret({
   readonly scope: AccessScope;
 }) {
   const encrypted = await readEncryptedSecret(scope, namespace, id);
-  return encrypted ? decryptSecret(scope, namespace, id, encrypted) : undefined;
+  if (!encrypted) return undefined;
+  const value = decryptSecret(scope, namespace, id, encrypted);
+  if (!sealedWithPrimary(encrypted)) {
+    // Rotation happens as secrets are read: an envelope under a retired key
+    // is written back under the current one, so the old key can be dropped
+    // once every live secret has been touched. Not the reader's problem if
+    // the write fails; the next read tries again.
+    await writeEncryptedSecret(
+      scope,
+      namespace,
+      id,
+      encryptSecret(scope, namespace, id, value)
+    ).catch(() => undefined);
+  }
+  return value;
 }
 
 export async function hasSecret({
@@ -73,29 +88,61 @@ export async function deleteSecret({
   await deleteEncryptedSecret(scope, namespace, id);
 }
 
+/**
+ * Seals with the keyring's primary key. The envelope names the key it was
+ * sealed with (`v2.<kid>.<iv>.<tag>.<ciphertext>`); the `v1` envelopes that
+ * came before carry no key id and always mean the legacy key.
+ */
 function encryptSecret(
   scope: AccessScope,
   namespace: SecretNamespace,
   id: string,
   value: string
 ) {
+  const { primary } = secretKeyring();
   const iv = randomBytes(12);
-  const cipher = createCipheriv(
-    "aes-256-gcm",
-    Buffer.from(env.SECRET_ENCRYPTION_KEY, "base64"),
-    iv
-  );
+  const cipher = createCipheriv("aes-256-gcm", primary.key, iv);
   cipher.setAAD(secretAad(scope, namespace, id));
   const ciphertext = Buffer.concat([
     cipher.update(value, "utf8"),
     cipher.final(),
   ]);
   return [
-    "v1",
+    "v2",
+    primary.id,
     iv.toString("base64url"),
     cipher.getAuthTag().toString("base64url"),
     ciphertext.toString("base64url"),
   ].join(".");
+}
+
+/** Whether a stored envelope was sealed with the key new writes use. */
+function sealedWithPrimary(value: string) {
+  const [version, keyId] = value.split(".");
+  return version === "v2" && keyId === secretKeyring().primary.id;
+}
+
+/** The key and parts an envelope names, or nothing for a shape we never wrote. */
+function openEnvelope(value: string) {
+  const parts = value.split(".");
+  const [version] = parts;
+  if (version === "v1" && parts.length === 4) {
+    return {
+      ciphertext: parts[3] ?? "",
+      iv: parts[1] ?? "",
+      keyId: legacySecretKeyId,
+      tag: parts[2] ?? "",
+    };
+  }
+  if (version === "v2" && parts.length === 5) {
+    return {
+      ciphertext: parts[4] ?? "",
+      iv: parts[2] ?? "",
+      keyId: parts[1] ?? "",
+      tag: parts[3] ?? "",
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -144,20 +191,26 @@ function decryptSecret(
   id: string,
   value: string
 ) {
-  const [version, encodedIv, encodedTag, encodedCiphertext] = value.split(".");
-  if (version !== "v1" || !encodedIv || !encodedTag || !encodedCiphertext) {
+  const envelope = openEnvelope(value);
+  if (!envelope?.iv || !envelope.tag || !envelope.ciphertext) {
     throw new Error("The stored secret uses an unsupported format.");
+  }
+  const key = secretKeyring().byId.get(envelope.keyId);
+  if (!key) {
+    throw new Error(
+      "The stored secret was sealed with a key this deployment does not hold."
+    );
   }
 
   const decipher = createDecipheriv(
     "aes-256-gcm",
-    Buffer.from(env.SECRET_ENCRYPTION_KEY, "base64"),
-    Buffer.from(encodedIv, "base64url")
+    key.key,
+    Buffer.from(envelope.iv, "base64url")
   );
   decipher.setAAD(secretAad(scope, namespace, id));
-  decipher.setAuthTag(Buffer.from(encodedTag, "base64url"));
+  decipher.setAuthTag(Buffer.from(envelope.tag, "base64url"));
   return Buffer.concat([
-    decipher.update(Buffer.from(encodedCiphertext, "base64url")),
+    decipher.update(Buffer.from(envelope.ciphertext, "base64url")),
     decipher.final(),
   ]).toString("utf8");
 }

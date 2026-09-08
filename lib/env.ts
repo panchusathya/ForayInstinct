@@ -2,6 +2,7 @@ import { createEnv } from "@t3-oss/env-nextjs";
 import { z } from "zod";
 import { isE164PhoneNumber } from "../auth/phone-number";
 import { databaseUrlSchema } from "../db/env/utils";
+import { parseSecretEncryptionKeys } from "./secret-encryption-keys";
 
 const localDevelopment =
   process.env.NODE_ENV === "development" &&
@@ -26,6 +27,11 @@ const betterAuthUrlSchema = requiredValue.refine(
 const secretEncryptionKeySchema = requiredValue.refine(
   (value) => Buffer.from(value, "base64").length === 32,
   "SECRET_ENCRYPTION_KEY must be a base64-encoded 32-byte key."
+);
+
+const secretEncryptionKeysSchema = requiredValue.refine(
+  (value) => parseSecretEncryptionKeys(value) !== undefined,
+  "SECRET_ENCRYPTION_KEYS must be comma-separated kid=base64 pairs, each a 32-byte key with a unique id other than v1."
 );
 
 function requiredValueWithLocalDefault<T extends z.ZodType<string, string>>(
@@ -74,6 +80,11 @@ export const env = createEnv({
       secretEncryptionKeySchema,
       "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     ),
+    // Rotation: the first listed key seals new writes, every listed key still
+    // opens what it sealed, and SECRET_ENCRYPTION_KEY keeps opening the
+    // envelopes written before this existed. Without it there was one key
+    // and no way to retire it.
+    SECRET_ENCRYPTION_KEYS: secretEncryptionKeysSchema.optional(),
 
     // GoForay bridge. Empty keeps the upstream OpenInstinct experience
     // usable; deployed candidate workflows require both values.
