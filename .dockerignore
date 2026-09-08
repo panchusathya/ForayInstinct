@@ -1,6 +1,9 @@
 # The root Dockerfile builds only the browser gateway; keep the build context
-# to the two paths it copies (service sources + shared wire contract).
+# to the paths it copies (service sources + the shared lib/browser files the
+# gateway imports). Every shared file the gateway imports must be listed here
+# and COPYed in the Dockerfile.
 *
 !lib/browser/contract.ts
+!lib/browser/domains.ts
 !services/browser-gateway/package.json
 !services/browser-gateway/src

@@ -38,10 +38,15 @@ export class InflightGuard {
         () => undefined
       );
     };
+    // Declared before the executor runs: the executor assigns it synchronously,
+    // and a `let` declared afterwards is still in its temporal dead zone, so
+    // the assignment threw, the placeholder became a rejected promise nobody
+    // awaited, and Node's unhandled-rejection default killed the gateway on
+    // the first script of every session.
+    let release: () => void = () => undefined;
     const placeholder = new Promise<void>((resolve) => {
       release = resolve;
     });
-    let release: () => void = () => undefined;
     this.running.set(key, placeholder);
     try {
       return await work(track);
