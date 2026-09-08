@@ -50,7 +50,7 @@ import {
 import { consumeWorkerCancellationTurn } from "../lib/worker-cancellation-delivery";
 import {
   claimPendingApplicationSubmissionScreenshots,
-  listPendingApplicationSubmissionScreenshotScopes,
+  listPendingApplicationSubmissionScreenshotBatches,
   releaseApplicationSubmissionScreenshots,
 } from "@/db/services/application-submission-screenshots";
 import {
@@ -322,7 +322,7 @@ const { bot, channel, send } = chatSdkChannel({
                 scope,
                 event.turnId,
                 context.state,
-                output.applyUrl
+                output.applyUrl ? { applyUrl: output.applyUrl } : undefined
               )
             : { reviewPages: 0, status: "blocked" };
         // Only retain a retry marker for outcomes known to have an expected
@@ -780,7 +780,7 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
   // always has the real thread, so flush the newest pending review here before
   // the next model call has a chance to fail.
   const recovered = await inboundStep("review_recovery", message.id, () =>
-    deliverSubmissionScreenshot(
+    deliverEveryPendingScreenshot(
       thread,
       inbound.scope,
       `linq:inbound:${message.id}:review-recovery`,
@@ -1251,7 +1251,7 @@ async function retryPendingScreenshot(
     scope,
     turnId,
     state,
-    marker.applyUrl
+    marker.applyUrl ? { applyUrl: marker.applyUrl } : undefined
   );
   if (delivery.status === "delivered") {
     state.pendingSubmissionScreenshot = undefined;
@@ -1282,7 +1282,7 @@ async function deliverSubmissionScreenshot(
   scope: ReturnType<typeof scopeFromPrincipal>,
   turnId: string,
   state: Record<string, unknown>,
-  applyUrl?: string
+  filter?: { applyUrl?: string; batchId?: string }
 ): Promise<SubmissionScreenshotDelivery> {
   // Linq does not always include a transport label in the completion turn.
   // Try the attachment unless the transport is explicitly SMS: an unknown
@@ -1300,9 +1300,10 @@ async function deliverSubmissionScreenshot(
   // to approve a form they cannot see is the worst failure this channel has, so
   // it must never have to be inferred from an absence of logs. `warn`, not
   // `info`: the log search does not index info lines.
+  const named = filter?.applyUrl ?? filter?.batchId;
   const screenshots = await (
-    applyUrl
-      ? claimPendingApplicationSubmissionScreenshots(scope, { applyUrl })
+    named
+      ? claimPendingApplicationSubmissionScreenshots(scope, filter)
       : claimPendingApplicationSubmissionScreenshots(scope)
   ).catch((error: unknown) => {
     console.error("[submission-screenshot] could not claim a batch", {
@@ -1433,19 +1434,74 @@ async function submissionDeliveryThread(
 
 /** Flushes the durable screenshot outbox without starting an agent turn. */
 export async function flushPendingLinqSubmissionScreenshots() {
-  const scopes = await listPendingApplicationSubmissionScreenshotScopes();
+  // Every pending set, each on its own, in order within a thread: two
+  // applications in flight arrive as two captioned reviews, not as whichever
+  // is newest with the other left waiting.
+  const batches = await listPendingApplicationSubmissionScreenshotBatches();
+  const byScope = new Map<string, typeof batches>();
+  for (const batch of batches) {
+    const key = `${batch.scope.workspaceId}:${batch.scope.userId}`;
+    byScope.set(key, [...(byScope.get(key) ?? []), batch]);
+  }
   await Promise.all(
-    scopes.map(async (scope) => {
+    [...byScope.values()].map(async (group) => {
+      const scope = group[0]?.scope;
+      if (!scope) return;
       const threadId = await findLinqThread(scope);
       if (!threadId) return;
-      await deliverSubmissionScreenshot(
-        bot.thread(threadId),
-        scope,
-        `linq:screenshot-sweep:${scope.workspaceId}:${Date.now()}`,
-        {}
-      );
+      for (const batch of group) {
+        await deliverSubmissionScreenshot(
+          bot.thread(threadId),
+          scope,
+          `linq:screenshot-sweep:${scope.workspaceId}:${Date.now()}`,
+          {},
+          batch.applyUrl
+            ? { applyUrl: batch.applyUrl }
+            : { batchId: batch.batchId }
+        );
+      }
     })
   );
+}
+
+/**
+ * Delivers every set the workspace has pending, oldest first, so a thread
+ * with two applications in flight is shown both, each under its own name.
+ * The inbound webhook used to claim only the newest, which could be the
+ * other application's review while the candidate asked about this one.
+ */
+async function deliverEveryPendingScreenshot(
+  thread: Parameters<typeof deliverSubmissionScreenshot>[0],
+  scope: ReturnType<typeof scopeFromPrincipal>,
+  turnId: string,
+  state: Record<string, unknown>
+): Promise<SubmissionScreenshotDelivery> {
+  const batches = await listPendingApplicationSubmissionScreenshotBatches(
+    25,
+    scope
+  ).catch(() => []);
+  if (batches.length === 0) {
+    return deliverSubmissionScreenshot(thread, scope, turnId, state);
+  }
+  let reviewPages = 0;
+  let delivered = false;
+  let blocked = false;
+  for (const batch of batches) {
+    const delivery = await deliverSubmissionScreenshot(
+      thread,
+      scope,
+      turnId,
+      state,
+      batch.applyUrl ? { applyUrl: batch.applyUrl } : { batchId: batch.batchId }
+    );
+    reviewPages += delivery.reviewPages;
+    if (delivery.status === "delivered") delivered = true;
+    if (delivery.status === "blocked") blocked = true;
+  }
+  return {
+    reviewPages,
+    status: blocked ? "blocked" : delivered ? "delivered" : "nothing-pending",
+  };
 }
 
 /** Rows written before migration 0017 carry an empty role, not a missing one. */

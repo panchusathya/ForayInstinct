@@ -3,7 +3,11 @@ import {
   captureMaskedReviewScreenshots,
 } from "@/agent/subagents/worker/lib/kernel-screenshot";
 import type { AccessScope } from "@/lib/access-scope";
-import { saveApplicationSubmissionScreenshot } from "@/db/services/application-submission-screenshots";
+import { findApplicationExecutionByBrowserSession } from "@/db/services/application-executions";
+import {
+  saveApplicationSubmissionScreenshot,
+  saveApplicationSubmissionScreenshotBatch,
+} from "@/db/services/application-submission-screenshots";
 import {
   recordBrowserRunCheckpoint,
   type BrowserRunCheckpointInput,
@@ -73,10 +77,25 @@ async function persistSubmissionScreenshot(
   try {
     const png = await captureMaskedKernelScreenshot(sessionId, signal);
     if (png.byteLength === 0) return;
+    // The posting this session is filling, so the row can be claimed by
+    // application. Without it the confirmation was never claimed and was
+    // retired a week later unseen.
+    const assignment = await findApplicationExecutionByBrowserSession(
+      scope,
+      sessionId
+    ).catch(() => undefined);
+    if (!assignment) {
+      console.warn("[submission-screenshot] confirmation without assignment", {
+        session_id: sessionId,
+      });
+    }
     await saveApplicationSubmissionScreenshot(scope, sessionId, {
       kind: "submitted",
       page,
       png,
+      ...(assignment
+        ? { applyUrl: assignment.applyUrl, role: assignment.role }
+        : {}),
     });
   } catch (error: unknown) {
     console.error("[submission-screenshot] capture failed", {
@@ -176,18 +195,19 @@ async function captureAndSaveReviewScreenshots(
 ) {
   try {
     const captures = await captureMaskedReviewScreenshots(sessionId, signal);
-    for (const png of captures) {
-      await saveApplicationSubmissionScreenshot(scope, sessionId, {
-        // The delivering channel captions by role, so the image has to carry the
-        // assignment: a thread with two applications in flight cannot tell them
-        // apart from the session id alone.
-        applyUrl: assignment.applyUrl,
-        kind: "review",
-        page: browserPageLocation(page),
-        png,
-        role: assignment.role,
-      });
-    }
+    // One statement for the whole review. Written a row at a time, a claim
+    // that landed between two writes delivered one page of five captioned as
+    // the whole form, and the candidate was asked to approve on that.
+    await saveApplicationSubmissionScreenshotBatch(scope, sessionId, {
+      // The delivering channel captions by role, so the image has to carry the
+      // assignment: a thread with two applications in flight cannot tell them
+      // apart from the session id alone.
+      applyUrl: assignment.applyUrl,
+      kind: "review",
+      page: browserPageLocation(page),
+      pngs: captures,
+      role: assignment.role,
+    });
     return captures;
   } catch (error: unknown) {
     console.error("[submission-approval] capture failed", {

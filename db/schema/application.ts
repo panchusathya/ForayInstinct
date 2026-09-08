@@ -326,6 +326,11 @@ export const applicationSubmissionScreenshots = pgTable(
     mimeType: text("mime_type").notNull().default("image/png"),
     pngBase64: text("png_base64").notNull(),
     deliveredAt: text("delivered_at"),
+    // The capture this row was written with, so a claim takes a whole review
+    // or nothing: written one row at a time, a review could be claimed and
+    // delivered a page at a time. Rows from before migration 0025 each carry
+    // a batch of their own.
+    batchId: text("batch_id").notNull().default(""),
   },
   (table) => [
     foreignKey({
@@ -340,6 +345,11 @@ export const applicationSubmissionScreenshots = pgTable(
       table.workspaceId,
       table.deliveredAt,
       table.createdAt.desc().nullsFirst()
+    ),
+    index("application_submission_screenshots_batch_idx").on(
+      table.workspaceId,
+      table.batchId,
+      table.deliveredAt
     ),
     check(
       "application_submission_screenshots_kind_check",
