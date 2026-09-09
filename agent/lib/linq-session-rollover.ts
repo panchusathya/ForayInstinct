@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { hasUnfinishedApplicationExecution } from "@/db/services/application-executions";
+import {
+  hasUnfinishedApplicationExecution,
+  listRecentApplicationExecutions,
+} from "@/db/services/application-executions";
+import type { AccessScope } from "@/lib/access-scope";
 import { env } from "@/lib/env";
 import { eveSessionClient } from "@/lib/eve-client";
 import type { LinqJobCardThread } from "@/lib/goforay/linq-job-card-state";
@@ -153,5 +157,55 @@ export async function rollOverStaleLinqSession(
       session_id: activity.sessionId,
     });
     return "kept";
+  }
+}
+
+/**
+ * Context for a session that has no history of this thread: the applications
+ * the workspace has tracked, newest first, with the URL each needs to be
+ * retried. Without it, "resubmit" or "try Lambda again" after a rollover named
+ * a posting the coordinator had no way to look up, and it answered as if it
+ * had started the run.
+ */
+export function freshSessionApplicationsContext(
+  executions: readonly {
+    applyUrl: string;
+    company: string;
+    role: string;
+    status: string;
+    updatedAt: string;
+  }[]
+) {
+  const tracked = executions.filter((execution) => execution.applyUrl !== "");
+  if (tracked.length === 0) return undefined;
+  const lines = tracked.map((execution) => {
+    const label = [execution.role, execution.company]
+      .filter((part) => part !== "")
+      .join(" at ");
+    return `- ${label || "untitled posting"}; status ${execution.status}; last update ${execution.updatedAt}; apply URL ${execution.applyUrl}`;
+  });
+  return [
+    "This is a fresh session: the thread's earlier messages are not visible to you. Applications tracked for this candidate, newest first:",
+    ...lines,
+    'When the candidate refers to one of these (for example "resubmit", "try again", or the role or company name) without giving a URL, call start_application with that apply URL. A status of failed or timed_out is retryable and is neither posting_unavailable nor already_in_progress. Never say an application is being started or resubmitted unless start_application has returned in this turn.',
+  ].join("\n");
+}
+
+/**
+ * The fresh-session context for this candidate, or nothing when the lookup
+ * fails or there is nothing tracked. Never throws: a slow or absent database
+ * must not cost the candidate their turn.
+ */
+export async function trackedApplicationsForFreshSession(scope: AccessScope) {
+  try {
+    return freshSessionApplicationsContext(
+      await listRecentApplicationExecutions(scope)
+    );
+  } catch (error) {
+    console.warn("[linq-session] tracked applications unavailable", {
+      message: error instanceof Error ? error.message : String(error),
+      workspaceId: scope.workspaceId,
+    });
+    return undefined;
   }
 }

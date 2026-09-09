@@ -519,6 +519,29 @@ export async function listApplicationExecutionTraces(
     .limit(query.limit ?? 50);
 }
 
+/**
+ * The workspace's most recent tracked applications, newest first. Feeds a
+ * fresh Linq session the postings the retired one was talking about, so a
+ * follow-up that names a role without its URL still has something to act on.
+ */
+export async function listRecentApplicationExecutions(
+  scope: AccessScope,
+  limit = 5
+) {
+  return db
+    .select({
+      applyUrl: applicationExecutions.applyUrl,
+      company: applicationExecutions.company,
+      role: applicationExecutions.role,
+      status: applicationExecutions.status,
+      updatedAt: applicationExecutions.updatedAt,
+    })
+    .from(applicationExecutions)
+    .where(eq(applicationExecutions.workspaceId, scope.workspaceId))
+    .orderBy(desc(applicationExecutions.updatedAt))
+    .limit(limit);
+}
+
 export async function findRestartableApplicationExecutions(
   scope: AccessScope,
   query: string
