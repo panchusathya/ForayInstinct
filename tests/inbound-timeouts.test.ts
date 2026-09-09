@@ -94,6 +94,7 @@ describe("the Linq inbound path", () => {
       'bot.getAdapter("linq").markRead(thread.id, message.id)',
       'reactToLinqMessage(thread, message.id, "👍")',
       "rollOverStaleLinqSession(thread)",
+      "trackedApplicationsForFreshSession(inbound.scope)",
     ]) {
       const sites = [...channel.matchAll(new RegExp(escapeRegExp(step), "gu"))];
       expect(sites.length).toBeGreaterThan(0);
@@ -115,6 +116,7 @@ describe("the Linq inbound path", () => {
       '"review_recovery"',
       '"mark_read"',
       '"rollover"',
+      '"fresh_context"',
       '"send"',
     ]) {
       expect(channel).toContain(`inboundStep(${step}`);

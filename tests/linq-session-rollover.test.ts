@@ -3,11 +3,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   hasUnfinishedApplicationExecution: vi.fn<() => Promise<boolean>>(),
+  listRecentApplicationExecutions: vi.fn<
+    () => Promise<
+      {
+        applyUrl: string;
+        company: string;
+        role: string;
+        status: string;
+        updatedAt: string;
+      }[]
+    >
+  >(),
   reset: vi.fn<() => Promise<{ status: string }>>(),
 }));
 
 vi.mock("@/db/services/application-executions", () => ({
   hasUnfinishedApplicationExecution: mocks.hasUnfinishedApplicationExecution,
+  listRecentApplicationExecutions: mocks.listRecentApplicationExecutions,
 }));
 vi.mock("@/lib/eve-client", () => ({
   eveSessionClient: () => ({
@@ -17,11 +29,13 @@ vi.mock("@/lib/eve-client", () => ({
 
 import {
   LINQ_SESSION_IDLE_MS,
+  freshSessionApplicationsContext,
   isLinqSessionIdle,
   isLinqSessionOnCurrentBuild,
   readLinqSessionActivity,
   rememberLinqSessionActivity,
   rollOverStaleLinqSession,
+  trackedApplicationsForFreshSession,
 } from "@/agent/lib/linq-session-rollover";
 
 function fakeThread(initial: Record<string, unknown> = {}) {
@@ -45,6 +59,7 @@ const longAgo = new Date(now.getTime() - LINQ_SESSION_IDLE_MS - 1);
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.hasUnfinishedApplicationExecution.mockResolvedValue(false);
+  mocks.listRecentApplicationExecutions.mockResolvedValue([]);
   mocks.reset.mockResolvedValue({ status: "reset" });
 });
 
@@ -197,5 +212,86 @@ describe("Linq stale session rollover", () => {
     expect(channel).toContain(
       'async "input.requested"(event, context, session)'
     );
+  });
+
+  it("hands a fresh session the thread's tracked applications, and a kept one nothing", () => {
+    // After a stale-build reset the coordinator was asked to "resubmit" a
+    // posting it had never heard of, and said it was applying without a URL
+    // to apply to. The message path now attaches the tracked postings whenever
+    // the answering session has no history of the thread.
+    const channel = readFileSync("agent/channels/linq-v2.ts", "utf8");
+    expect(channel).toContain(
+      'const rollover = await inboundStep("rollover", message.id'
+    );
+    expect(channel).toContain('rollover === "kept"\n      ? undefined');
+    expect(channel).toContain(
+      "trackedApplicationsForFreshSession(inbound.scope)"
+    );
+    expect(channel).toContain(
+      "context: freshContext\n          ? [...inbound.context, freshContext]\n          : inbound.context"
+    );
+  });
+});
+
+describe("fresh-session application context", () => {
+  const lambda = {
+    applyUrl: "https://jobs.ashbyhq.com/lambda/2073",
+    company: "Lambda",
+    role: "Corporate Development Associate",
+    status: "failed",
+    updatedAt: "2026-09-08T22:22:52.000Z",
+  };
+
+  it("lists each tracked posting with the URL a retry needs", () => {
+    const context = freshSessionApplicationsContext([
+      lambda,
+      { ...lambda, applyUrl: "https://example.com/a", company: "", role: "" },
+      // A row without a URL cannot be retried and is left out.
+      { ...lambda, applyUrl: "" },
+    ]);
+    expect(context).toContain("fresh session");
+    expect(context).toContain(
+      "- Corporate Development Associate at Lambda; status failed; last update 2026-09-08T22:22:52.000Z; apply URL https://jobs.ashbyhq.com/lambda/2073"
+    );
+    expect(context).toContain(
+      "- untitled posting; status failed; last update 2026-09-08T22:22:52.000Z; apply URL https://example.com/a"
+    );
+    expect(context?.match(/^- /gmu)).toHaveLength(2);
+    // The rule the coordinator broke, stated where it reads it.
+    expect(context).toContain("failed or timed_out is retryable");
+    expect(context).toContain(
+      "unless start_application has returned in this turn"
+    );
+  });
+
+  it("says nothing for a candidate with no tracked postings", () => {
+    expect(freshSessionApplicationsContext([])).toBeUndefined();
+    expect(
+      freshSessionApplicationsContext([{ ...lambda, applyUrl: "" }])
+    ).toBeUndefined();
+  });
+
+  it("reads the workspace's recent executions and never fails the turn", async () => {
+    mocks.listRecentApplicationExecutions.mockResolvedValueOnce([lambda]);
+    const scope = { userId: "user-1", workspaceId: "ws-1" };
+    await expect(trackedApplicationsForFreshSession(scope)).resolves.toContain(
+      lambda.applyUrl
+    );
+    expect(mocks.listRecentApplicationExecutions).toHaveBeenCalledWith(scope);
+
+    mocks.listRecentApplicationExecutions.mockRejectedValueOnce(
+      new Error("offline")
+    );
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+    await expect(
+      trackedApplicationsForFreshSession(scope)
+    ).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[linq-session] tracked applications unavailable",
+      expect.objectContaining({ message: "offline", workspaceId: "ws-1" })
+    );
+    warnSpy.mockRestore();
   });
 });

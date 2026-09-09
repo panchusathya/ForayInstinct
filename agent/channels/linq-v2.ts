@@ -80,6 +80,7 @@ import { findRestartableApplicationExecutions } from "@/db/services/application-
 import {
   rememberLinqSessionActivity,
   rollOverStaleLinqSession,
+  trackedApplicationsForFreshSession,
 } from "../lib/linq-session-rollover";
 import {
   renderInputRequestText,
@@ -190,7 +191,11 @@ batch and never to web_search. If a role tool reports nothing new, say so
 instead of resending. A thumbs-up tapback on a role card is that candidate
 applying to that role: the channel resolves the card and attaches its apply
 URL, so never answer a tapback by asking which role they meant, and never tell
-a candidate to reply with a number when a tapback will do.
+a candidate to reply with a number when a tapback will do. Say an application
+is starting, restarting, or being resubmitted only after start_application has
+returned in this turn; an earlier run that failed or timed out is retried by
+calling start_application on its apply URL again, and when that URL is not in
+the message, take it from the tracked-applications context or ask for it.
 `.trim();
 
 // oxlint-disable-next-line typescript/unbound-method -- external factory, not an instance method.
@@ -843,17 +848,32 @@ async function dispatchLinqMessage(thread: Thread, message: Message) {
 
   // A long-quiet thread gets a fresh session: less history to re-read on
   // every call, and the current deployment's instructions.
-  await inboundStep("rollover", message.id, () =>
+  const rollover = await inboundStep("rollover", message.id, () =>
     withTimeout(
       () => rollOverStaleLinqSession(thread),
       INBOUND_STEP_TIMEOUT_MS,
       "kept" as const
     )
   );
+  // A session that has never seen this thread, whether just retired or new,
+  // needs the postings the candidate may be referring to; the retired
+  // session's history is gone with it.
+  const freshContext =
+    rollover === "kept"
+      ? undefined
+      : await inboundStep("fresh_context", message.id, () =>
+          withTimeout(
+            () => trackedApplicationsForFreshSession(inbound.scope),
+            INBOUND_STEP_TIMEOUT_MS,
+            undefined
+          )
+        );
   const session = await inboundStep("send", message.id, () =>
     send(
       {
-        context: inbound.context,
+        context: freshContext
+          ? [...inbound.context, freshContext]
+          : inbound.context,
         // Persist attachments before this turn and place their extracted text
         // in workspace context. Passing the provider's raw PDF URL to the
         // model gateway makes every configured provider reject the request.
