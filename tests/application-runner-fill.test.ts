@@ -1704,9 +1704,11 @@ describe("a posting that opens on its description", () => {
     const codes = mocks.executePlaywright.mock.calls.map(
       (call) => call[1].code
     );
+    // The scan before the Apply control, the scan of the form it led to, and
+    // the look for fields an answer revealed.
     expect(
       codes.filter((code) => code.includes("const fields = await"))
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(codes.some((code) => code.includes('"#email"'))).toBe(true);
   });
 

@@ -19,7 +19,10 @@ import {
 } from "@/lib/application-runner/form-map";
 import { alreadyInProgressStatus } from "@/lib/task-completion";
 import {
+  applyFillsCode,
   clickSubmitCode,
+  collectEmptyRequiredFieldsCode,
+  collectVisibleFieldsCode,
   reachApplicationFormCode,
 } from "@/lib/application-runner/playwright-scripts";
 
@@ -500,6 +503,219 @@ describe("reading a control's label", () => {
     expect(script).not.toMatch(
       /closest\("fieldset, \[role=group\], \[role=radiogroup\], div"\)/u
     );
+  });
+
+  it("reads a caption the page binds another way, from the field's own entry only", () => {
+    // Ashby binds label[for] to the field key, Lever puts the question in a
+    // sibling div, Rippling names inputs by aria-labelledby. The entry walk
+    // stops at any ancestor holding another field, so the page's "* indicates
+    // a required field" note can never become a control's caption.
+    const helpers = script.slice(
+      script.indexOf("const captionFor ="),
+      script.indexOf("const ownLabel =")
+    );
+    const order = [
+      "labelledByElements(node)",
+      "labelForId(node)",
+      'node.closest("label")',
+      "labelForName(node)",
+      "fieldCaption([node]",
+    ].map((step) => helpers.indexOf(step));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(script).toContain(
+      "if (foreignControls(ancestor, own).length > 0) break;"
+    );
+    expect(script).toContain(
+      "if (forId && byId(element, forId)) return false;"
+    );
+  });
+
+  it("sees every way a page draws the required mark", () => {
+    // Lever's ✱, Ashby's CSS ::after star and _required_ class, Paylocity's
+    // "(required)", Rippling's star in a sibling span beside the label.
+    expect(script).toContain("const STAR = /[*\\\\u2731\\\\u2217\\\\uFF0A]/;");
+    expect(script).toContain('getComputedStyle(element, "::after").content');
+    expect(script).toContain("REQUIRED_WORD.test(text)");
+    expect(script).toContain("OPTIONAL_WORD.test(caption.text)) return false;");
+    const required = script.slice(
+      script.indexOf("const captionRequired ="),
+      script.indexOf("const isRequired =")
+    );
+    expect(required).toContain("foreignControls(entry, own).length === 0");
+  });
+});
+
+describe("a choice group, however the page draws it", () => {
+  const script = readFileSync(
+    "lib/application-runner/playwright-scripts.ts",
+    "utf8"
+  );
+
+  it("collects radios, role=radio elements, switches and aria-pressed buttons as one model", () => {
+    // Ashby's Yes/No is two aria-pressed buttons over a hidden checkbox;
+    // Workable and Rippling draw role=radio elements over hidden native radios.
+    expect(script).toContain(
+      '"input[type=radio], input[type=checkbox], [role=radio], [role=checkbox], [role=switch], button[aria-pressed]"'
+    );
+    expect(script).toContain(
+      '(tag === "button" && node.hasAttribute("aria-pressed"))'
+    );
+    expect(script).toContain("const choiceGroupOf = (node) =>");
+    // Both scans use it, and read it before the visibility test, because the
+    // native control behind a styled option is hidden while its proxy shows.
+    expect(script.match(/const group = choiceGroupOf\(node\);/gu)).toHaveLength(
+      2
+    );
+    expect(script).not.toContain(
+      'node.closest("fieldset, [role=radiogroup]");'
+    );
+  });
+
+  it("names a group by its legend, a label bound to nothing, or its entry, never an option", () => {
+    const caption = script.slice(
+      script.indexOf("const groupCaption ="),
+      script.indexOf("const choiceGroupOf =")
+    );
+    expect(caption.indexOf("labelledByText(container)")).toBeLessThan(
+      caption.indexOf('container.querySelector("legend")')
+    );
+    expect(caption.indexOf('container.querySelector("legend")')).toBeLessThan(
+      caption.indexOf("captionElementIn(container, own)")
+    );
+    expect(caption).toContain("fieldCaption(");
+    expect(script).not.toContain('group.querySelector("legend, label")');
+  });
+
+  it("chooses an option by clicking what a person would, and trusts only the page's state", () => {
+    const fill = script.slice(script.indexOf("const choose = async (option)"));
+    expect(fill.indexOf("(proxy || node).click();")).toBeLessThan(
+      fill.indexOf("option.click({ timeout: 3000 })")
+    );
+    expect(fill.indexOf("option.click({ timeout: 3000 })")).toBeLessThan(
+      fill.indexOf("option.click({ force: true, timeout: 3000 })")
+    );
+    expect(fill).toContain("if (await isOn(option)) return true;");
+    expect(fill).toContain('reason: "no-option"');
+    expect(script).not.toContain("await option.check();");
+  });
+
+  it("reports a blank required group with the page's own choices", () => {
+    const blank = script.slice(
+      script.indexOf("export const collectEmptyRequiredFieldsCode")
+    );
+    expect(blank).toContain(
+      "if (group.members.some((member) => optionChecked(member))) return [];"
+    );
+    expect(blank).toContain("options: group.members.length > 1");
+    // The combobox blank test reads the widget's own entry, never a neighbour.
+    expect(blank).toContain(
+      "foreignControls(ancestor, [node]).length > 0) break;"
+    );
+  });
+
+  it("treats a list control by its behaviour, not only its role", () => {
+    // Rippling's location input autocompletes from a listbox and has no role;
+    // Workday opens its lists from a button.
+    expect(script).toContain('tag === "button" && haspopup === "listbox"');
+    expect(script).toContain(
+      'String(node.getAttribute("aria-autocomplete") || "").toLowerCase() === "list"'
+    );
+    expect(script).toContain(
+      "input[aria-autocomplete=list], input[aria-haspopup=listbox]"
+    );
+    // A hidden combobox shell owns nothing; a cookie banner's switches are not the form.
+    expect(script).toContain("owner !== node && visible(owner)");
+    expect(script).toContain("const inConsentBanner = (node) =>");
+  });
+
+  it("answers a Yes/No radio group from the profile and asks about one it cannot", () => {
+    const radio = (label: string, options: string[]): VisibleFormField => ({
+      label,
+      name: "",
+      options,
+      required: true,
+      selector: '[data-foray-id="g1"]',
+      tag: "radio",
+      type: "radio",
+    });
+    const identity = { email: "ada@example.com", name: "Ada", phone: "" };
+    const profile = {
+      ...emptyCandidateProfile,
+      requiresSponsorshipNow: "no" as const,
+      workAuthorization: "us_citizen" as const,
+    };
+    const answered = mapProfileToFormFields({
+      fields: [
+        radio("Are you legally authorized to work in the United States?", [
+          "Yes",
+          "No",
+        ]),
+        radio(
+          "Lambda may agree to sponsor individuals to obtain work authorization. Will you require sponsorship?",
+          ["Yes", "No"]
+        ),
+      ],
+      identity,
+      profile,
+    });
+    expect(answered.fills.map((fill) => fill.value)).toEqual(["Yes", "No"]);
+    expect(answered.unmapped).toEqual([]);
+
+    const asked = mapProfileToFormFields({
+      fields: [
+        radio("Have you completed a data center acquisition?", ["Yes", "No"]),
+      ],
+      identity,
+      profile,
+    });
+    expect(asked.fills).toEqual([]);
+    expect(asked.unmapped).toHaveLength(1);
+  });
+
+  it("types the profile city into a Location typeahead, with the region as an alternative", () => {
+    const { fills } = mapProfileToFormFields({
+      fields: [
+        {
+          label: "Location",
+          name: "",
+          options: [],
+          required: true,
+          selector: '[data-foray-id="loc"]',
+          tag: "combobox",
+          type: "text",
+        },
+      ],
+      identity: { email: "ada@example.com", name: "Ada", phone: "" },
+      profile: {
+        ...emptyCandidateProfile,
+        locationCity: "San Francisco",
+        locationRegion: "CA",
+      },
+    });
+    expect(fills[0]?.value).toBe("San Francisco");
+    expect(fills[0]?.alternatives).toContain("San Francisco, California");
+  });
+
+  it("never types the home city into a question about the office", () => {
+    const { fills, unmapped } = mapProfileToFormFields({
+      fields: [
+        {
+          label:
+            "Are you able and willing to work onsite at our San Francisco/San Jose location 4 days a week?",
+          name: "",
+          options: ["Yes", "No"],
+          required: true,
+          selector: '[data-foray-id="g2"]',
+          tag: "radio",
+          type: "radio",
+        },
+      ],
+      identity: { email: "ada@example.com", name: "Ada", phone: "" },
+      profile: { ...emptyCandidateProfile, locationCity: "San Francisco" },
+    });
+    expect(fills).toEqual([]);
+    expect(unmapped).toHaveLength(1);
   });
 });
 
@@ -1284,15 +1500,18 @@ describe("reaching the application form", () => {
     const AsyncFunction = (async () => undefined).constructor as new (
       ...args: string[]
     ) => unknown;
-    expect(
-      () =>
-        new AsyncFunction(
-          "browser",
-          "page",
-          "context",
-          reachApplicationFormCode
-        )
-    ).not.toThrow();
+    for (const code of [
+      reachApplicationFormCode,
+      collectVisibleFieldsCode,
+      collectEmptyRequiredFieldsCode,
+      applyFillsCode([
+        { alternatives: ["Yes"], selector: "#q", value: "U.S. Citizen" },
+      ]),
+    ]) {
+      expect(
+        () => new AsyncFunction("browser", "page", "context", code)
+      ).not.toThrow();
+    }
   });
 });
 
