@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   findRun: vi.fn<() => Promise<unknown>>(),
   forgetAnswers: vi.fn<() => Promise<void>>(),
-  resumeHook: vi.fn<() => Promise<void>>(),
   runUntilPause:
     vi.fn<
       (_input: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -26,10 +25,6 @@ vi.mock("@/lib/application-runner/run", () => ({
 
 vi.mock("@/lib/application-runner/fill", () => ({
   submitApplication: mocks.submit,
-}));
-
-vi.mock("@/lib/application-runner/workflow", () => ({
-  resumeApplicationHook: mocks.resumeHook,
 }));
 
 vi.mock("@/lib/application-runner/browser", () => ({
@@ -64,7 +59,6 @@ const gone = Object.assign(new Error("Session browser-1 is gone"), {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.findRun.mockResolvedValue(run);
-  mocks.resumeHook.mockResolvedValue(undefined);
   mocks.updateRun.mockResolvedValue(undefined);
   mocks.forgetAnswers.mockResolvedValue(undefined);
   mocks.runUntilPause.mockResolvedValue({
@@ -181,7 +175,6 @@ describe("a run that already ended", () => {
     expect(result).toMatchObject({ done: true, status: "completed" });
     expect(mocks.submit).not.toHaveBeenCalled();
     expect(mocks.runUntilPause).not.toHaveBeenCalled();
-    expect(mocks.resumeHook).not.toHaveBeenCalled();
   });
 
   it("refuses to continue a run that failed or timed out", async () => {

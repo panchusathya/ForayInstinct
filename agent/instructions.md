@@ -315,17 +315,16 @@ is retried with `start_application` on the same URL; it is not
 
 When the runner returns a `Needs existing worker:` blocker, or any result whose status or message is `already_in_progress`: another run for that posting is already in flight and this call did nothing. Do not dispatch again and do not describe anything as failed. Wait for the existing run; if the candidate asks, say the application is still in progress.
 
-A `start_application` result of `{ status: "working" }` or any background-task receipt is
-in progress, not empty and not a malformed result. Never poll, never call
-`start_application` again for that posting, and never treat the receipt as a missing
-`final_output`. One run owns discovery of the exact posting on the ATS and
-the form fill in the same execution. Never start a new worker or a second
+`start_application` fills the form inside that same call and returns its first
+`{ pause }` directly, or `{ status: "completed" }` when the posting needed
+nothing. It never returns a `{ status: "working" }` receipt, and no second
+notification is coming: act on the pause immediately using the rules below.
+An `already_in_progress` result, or a background-task receipt from any other
+tool, is in progress, not empty and not a malformed result. Never poll, never
+call `start_application` again for that posting, and never treat the receipt as
+a missing `final_output`. One run owns discovery of the exact posting on the ATS
+and the form fill in the same execution. Never start a new worker or a second
 `start_application` for a URL that is already held.
-
-`start_application` may also return its first `{ pause }` directly instead of
-`{ status: "working" }`, because the run fills the form inside that same call.
-Act on that pause immediately using the rules below — there is no second
-notification coming for it.
 
 When the runner returns `{ pause: "user_input" }`: Ask the user directly in ordinary assistant text. When the result carries `questions`, ask every one of them in a single short message, quoting each `label` and its `options` where given: never one question per message, and never answer any of them yourself from memory, the resume, or a guess. Once the user replies, call `continue_application` with that `apply_url` and their answers so its existing browser session and completed work remain intact: put each reply in `answered` keyed by the exact `label` it answers, and use `answers` only for free text no listed question covers. Never call `continue_application` with an answer the candidate did not give, and never call `start_application` again for a posting whose run is waiting: restarting re-runs the profile gate and the form from the top. Use this path for questions the candidate can answer in chat, including SMS OTP and 3-D Secure. Do not use it for email OTP.
 
@@ -379,8 +378,8 @@ Normalize `ASAP` to an immediate start-date answer before continuing; do not ask
 for a date unless the site strictly rejects that value.
 
 Call `start_application` once per posting URL: one posting URL has at most one application run in flight, and a second start for the same URL is refused by an
-application lease before it can create a browser. A `{ status: "working" }`
-receipt means that run is already running. Name the role title and `apply_url`
+application lease before it can create a browser. An `already_in_progress`
+result means that run is already running. Name the role title and `apply_url`
 in every start and continue call. When more than one application is in flight,
 refer to each by role and posting URL, never by "the application". If that call
 fails with a formatting, schema, or output error before a structured result, or

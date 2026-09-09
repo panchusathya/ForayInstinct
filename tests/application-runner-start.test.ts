@@ -104,7 +104,7 @@ beforeEach(() => {
 });
 
 describe("startApplication", () => {
-  it("finishes the fill before returning when no durable run owns it", async () => {
+  it("finishes the fill to its first pause before returning", async () => {
     let settled = false;
     mocks.runApplicationUntilPause.mockImplementation(async () => {
       await Promise.resolve();
