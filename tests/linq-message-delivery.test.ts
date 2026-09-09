@@ -1850,6 +1850,11 @@ describe("two applications pending in one thread", () => {
 });
 
 describe("a background role search that has finished", () => {
+  beforeEach(() => {
+    cardPngMocks.renderJobCardPng.mockReset();
+    cardPngMocks.renderJobCardPng.mockResolvedValue(undefined);
+  });
+
   it("posts its cards through the channel with the tapback mapping the cards need", async () => {
     // Sent to the model as JSON they came back as bullets or not at all, and a
     // thumbs-up on one resolved to nothing.
@@ -1889,5 +1894,90 @@ describe("a background role search that has finished", () => {
     expect(Object.values(cards).map((card) => card.company)).toEqual([
       "The Toro Company",
     ]);
+  });
+
+  const toroCard = {
+    company: "The Toro Company",
+    location: "Remote, USA",
+    reasons: ["M&A modeling"],
+    title: "Sr. Analyst, Corporate Development",
+    url: "https://jobs.thetorocompany.com/job/bloomington/corp-dev/1",
+  };
+
+  it("posts images on a thread whose transport it cannot see, as the turn before it did", async () => {
+    // The poller rebuilds the thread from its id: no message, no channel
+    // state. Read as SMS, it posted five text cards under the five images the
+    // same thread had just received.
+    cardPngMocks.renderJobCardPng.mockResolvedValueOnce({
+      bytes: Buffer.from("png-bytes"),
+      filename: "the-toro-company-role.png",
+    });
+    const { context, post } = handlerContext("message-1", {});
+    channelCapture.thread.mockReset();
+    channelCapture.thread.mockReturnValue(context.thread);
+    post.mockResolvedValue({ id: "card-message-1" });
+    const { deliverLinqJobCardsToThread } =
+      await import("@/agent/channels/linq-v2");
+
+    await deliverLinqJobCardsToThread("linq:dm:chat-1", [toroCard], {
+      userId: "user-1",
+      workspaceId: "workspace-1",
+    });
+
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      files: [
+        {
+          data: Buffer.from("png-bytes"),
+          filename: "the-toro-company-role.png",
+          mimeType: "image/png",
+        },
+      ],
+      markdown: "",
+    });
+  });
+
+  it("keeps the text twin when an earlier turn noted the thread as SMS", async () => {
+    const threadStore = new Map<string, Record<string, unknown>>([
+      ["linq:dm:chat-1", { linqService: "SMS" }],
+    ]);
+    const { context, post } = handlerContext(
+      "message-1",
+      {},
+      undefined,
+      undefined,
+      threadStore
+    );
+    channelCapture.thread.mockReset();
+    channelCapture.thread.mockReturnValue(context.thread);
+    post.mockResolvedValue({ id: "card-message-1" });
+    const { deliverLinqJobCardsToThread } =
+      await import("@/agent/channels/linq-v2");
+
+    await deliverLinqJobCardsToThread("linq:dm:chat-1", [toroCard], {
+      userId: "user-1",
+      workspaceId: "workspace-1",
+    });
+
+    expect(cardPngMocks.renderJobCardPng).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      markdown:
+        '1/1  sr. analyst, corporate development · the toro company\nremote, usa\nhttps://jobs.thetorocompany.com/job/bloomington/corp-dev/1\nreply "apply 1" to apply',
+    });
+  });
+
+  it("writes the transport a turn learns into the thread store for a later poller delivery", async () => {
+    const { context, threadStore } = handlerContext(
+      "message-1",
+      {},
+      "iMessage"
+    );
+    await trackWorkerCancellation(
+      submittedApplicationResult(),
+      context,
+      sessionContext({ id: "user-1", workspaceId: "workspace-1" })
+    );
+    expect(threadStore.get("linq:dm:chat-1")).toMatchObject({
+      linqService: "iMessage",
+    });
   });
 });

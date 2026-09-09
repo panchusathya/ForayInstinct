@@ -198,24 +198,71 @@ function exaRequestBody(body: unknown) {
   return numResultsSchema.parse(parsed);
 }
 
-/**
- * Runs a search with JuiceBox reachable only if `link` is supplied, in which
- * case its job feed rejects the way production did.
- */
+/** The pending-search store, so a test can see a row being cleared. */
+const pendingSearchMocks = {
+  completePendingRoleSearch: vi.fn<(workspaceId: string) => Promise<void>>(),
+  listPendingRoleSearches: vi.fn<() => Promise<unknown[]>>(),
+  markPendingRoleSearch: vi.fn<() => Promise<void>>(),
+};
+
+/** Runs one search through `bridgeEnvironment` as the phone-keyed workspace. */
 async function publicSearch(
   results: { text: string; title: string; url: string }[],
   {
+    curatedOnly,
     fetch: fetchMock,
     limit,
     link,
     presented = [],
   }: {
+    curatedOnly?: boolean;
     fetch?: ReturnType<typeof vi.fn<typeof globalThis.fetch>>;
     limit?: number;
     link?: { candidateId: string; orgId: string };
     presented?: string[];
   } = {}
 ) {
+  const { findGoforayRoles } = await bridgeEnvironment(results, {
+    fetch: fetchMock,
+    link,
+    presented,
+  });
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- only the ids are read.
+  const scope = {
+    userId: "phone:digest",
+    workspaceId: "phone:digest",
+  } as never;
+  return findGoforayRoles(scope, {
+    ...(curatedOnly === undefined ? {} : { curatedOnly }),
+    limit: limit ?? 5,
+    location: "Remote",
+    query: "senior strategic finance",
+    role: "strategic finance",
+    seniority: "senior",
+  });
+}
+
+/**
+ * The bridge with its stores stubbed: JuiceBox reachable only if `link` is
+ * supplied, in which case its job feed rejects the way production did.
+ */
+async function bridgeEnvironment(
+  results: { text: string; title: string; url: string }[],
+  {
+    fetch: fetchMock,
+    link,
+    presented = [],
+  }: {
+    fetch?: ReturnType<typeof vi.fn<typeof globalThis.fetch>>;
+    link?: { candidateId: string; orgId: string };
+    presented?: string[];
+  } = {}
+) {
+  pendingSearchMocks.completePendingRoleSearch.mockReset();
+  pendingSearchMocks.completePendingRoleSearch.mockResolvedValue(undefined);
+  pendingSearchMocks.markPendingRoleSearch.mockReset();
+  pendingSearchMocks.markPendingRoleSearch.mockResolvedValue(undefined);
+  vi.doMock("@/db/services/pending-role-searches", () => pendingSearchMocks);
   vi.stubEnv("EXA_API_KEY", "exa-test-key");
   vi.stubEnv("JUICEBOX_API_URL", "https://api.example.test");
   vi.stubEnv("OPENINSTINCT_SHARED_SECRET", "s".repeat(32));
@@ -255,17 +302,68 @@ async function publicSearch(
     });
   vi.stubGlobal("fetch", fetch);
 
-  const { findGoforayRoles } = await import("../lib/goforay/bridge");
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- only the ids are read.
-  const scope = {
-    userId: "phone:digest",
-    workspaceId: "phone:digest",
-  } as never;
-  return findGoforayRoles(scope, {
-    limit: limit ?? 5,
-    location: "Remote",
-    query: "senior strategic finance",
-    role: "strategic finance",
-    seniority: "senior",
-  });
+  return import("../lib/goforay/bridge");
 }
+
+describe("a role search the thread has been answered for", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+
+  const posting = {
+    text: "You will own the annual plan and the three statement model.",
+    title: "Senior Analyst, Strategic Finance | Example Co",
+    url: "https://boards.greenhouse.io/example/jobs/4123456",
+  };
+
+  it("clears the pending background search so the poller does not post a second batch", async () => {
+    // The row stayed pending after the turn had answered; two minutes later
+    // the poller ran the search again and posted five more cards.
+    const feed = await publicSearch([posting]);
+    expect(feed.cards).toHaveLength(1);
+    expect(
+      pendingSearchMocks.completePendingRoleSearch
+    ).toHaveBeenCalledExactlyOnceWith("phone:digest");
+  });
+
+  it("stays out of public discovery when asked for curated matches only", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(Response.json({ results: [posting] }));
+    const feed = await publicSearch([posting], { curatedOnly: true, fetch });
+    expect(feed).toEqual({ cards: [], searching: false, source: "juicebox" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(
+      pendingSearchMocks.completePendingRoleSearch
+    ).toHaveBeenCalledExactlyOnceWith("phone:digest");
+  });
+
+  it("finishes a pending row from the poller without a public batch", async () => {
+    pendingSearchMocks.listPendingRoleSearches.mockResolvedValue([
+      {
+        location: "Remote",
+        pending: "yes",
+        phone: "",
+        query: "strategic finance",
+        threadId: "linq:dm:chat-1",
+        updatedAt: new Date(),
+        userId: "phone:digest",
+        workspaceId: "phone:digest",
+      },
+    ]);
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(Response.json({ results: [posting] }));
+    const { pollPendingGoforayRoleSearches } = await bridgeEnvironment(
+      [posting],
+      { fetch }
+    );
+
+    await expect(pollPendingGoforayRoleSearches()).resolves.toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(pendingSearchMocks.completePendingRoleSearch).toHaveBeenCalledWith(
+      "phone:digest"
+    );
+  });
+});

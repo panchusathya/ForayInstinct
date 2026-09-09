@@ -72,7 +72,7 @@ export default defineDynamic({
         }),
         find_next_goforay_roles: defineTool({
           description:
-            "Continue the role search already in play: up to five more roles for the same criteria, excluding everything this candidate has already been shown. Use it when the user asks for more of the same search. If they name a new title, seniority, or location, call find_goforay_roles with those instead. Same output shape, and the same `exhausted` handling: if there is nothing new, say so rather than resending an earlier role.",
+            "Continue the role search already in play: up to five more roles for the same criteria, excluding everything this candidate has already been shown. Use it when the user asks for more of the same search. If they name a new title, seniority, or location, call find_goforay_roles with those instead. Same output shape, and the same `exhausted` handling: if there is nothing new, say so rather than resending an earlier role. The client renders the cards; write at most one intro line and never paste this object or list the roles as bullets.",
           inputSchema: roleSearchInputSchema.partial(),
           execute: async (input) => {
             // Restated details win; otherwise continue the search on screen.

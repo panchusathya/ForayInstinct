@@ -478,7 +478,11 @@ export async function fillVisibleForm(
   // away. A page with nothing to fill is not a filled form: it used to go to
   // the candidate for approval as one, the job description as the review.
   if (!looksLikeApplicationForm(fields)) {
-    const reach = await parseResult(
+    // The script waits for a client-rendered form and may follow one hop, so
+    // its budget on the gateway has to exceed its own waits. At the default
+    // 30s the gateway killed it mid-navigation on Ashby, and the run read the
+    // killed script as a posting with no Apply control.
+    const reached = await runScript(
       input.browserSessionId,
       reachApplicationFormCode,
       z.object({
@@ -489,8 +493,9 @@ export async function fillVisibleForm(
         form: z.boolean(),
         href: z.string().optional(),
       }),
-      "reach_form"
+      { label: "reach_form", timeoutSec: 60 }
     );
+    const reach = reached.data;
     applicationExecutionLog({
       apply_url: input.applyUrl,
       clicked: reach?.clicked ?? "",
@@ -499,6 +504,7 @@ export async function fillVisibleForm(
       external: reach?.external !== undefined,
       fields: reach?.fields ?? 0,
       form: reach?.form === true,
+      ...(reached.error === undefined ? {} : { error: reached.error }),
     });
     if (reach?.external) {
       return { applyUrl: input.applyUrl, redirect: reach.external };
@@ -518,12 +524,15 @@ export async function fillVisibleForm(
         pauseReason: "user_input",
         status: "waiting",
       });
+      // A script the browser never finished says nothing about the posting:
+      // the page was not read, so do not tell the candidate it has no form.
+      const detail =
+        reach === undefined
+          ? `the application page at ${input.applyUrl} did not finish loading${reached.error === undefined ? "" : ` (${reached.error.slice(0, 120)})`}; start the application again.`
+          : `no application form was found at ${input.applyUrl}: the page has nothing to fill${reach.clicked ? ` even after opening "${reach.clicked}"` : " and no Apply control"}. If the posting links to an application elsewhere, that link is the URL to start with.`;
       return {
         applyUrl: input.applyUrl,
-        message: applicationPauseMessage(
-          "user_input",
-          `no application form was found at ${input.applyUrl}: the page has nothing to fill${reach?.clicked ? ` even after opening "${reach.clicked}"` : " and no Apply control"}. If the posting links to an application elsewhere, that link is the URL to start with.`
-        ),
+        message: applicationPauseMessage("user_input", detail),
         pause: "user_input",
       };
     }

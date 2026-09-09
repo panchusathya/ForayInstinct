@@ -1676,7 +1676,7 @@ describe("a posting that opens on its description", () => {
       if (request.code.includes("const found = await page.evaluate")) {
         return { result: { present: false }, success: true };
       }
-      if (request.code.includes("const before = await fillable()")) {
+      if (request.code.includes("const enough = (found)")) {
         return { result: reach, success: true };
       }
       if (request.code.includes("const empty = await")) {
@@ -1734,6 +1734,45 @@ describe("a posting that opens on its description", () => {
     expect("message" in result ? result.message : "").toContain(
       "no application form was found"
     );
+  });
+
+  it("gives the reach script a budget longer than its own waits", async () => {
+    // At the gateway's 30s default the script's 30s navigation was killed
+    // first, on Ashby, and the run read the dead script as an empty page.
+    page({ clicked: "Apply for this job", fields: 9, form: true }, formFields);
+    await fillVisibleForm(input);
+    const reach = mocks.executePlaywright.mock.calls.find((call) =>
+      call[1].code.includes("const enough = (found)")
+    );
+    expect(reach?.[1]).toMatchObject({ timeoutSec: 60 });
+  });
+
+  it("does not call a page it never read a posting with no Apply control", async () => {
+    // The Lambda run: reach_form timed out on the gateway, the runner saw no
+    // result, and told the candidate the posting had no form.
+    page(undefined, []);
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("loginWall")) {
+        return { success: true, result: { loginWall: false } };
+      }
+      if (request.code.includes("const found = await page.evaluate")) {
+        return { result: { present: false }, success: true };
+      }
+      if (request.code.includes("const enough = (found)")) {
+        return { error: "Execution timed out after 30s", success: false };
+      }
+      if (request.code.includes("const empty = await")) {
+        return { result: { empty: [] }, success: true };
+      }
+      return { result: { fields: [] }, success: true };
+    });
+    const result = await fillVisibleForm(input);
+    expect(result).toMatchObject({ pause: "user_input" });
+    const message = "message" in result ? result.message : "";
+    expect(message).toContain("did not finish loading");
+    expect(message).toContain("Execution timed out after 30s");
+    expect(message).not.toContain("no Apply control");
+    expect(message).not.toContain("no application form was found");
   });
 });
 

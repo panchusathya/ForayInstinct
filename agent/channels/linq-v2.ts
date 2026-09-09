@@ -30,16 +30,18 @@ import {
   type GoForayJobCard,
 } from "@/lib/goforay/job-cards";
 import { renderJobCardPng } from "@/lib/goforay/request-job-card-png";
-import {
-  isRichLinqService,
-  linqServiceFromUnknown,
-} from "@/lib/goforay/linq-service";
+import { linqServiceFromUnknown } from "@/lib/goforay/linq-service";
 import { linqReplyToMessageId } from "@/lib/goforay/linq-replies";
 import {
   linqJobCardForMessageId,
+  type LinqJobCardThread,
   readLinqJobCards,
   rememberLinqJobCard,
 } from "@/lib/goforay/linq-job-card-state";
+import {
+  readLinqThreadService,
+  rememberLinqThreadService,
+} from "@/lib/goforay/linq-service-state";
 import {
   consumeLinqReviewDelivered,
   rememberLinqReviewDelivered,
@@ -1625,8 +1627,16 @@ async function deliverJobCards(
   turnId: string,
   state: Record<string, unknown>
 ) {
-  const service = rememberLinqService(thread, state);
-  const rich = isRichLinqService(service);
+  // The transport, from this turn's message, from channel state, or from what
+  // an earlier turn wrote to the thread: the poller's rebuilt thread has
+  // neither of the first two.
+  const service =
+    rememberLinqService(thread, state) || (await readLinqThreadService(thread));
+  // Only a transport known to be SMS gets the text twin. An unknown thread is
+  // usually iMessage, and the image post fails over to text on its own; read
+  // as SMS, it posted five text cards under five images the same thread had
+  // just been sent. The screenshot delivery draws the same line.
+  const rich = service !== "SMS";
   // Image delivery is guarded by this protocol check and by the renderer, and
   // both used to fail silently. Name which one ran so a single iMessage turn
   // says whether text arrived because the thread read as SMS or because the
@@ -1707,11 +1717,19 @@ async function rememberDeliveredCard(
 }
 
 function rememberLinqService(
-  thread: { toJSON: () => unknown },
+  thread: { toJSON: () => unknown } & Partial<
+    Pick<LinqJobCardThread, "setState">
+  >,
   state: Record<string, unknown>
 ) {
   const fromThread = linqServiceFromUnknown(thread.toJSON());
-  if (fromThread) state.lastLinqService = fromThread;
+  if (fromThread) {
+    state.lastLinqService = fromThread;
+    // Also where a delivery made outside a turn can read it. Channel state
+    // travels with the turn; the thread store travels with the thread.
+    const { setState } = thread;
+    if (setState) void rememberLinqThreadService({ setState }, fromThread);
+  }
   return (
     fromThread ||
     (typeof state.lastLinqService === "string" ? state.lastLinqService : "")
