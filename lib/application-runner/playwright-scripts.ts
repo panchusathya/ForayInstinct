@@ -860,25 +860,45 @@ const fillable = () => page.evaluate(() => {
   return { count, files };
 });
 const enough = (found) => found.count >= 2 || found.files > 0;
-const before = await fillable();
+// A board that paints its form from the client (Ashby fetches the posting
+// after domcontentloaded) has nothing to fill for a few seconds; the scan that
+// sent the runner here saw that empty shell. Give the form that long before
+// reading the page as a description.
+const settle = async (budgetMs) => {
+  const deadline = Date.now() + budgetMs;
+  let found = await fillable();
+  while (!enough(found) && Date.now() < deadline) {
+    await page.waitForTimeout(500);
+    found = await fillable();
+  }
+  return found;
+};
+const before = await settle(8000);
 if (enough(before)) return { form: true, fields: before.count, clicked: "", href: page.url() };
-const applyWording = /^\\s*(?:apply(?:\\s+now|\\s+here|\\s+for\\s+this\\s+(?:job|position|role)|\\s+to\\s+this\\s+(?:job|position|role))?|start\\s+(?:your\\s+)?application|i'?m\\s+interested)\\s*$/i;
-const controls = await page.evaluate(() => {
+// Tabs and role=link controls count: Ashby's description page switches to the
+// form through an "Application" tab, which is neither a button nor apply
+// wording. The same selector drives the click below, so indexes agree.
+const controlSelector = "a, button, [role=button], [role=tab], [role=link]";
+const controls = await page.evaluate((selector) => {
   const visible = (node) => {
     const style = getComputedStyle(node);
     const box = node.getBoundingClientRect();
     return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
   };
   const applyWording = /^\\s*(?:apply(?:\\s+now|\\s+here|\\s+for\\s+this\\s+(?:job|position|role)|\\s+to\\s+this\\s+(?:job|position|role))?|start\\s+(?:your\\s+)?application|i'?m\\s+interested)\\s*$/i;
+  const tabWording = /^\\s*(?:application|apply)\\s*$/i;
   const applyPath = /\\/(?:apply|application)(?:\\/|$|[?#])/i;
-  return [...document.querySelectorAll("a, button, [role=button]")].flatMap((node, index) => {
+  return [...document.querySelectorAll(selector)].flatMap((node, index) => {
     if (!visible(node)) return [];
     const text = (node.innerText || node.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
-    const href = node.tagName === "A" ? String(node.href || "") : "";
-    if (!applyWording.test(text) && !applyPath.test(href)) return [];
-    return [{ href, index, text: text.slice(0, 60) }];
-  }).slice(0, 5);
-});
+    const anchor = node.closest("a");
+    const href = anchor ? String(anchor.href || "") : String(node.getAttribute("href") || "");
+    // Apply wording first, then a link into the form, then a bare tab label.
+    const rank = applyWording.test(text) ? 0 : applyPath.test(href) ? 1 : tabWording.test(text) ? 2 : -1;
+    if (rank < 0) return [];
+    return [{ href, index, rank, text: text.slice(0, 60) }];
+  }).sort((a, b) => a.rank - b.rank).slice(0, 5);
+}, controlSelector);
 if (controls.length === 0) return { form: false, fields: before.count, clicked: "", href: page.url(), controls: 0 };
 const chosen = controls.find((control) => control.href) || controls[0];
 // The same registrable-domain rule the gateway pins a browser to, so a hop
@@ -897,13 +917,24 @@ if (chosen.href) {
   if (target && /^https?:$/.test(target.protocol) && site(target.hostname) !== site(new URL(page.url()).hostname)) {
     return { form: false, fields: before.count, clicked: chosen.text, href: page.url(), external: target.href };
   }
-  if (target) await page.goto(target.href, { timeout: 30000, waitUntil: "domcontentloaded" }).catch(() => undefined);
+  const here = new URL(page.url());
+  const trimSlash = (path) => path.replace(/\\/+$/, "");
+  const samePage = target && target.origin === here.origin && trimSlash(target.pathname) === trimSlash(here.pathname);
+  if (samePage) {
+    // A link to the page already open is one of its own tabs. Reloading it
+    // through the proxy is what outran the gateway's budget on Ashby; the tab
+    // switches in place, so click it and let the form settle.
+    await page.locator(controlSelector).nth(chosen.index).click({ timeout: 5000 }).catch(() => undefined);
+  } else if (target) {
+    // Shorter than the script's own budget on the gateway, so a slow hop is
+    // reported by this script rather than by the gateway killing it.
+    await page.goto(target.href, { timeout: 15000, waitUntil: "domcontentloaded" }).catch(() => undefined);
+  }
 } else {
-  await page.locator("a, button, [role=button]").nth(chosen.index).click({ timeout: 5000 }).catch(() => undefined);
+  await page.locator(controlSelector).nth(chosen.index).click({ timeout: 5000 }).catch(() => undefined);
   await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => undefined);
 }
-await page.waitForTimeout(1500);
-const after = await fillable();
+const after = await settle(6000);
 return { form: enough(after), fields: after.count, clicked: chosen.text, href: page.url() };
 `;
 

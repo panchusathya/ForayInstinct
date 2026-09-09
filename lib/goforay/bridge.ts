@@ -365,6 +365,12 @@ export async function findGoforayRoles(
     limit?: number;
     role?: string;
     seniority?: string;
+    /**
+     * Curated JuiceBox matches only, never public discovery. The poller that
+     * finishes a background CRM search sets this: run through the public path,
+     * it posted a second, unasked-for batch two minutes after the turn's own.
+     */
+    curatedOnly?: boolean;
   } = {}
 ): Promise<{
   cards: GoForayJobCard[];
@@ -377,6 +383,13 @@ export async function findGoforayRoles(
 }> {
   const limit = input.limit ?? 5;
   const presented = await listPresentedRoles(scope);
+  // A search answered here is no longer one the poller owes the thread. A row
+  // left pending fired two minutes after the turn had already answered, and
+  // the thread got a second batch of cards.
+  const answered = async <T>(result: T) => {
+    await completePendingRoleSearch(scope.workspaceId).catch(() => undefined);
+    return result;
+  };
   // Whether a link exists decides only how a curated failure is classified, so
   // a failed lookup degrades to the public path rather than failing the search.
   const link = await linkedCandidate(scope).catch(() => undefined);
@@ -413,12 +426,12 @@ export async function findGoforayRoles(
       );
       if (fresh.length) {
         await rememberPresentedRoles(scope, fresh);
-        return {
+        return await answered({
           cards: fresh,
           searching: false,
           source: "juicebox",
           discovery: feed.discovery,
-        };
+        });
       }
     } catch (error) {
       degraded = classifyCuratedFailure(error, { linked: true });
@@ -430,6 +443,15 @@ export async function findGoforayRoles(
         workspaceId: scope.workspaceId,
       });
     }
+  }
+
+  if (input.curatedOnly) {
+    return answered({
+      cards: [],
+      searching: false,
+      source: "juicebox",
+      ...(degraded ? { degraded } : {}),
+    });
   }
 
   const role = (input.role?.trim() ?? "") || (input.query?.trim() ?? "");
@@ -447,22 +469,22 @@ export async function findGoforayRoles(
       .filter((card) => !roleKeys(card).some((key) => presented.keys.has(key)))
       .slice(0, limit);
     if (cards.length) await rememberPresentedRoles(scope, cards);
-    return {
+    return await answered({
       cards,
       searching: false,
       source: "exa",
       ...(cards.length ? {} : { exhausted: true }),
       ...(degraded ? { degraded } : {}),
-    };
+    });
   } catch (error) {
-    return {
+    return answered({
       cards: [],
       searching: false,
       source: "exa",
       ...(degraded ? { degraded } : {}),
       unavailable:
         error instanceof Error ? error.message : "Role search is unavailable.",
-    };
+    });
   }
 }
 
@@ -483,7 +505,10 @@ export async function pollPendingGoforayRoleSearches(limit = 20) {
       userId: search.userId || search.workspaceId,
       workspaceId: search.workspaceId,
     } satisfies AccessScope;
+    // Only the CRM discovery this row was waiting for. The public fallback
+    // answers a turn, not a poll: from here it posted a batch nobody asked for.
     const feed = await findGoforayRoles(scope, {
+      curatedOnly: true,
       location: search.location,
       query: search.query,
     });

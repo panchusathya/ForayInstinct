@@ -18,7 +18,10 @@ import {
   type VisibleFormField,
 } from "@/lib/application-runner/form-map";
 import { alreadyInProgressStatus } from "@/lib/task-completion";
-import { clickSubmitCode } from "@/lib/application-runner/playwright-scripts";
+import {
+  clickSubmitCode,
+  reachApplicationFormCode,
+} from "@/lib/application-runner/playwright-scripts";
 
 const databases: PGlite[] = [];
 
@@ -1245,6 +1248,51 @@ describe("reaching the application form", () => {
     expect(reach.indexOf("external: target.href")).toBeLessThan(
       reach.indexOf("await page.goto(target.href")
     );
+  });
+
+  it("waits for a client-rendered form and treats the page's own tab as a click, not a reload", () => {
+    // Ashby paints its fields seconds after domcontentloaded and switches to
+    // them through an "Application" tab whose href is the page already open.
+    // Reloading that URL through the proxy outran the gateway's budget.
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    const reach = scripts.slice(
+      scripts.indexOf("export const reachApplicationFormCode")
+    );
+    expect(reach).toContain("const before = await settle(8000)");
+    expect(reach).toContain(
+      '"a, button, [role=button], [role=tab], [role=link]"'
+    );
+    expect(reach).toContain("tabWording");
+    expect(reach).toContain('node.closest("a")');
+    expect(reach).toContain("if (samePage) {");
+    expect(reach.indexOf("if (samePage) {")).toBeLessThan(
+      reach.indexOf("await page.goto(target.href")
+    );
+    // Every wait inside the script fits under the 60s the runner grants it.
+    expect(reach).toContain("timeout: 15000");
+    expect(reach).not.toContain("timeout: 30000");
+    expect(reach).toContain("const after = await settle(6000)");
+  });
+
+  it("compiles as the statement block the gateway wraps it in", () => {
+    // The gateway builds an AsyncFunction from this text (eval.ts). A syntax
+    // slip in the template would fail every run, and only in production.
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- TypeScript's lib does not expose the AsyncFunction constructor.
+    const AsyncFunction = (async () => undefined).constructor as new (
+      ...args: string[]
+    ) => unknown;
+    expect(
+      () =>
+        new AsyncFunction(
+          "browser",
+          "page",
+          "context",
+          reachApplicationFormCode
+        )
+    ).not.toThrow();
   });
 });
 
