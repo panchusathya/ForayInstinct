@@ -7,12 +7,9 @@ import { submitApplication } from "@/lib/application-runner/fill";
 import { runApplicationUntilPause } from "@/lib/application-runner/run";
 import {
   type ApplicationRunInput,
-  durableWorkflowRunId,
-  isInlineWorkflow,
   liveRunStatuses,
   looksLikeVerificationCode,
 } from "@/lib/application-runner/types";
-import { resumeApplicationHook } from "@/lib/application-runner/workflow";
 import {
   describeBrowserSessionFailure,
   isBrowserSessionDead,
@@ -63,22 +60,6 @@ export async function continueApplication(input: {
     input.answered && Object.keys(input.answered).length > 0
       ? input.answered
       : undefined;
-  await resumeApplicationHook(run.id, {
-    action: "continue",
-    answered,
-    answers: input.answers,
-    approved: input.approved,
-    otp: input.otp,
-  });
-  if (!isInlineWorkflow(run.workflowRunId)) {
-    return {
-      applyUrl,
-      executionId: run.id,
-      message: "Continue signal recorded.",
-      pause: pauseKindFromOutput({ pause: run.pauseReason ?? undefined }),
-      status: "waiting" as const,
-    };
-  }
   const base = {
     applyUrl,
     company: run.company,
@@ -271,21 +252,11 @@ export async function cancelApplication(input: {
   if (!run) {
     throw new Error("No application run found for that posting URL.");
   }
-  await resumeApplicationHook(run.id, { action: "cancel" });
   if (run.browserSessionId) {
     await closeApplicationBrowser({
       scope: input.scope,
       sessionId: run.browserSessionId,
     });
-  }
-  const durableRunId = durableWorkflowRunId(run.workflowRunId);
-  if (durableRunId) {
-    try {
-      const workflowApi = await import("workflow/api");
-      await workflowApi.getRun(durableRunId).cancel();
-    } catch {
-      // Best-effort cancel of the durable run.
-    }
   }
   await updateApplicationRun({
     executionId: run.id,

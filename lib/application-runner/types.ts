@@ -45,13 +45,6 @@ export interface RunnerQuestion {
 }
 
 export type ApplicationRunResult =
-  | {
-      applyUrl: string;
-      executionId: string;
-      expiresAt: string;
-      message: string;
-      status: "working";
-    }
   /** A start that threw. The run is over; the message says why in one line. */
   | {
       applyUrl: string;
@@ -90,16 +83,25 @@ export type ApplicationRunResult =
     };
 
 /**
- * A run the durable Workflow SDK never took ownership of, so the caller drives
- * each fill step itself. `startApplicationWorkflow` marks these with an
- * `inline:` prefix; a missing id predates the column and is treated the same.
+ * The id `startApplication` records as the run's owner. Every fill runs inline:
+ * the coordinator tool that starts it drives the form to its first pause inside
+ * its own invocation, and `continue_application` drives each step after that.
+ *
+ * This is deliberate, not a fallback. The tools execute inside eve's Nitro
+ * bundle, where eve aliases `workflow/api` to its own vendored Workflow SDK
+ * runtime and applies the `"use workflow"` compiler only to its own execution
+ * sources. A workflow function authored here therefore reaches `start()`
+ * without the compiler's metadata and is rejected as an invalid workflow
+ * function on every call, and eve's flow route on the deployment would not know
+ * the workflow even if it were compiled. eve documents workflow primitives as
+ * an internal detail that tools never touch. A durable fill would need its own
+ * Next-owned entrypoint outside eve, which this project does not have.
+ *
+ * The `inline:` prefix stays for rows written before the durable attempt was
+ * removed; nothing reads the prefix any more.
  */
-export function isInlineWorkflow(workflowRunId: string | null | undefined) {
-  return (
-    workflowRunId === undefined ||
-    workflowRunId === null ||
-    workflowRunId.startsWith("inline:")
-  );
+export function inlineWorkflowRunId(executionId: string) {
+  return `inline:${executionId}`;
 }
 
 /**
@@ -111,15 +113,6 @@ export const liveRunStatuses: ReadonlySet<string> = new Set([
   "running",
   "waiting",
 ]);
-
-/** The durable run id to address through `workflow/api`, or nothing inline. */
-export function durableWorkflowRunId(
-  workflowRunId: string | null | undefined
-): string | undefined {
-  return isInlineWorkflow(workflowRunId)
-    ? undefined
-    : (workflowRunId ?? undefined);
-}
 
 /**
  * Whether a candidate's reply reads as a verification code: four to eight

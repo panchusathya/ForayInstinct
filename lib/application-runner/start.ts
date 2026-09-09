@@ -16,7 +16,7 @@ import {
   applicationRunnerModel,
   type ApplicationRunInput,
   type ApplicationRunResult,
-  isInlineWorkflow,
+  inlineWorkflowRunId,
   liveRunStatuses,
   needsProfileStatus,
 } from "@/lib/application-runner/types";
@@ -26,7 +26,6 @@ import {
 } from "@/lib/application-runner/profile-gate";
 import { closeApplicationBrowser } from "@/lib/application-runner/browser";
 import { runApplicationUntilPause } from "@/lib/application-runner/run";
-import { startApplicationWorkflow } from "@/lib/application-runner/workflow";
 import { applicationPauseMessage } from "@/lib/task-completion";
 
 export async function startApplication(input: {
@@ -112,7 +111,6 @@ export async function startApplication(input: {
     rootSessionId: input.rootSessionId,
     scope: input.scope,
   };
-  const workflowRunId = await startApplicationWorkflow(runInput);
   // A retry reuses the execution row, whose browser session the watchdog has
   // usually already closed. Close it in case it has not been, so the browser
   // is not leaked until the backend's own timeout, then clear the run state
@@ -128,20 +126,14 @@ export async function startApplication(input: {
     executionId: id,
     pauseReason: null,
     status: "running",
-    workflowRunId,
+    workflowRunId: inlineWorkflowRunId(id),
   });
-  if (!isInlineWorkflow(workflowRunId)) {
-    return {
-      applyUrl,
-      executionId: id,
-      expiresAt: claim.expiresAt,
-      message: `Application for ${input.role} is running.`,
-      status: "working",
-    };
-  }
-  // Without a durable run nothing else will ever drive this execution, so the
-  // fill has to finish inside the caller's own invocation. It stops at the
-  // first pause, which continue_application resumes.
+  // Nothing else will ever drive this execution, so the fill has to finish
+  // inside the caller's own invocation (see `inlineWorkflowRunId`). Never
+  // detach it: agent tools run inside eve's Nitro bundle, where a promise left
+  // behind dies as soon as the tool's response flushes, and a fire-and-forget
+  // run once silently abandoned the browser session. It stops at the first
+  // pause, which continue_application resumes.
   let outcome: Awaited<ReturnType<typeof runApplicationUntilPause>>;
   try {
     outcome = await runApplicationUntilPause(runInput);

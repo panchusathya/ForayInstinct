@@ -4,7 +4,6 @@ import { getVercelOidcToken } from "@vercel/oidc";
 import { claimOverdueApplicationLeases } from "@/db/services/application-leases";
 import { applicationExecutionLog } from "@/lib/application-execution";
 import { closeApplicationBrowser } from "@/lib/application-runner/browser";
-import { durableWorkflowRunId } from "@/lib/application-runner/types";
 import { env } from "@/lib/env";
 
 /** Stops overdue application runs before they can exceed the 20-minute cap. */
@@ -23,15 +22,6 @@ export default defineSchedule({
     for (const overdue of overdueRuns) {
       waitUntil(
         (async () => {
-          const durableRunId = durableWorkflowRunId(overdue.workflowRunId);
-          if (durableRunId) {
-            try {
-              const workflowApi = await import("workflow/api");
-              await workflowApi.getRun(durableRunId).cancel();
-            } catch {
-              // Best-effort cancel of the durable fill run.
-            }
-          }
           if (overdue.browserSessionId) {
             await closeApplicationBrowser({
               scope: {

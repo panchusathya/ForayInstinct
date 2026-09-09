@@ -179,7 +179,6 @@ describe("application runner", () => {
       "lib/application-runner/start.ts",
       "lib/application-runner/run.ts",
       "lib/application-runner/fill.ts",
-      "lib/application-runner/workflow.ts",
       "agent/tools/start_application.ts",
       "agent/tools/continue_application.ts",
       "agent/tools/cancel_application.ts",
