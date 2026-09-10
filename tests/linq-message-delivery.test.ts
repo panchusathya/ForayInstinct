@@ -1565,7 +1565,13 @@ function handlerContext(
       get state() {
         return Promise.resolve(threadStore.get(threadId));
       },
-      setState(patch: Record<string, unknown>) {
+      setState(this: unknown, patch: Record<string, unknown>) {
+        // The Chat SDK's setState is a prototype method that reads its state
+        // adapter off `this`. A fake that ignored the receiver let a detached
+        // call pass here and throw in production on every turn.
+        if (this !== context.thread) {
+          throw new Error("setState called without its thread as receiver");
+        }
         threadStore.set(threadId, { ...threadStore.get(threadId), ...patch });
         return Promise.resolve(undefined);
       },

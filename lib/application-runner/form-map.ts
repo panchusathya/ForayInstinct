@@ -7,6 +7,8 @@ import type { SelfIdentification } from "@/lib/self-identification";
 
 export interface VisibleFormField {
   label: string;
+  /** A checkbox group that takes several of its options at once. */
+  multiple?: boolean;
   name: string;
   /** Choices for a select, radio group, or combobox; empty for free text. */
   options?: string[];
@@ -136,6 +138,23 @@ function asksForStartDate(key: string) {
 function asksForRegion(key: string) {
   return /\b(state|region|province)\b/u.test(
     key.replace(/united states( of america)?|\bu ?s ?a?\b/gu, " ")
+  );
+}
+
+/**
+ * A question asking where the candidate lives, worded as a place rather than
+ * a city: Ashby's "Location", Lever's "Current location". Only the bare
+ * wording: "willing to work onsite at our San Francisco location" is about
+ * the office, and the home city must never be typed into it.
+ */
+function asksForLocation(key: string) {
+  // The key carries the control's type after the label ("location text").
+  const wording = key.replace(
+    /\s+(?:text|input|search|combobox|select|listbox|textarea)$/u,
+    ""
+  );
+  return /^(?:current |your |home |primary |candidate )?location(?: city)?$|^where are you (?:based|located)$/u.test(
+    wording
   );
 }
 
@@ -321,10 +340,10 @@ export function mapProfileToFormFields(input: {
     const resolved =
       value === undefined || value === ""
         ? undefined
-        : resolveWithAlternatives(field, value);
+        : resolveWithAlternatives(field, value, input.profile);
     if (resolved !== undefined) {
       fills.push({
-        alternatives: alternativesFor(field, value ?? resolved),
+        alternatives: alternativesFor(field, value ?? resolved, input.profile),
         selector: field.selector,
         value: resolved,
       });
@@ -570,6 +589,7 @@ function valueForField(
   if (/relocat/u.test(key)) return yesNo(profile.willingToRelocate);
   // "In what capacity..." contains city; the home city went into it.
   if (/\bcity\b/u.test(key)) return profile.locationCity;
+  if (asksForLocation(key)) return profile.locationCity;
   if (asksForRegion(key)) return profile.locationRegion;
   if (/zip|postal/u.test(key)) return profile.locationPostalCode;
   if (/country/u.test(key)) return profile.locationCountryCode;
@@ -599,7 +619,11 @@ function valueForField(
  * offers Yes/No. Carrying both lets the fill match against the real options
  * without a second pass.
  */
-function alternativesFor(field: VisibleFormField, value: string) {
+function alternativesFor(
+  field: VisibleFormField,
+  value: string,
+  profile?: CandidateProfile
+) {
   const alternatives = new Set<string>();
   const affirmative = affirmativeAnswer(value);
   if (affirmative !== undefined) {
@@ -627,6 +651,16 @@ function alternativesFor(field: VisibleFormField, value: string) {
       alternatives.add(alternative);
     }
   }
+  // A location typeahead lists places as "City, Region": carry the region in
+  // both its spellings so the suggestion can be matched, not only typed at.
+  if (asksForLocation(key) && profile?.locationRegion) {
+    for (const region of [
+      profile.locationRegion,
+      ...stateAlternatives(profile.locationRegion),
+    ]) {
+      alternatives.add(`${value}, ${region}`);
+    }
+  }
   alternatives.delete(value);
   return alternatives.size > 0 ? [...alternatives] : undefined;
 }
@@ -641,10 +675,14 @@ function alternativesFor(field: VisibleFormField, value: string) {
  * assembled for the browser; the same list settles it here, where the options
  * are known.
  */
-function resolveWithAlternatives(field: VisibleFormField, value: string) {
+function resolveWithAlternatives(
+  field: VisibleFormField,
+  value: string,
+  profile?: CandidateProfile
+) {
   const direct = resolveAgainstOptions(field, value);
   if (direct !== undefined) return direct;
-  for (const alternative of alternativesFor(field, value) ?? []) {
+  for (const alternative of alternativesFor(field, value, profile) ?? []) {
     const resolved = resolveAgainstOptions(field, alternative);
     if (resolved !== undefined) return resolved;
   }

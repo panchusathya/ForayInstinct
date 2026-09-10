@@ -63,59 +63,314 @@ const domHelpers = `
     const holder = node.closest("[data-foray-section]");
     return holder ? holder.getAttribute("data-foray-section") || "" : "";
   };
+  const textOf = (element) => element
+    ? String(element.innerText || element.textContent || "").replace(/\\s+/g, " ").trim()
+    : "";
   /**
-   * The control's own label only. An ancestor lookup would happily return a
-   * neighbouring field's text, which then travels into every downstream
-   * decision as if the page had said it.
+   * Lookups run in the control's own root. A web component (ADP, UKG) keeps
+   * its labels inside its shadow root, where document.getElementById cannot
+   * see them; Playwright hands such a control over, so its root has to be
+   * asked, with the document as the fallback.
    */
-  const ownLabel = (node) => {
-    // aria-labelledby names the label by id, so it is as precise as label[for]
-    // and is how a React-rendered control usually carries its question. Without
-    // it such a field reads as unlabelled and there is nothing to ask about.
-    const labelledBy = node.getAttribute("aria-labelledby");
-    if (labelledBy) {
-      const named = labelledBy
-        .split(/\\s+/)
-        .map((id) => document.getElementById(id))
-        .filter(Boolean)
-        .map((element) => (element.innerText || element.textContent || "").trim())
-        .filter(Boolean)
-        .join(" ");
-      if (named) return named;
-    }
-    if (node.id) {
-      const byFor = document.querySelector("label[for=" + JSON.stringify(node.id) + "]");
-      if (byFor && byFor.innerText) return byFor.innerText.trim();
-    }
-    const parentLabel = node.closest("label");
-    if (parentLabel && parentLabel.innerText) return parentLabel.innerText.trim();
-    return "";
+  const rootOf = (node) => node.getRootNode();
+  const byId = (node, id) => {
+    const root = rootOf(node);
+    return (root.getElementById ? root.getElementById(id) : null) || document.getElementById(id);
   };
-  const labelFor = (node) => ownLabel(node)
-    || (node.getAttribute("aria-label")
-      || node.getAttribute("placeholder")
-      || node.getAttribute("name")
-      || "").trim();
+  // The required mark as pages draw it: * , ✱ (Lever), ∗ and the full-width
+  // star. A regex on "*" alone read every Lever question as optional.
+  const STAR = /[*\\u2731\\u2217\\uFF0A]/;
+  const REQUIRED_WORD = /\\(\\s*required\\s*\\)/i;
+  const OPTIONAL_WORD = /\\(\\s*optional\\s*\\)/i;
+  const PLACEHOLDER_WORDS = /^(?:select|choose|search|please select|start typing|type here)\\b[\\s.…]*(?:an? |one )?(?:option)?[\\s.…]*$/i;
   /**
-   * An asterisk counts only inside the control's own label. Read from an
-   * ancestor it matches the page's "* indicates a required field" note and
-   * marks the whole form required.
+   * A cookie or consent banner's switches are not the form. OneTrust draws
+   * its preference toggles as role=switch inputs over the page, and they were
+   * scanned as fields of the application.
    */
+  const inConsentBanner = (node) => {
+    const overlay = node.closest("[role=dialog], [aria-modal=true], [id^=onetrust], [class*=cookie], [id*=cookie]");
+    return overlay !== null && /cookie|consent preferences|privacy preferences/i.test(textOf(overlay).slice(0, 400));
+  };
+  const controlSelector = "input, textarea, select, button, [role=combobox], [role=listbox], [role=radio], [role=checkbox], [role=switch], [contenteditable=true]";
+  const isNativeChoice = (node) => node.tagName === "INPUT"
+    && /^(radio|checkbox)$/i.test(String(node.getAttribute("type") || ""));
+  /**
+   * The controls in a container that belong to some other field. A container
+   * with none is one field's own entry, and its text is that field's caption;
+   * a container with any spans neighbours, whose words must not travel.
+   * Hidden inputs and icon-only buttons (a typeahead's toggle) are nobody's.
+   */
+  const foreignControls = (container, own) => [...container.querySelectorAll(controlSelector)].filter((element) => {
+    if (own.some((member) => member === element || member.contains(element) || element.contains(member))) return false;
+    const type = String(element.getAttribute("type") || "").toLowerCase();
+    if (type === "hidden") return false;
+    if (!isFileInput(element) && !visible(element)) return false;
+    if (element.tagName === "BUTTON" && textOf(element) === "" && !element.hasAttribute("aria-pressed")) return false;
+    return true;
+  });
+  // aria-labelledby names the label by id, so it is as precise as label[for]
+  // and is how a React-rendered control usually carries its question. Without
+  // it such a field reads as unlabelled and there is nothing to ask about.
+  const labelledByElements = (node) => String(node.getAttribute("aria-labelledby") || "")
+    .split(/\\s+/)
+    .filter(Boolean)
+    .map((id) => byId(node, id))
+    .filter(Boolean);
+  const labelledByText = (node) => labelledByElements(node).map(textOf).filter(Boolean).join(" ");
+  const labelForId = (node) => node.id
+    ? rootOf(node).querySelector("label[for=" + JSON.stringify(node.id) + "]")
+    : null;
+  /**
+   * A label bound to the control's name rather than its id. Ashby binds every
+   * label to the field key, which is the name of the control it belongs to and
+   * the id of nothing; read by id, its Yes/No questions had no wording at all.
+   */
+  const labelForName = (node) => {
+    const name = node.getAttribute("name");
+    if (!name || byId(node, name)) return null;
+    return rootOf(node).querySelector("label[for=" + JSON.stringify(name) + "]");
+  };
+  /**
+   * A caption inside a container that names the field rather than one of its
+   * options: a legend, or a label bound to nothing. A label bound to an
+   * element is that element's, whether an option's or a neighbour's.
+   */
+  const captionElementIn = (container, own) => [...container.querySelectorAll("legend, label")].find((element) => {
+    if (own.some((member) => element === member || element.contains(member) || member.contains(element))) return false;
+    const forId = element.getAttribute("for");
+    if (forId && byId(element, forId)) return false;
+    return textOf(element) !== "";
+  });
+  /**
+   * The field entry around a control or a choice group: the nearest ancestor
+   * holding it and no other field. Its caption is a label or legend bound to
+   * nothing, else its own text with the control's words taken out. The page's
+   * "* indicates a required field" note sits beside many controls, so the
+   * ancestor holding it never qualifies and its words never reach a field;
+   * that is the guarantee the own-label rule gave, kept.
+   */
+  const fieldCaption = (own, ownTexts) => {
+    let ancestor = own[0].parentElement;
+    for (let depth = 0; ancestor && depth < 6; depth += 1, ancestor = ancestor.parentElement) {
+      if (ancestor === document.body || ancestor.tagName === "FORM") break;
+      if (!own.every((member) => ancestor.contains(member))) continue;
+      if (foreignControls(ancestor, own).length > 0) break;
+      const element = captionElementIn(ancestor, own);
+      if (element) return { container: ancestor, element, text: textOf(element) };
+      let text = textOf(ancestor);
+      // The control's own words come out first: a select's text is every
+      // option it offers, thousands of characters on Lever's school list.
+      for (const word of ownTexts.concat(own.map(textOf))) if (word) text = text.split(word).join(" ");
+      text = text.replace(/\\s+/g, " ").trim();
+      // A widget's painted placeholder ("Select...", "Search") is not its
+      // caption; the caption sits one level further out.
+      if (PLACEHOLDER_WORDS.test(text)) text = "";
+      if (text !== "" && text.length <= 300) return { container: ancestor, element: null, text };
+    }
+    return { container: null, element: null, text: "" };
+  };
+  /**
+   * What the page calls a control, and where it says so. In order: the
+   * elements aria-labelledby names, the label bound to its id, the label
+   * wrapping it, the label bound to its name, then its own field entry.
+   */
+  const captionFor = (node) => {
+    const named = labelledByElements(node);
+    if (named.length > 0 && labelledByText(node)) {
+      return { container: named[0].parentElement, element: named[0], text: labelledByText(node) };
+    }
+    const byFor = labelForId(node);
+    if (byFor && textOf(byFor)) return { container: byFor.parentElement, element: byFor, text: textOf(byFor) };
+    const wrapping = node.closest("label");
+    if (wrapping && textOf(wrapping)) return { container: wrapping.parentElement, element: wrapping, text: textOf(wrapping) };
+    const byName = labelForName(node);
+    if (byName && textOf(byName)) return { container: byName.parentElement, element: byName, text: textOf(byName) };
+    return fieldCaption([node], [node.getAttribute("placeholder") || "", String(node.value || "")]);
+  };
+  const ownLabel = (node) => captionFor(node).text;
+  // An aria-label or placeholder that only says "Select" or "Search" names
+  // the widget, not the question; a control with no better word is unlabelled.
+  const labelFor = (node) => ownLabel(node)
+    || [node.getAttribute("aria-label"), node.getAttribute("placeholder"), node.getAttribute("name")]
+      .map((text) => String(text || "").trim())
+      .find((text) => text !== "" && !PLACEHOLDER_WORDS.test(text))
+    || "";
+  /**
+   * Whether an element carries the required mark: a star in its text, the
+   * word in its class (Ashby's label, Lever's field), a star drawn by CSS
+   * after it (Ashby, ADP), or a marked descendant.
+   */
+  const starMarked = (element) => {
+    if (!element || element === document.body) return false;
+    const text = textOf(element);
+    if (STAR.test(text) || REQUIRED_WORD.test(text)) return true;
+    if (/(^|[\\s_-])required([\\s_-]|$)/i.test(String(element.className || ""))) return true;
+    if (element.querySelector('[class*="required"], abbr[title*="required" i]') !== null) return true;
+    try {
+      if (STAR.test(getComputedStyle(element, "::after").content)) return true;
+    } catch (error) {
+      // A detached node has no computed style; it is not marked.
+    }
+    return false;
+  };
+  /**
+   * The mark is read from the control's own caption and its own field entry,
+   * never from beyond: an ancestor spanning other fields is where the page's
+   * "* indicates a required field" note lives.
+   */
+  const captionRequired = (caption, own) => {
+    if (OPTIONAL_WORD.test(caption.text)) return false;
+    if (STAR.test(caption.text) || REQUIRED_WORD.test(caption.text) || starMarked(caption.element)) return true;
+    const entry = caption.container;
+    return entry !== null && entry !== document.body
+      && foreignControls(entry, own).length === 0
+      && starMarked(entry);
+  };
   const isRequired = (node) => node.required === true
     || node.getAttribute("aria-required") === "true"
-    || /\\*/.test(ownLabel(node).slice(0, 200));
+    || captionRequired(captionFor(node), [node]);
   /**
    * Whether this node is the editable interior of a select-like widget rather
    * than the widget itself: some other element carries the combobox role for
-   * it. Nothing broader. A react-select puts role=combobox on its typeahead
-   * input, so that input IS the widget; a rule that skipped every input with
-   * aria-autocomplete removed every dropdown on a Greenhouse form from both
-   * scans at once, so nothing filled them and nothing reported them blank, and
-   * the form went to the candidate for approval with all of them empty.
+   * it and is drawn. Nothing broader. A react-select puts role=combobox on its
+   * typeahead input, so that input IS the widget; a rule that skipped every
+   * input with aria-autocomplete removed every dropdown on a Greenhouse form
+   * from both scans at once, so nothing filled them and nothing reported them
+   * blank, and the form went to the candidate for approval with all of them
+   * empty. An owner the page does not draw (Rippling keeps a hidden
+   * role=combobox shell beside the visible input) owns nothing.
    */
   const isWidgetInterior = (node) => {
     const owner = node.closest("[role=combobox], [role=listbox]");
-    return Boolean(owner && owner !== node);
+    return Boolean(owner && owner !== node && visible(owner));
+  };
+  /**
+   * A control that opens a list, whatever it calls itself: the ARIA roles, an
+   * input that says it autocompletes from a list (Rippling's location has the
+   * behaviour and no role), or a button that pops a listbox (Workday).
+   */
+  const isListControl = (node) => {
+    const role = String(node.getAttribute("role") || "").toLowerCase();
+    if (role === "combobox" || role === "listbox") return true;
+    const haspopup = String(node.getAttribute("aria-haspopup") || "").toLowerCase();
+    const tag = node.tagName.toLowerCase();
+    if (tag === "input" && (String(node.getAttribute("aria-autocomplete") || "").toLowerCase() === "list" || haspopup === "listbox")) return true;
+    return tag === "button" && haspopup === "listbox";
+  };
+  /** The element a person clicks for an option: its proxy, its label, or itself. */
+  const proxyFor = (option) => {
+    if (!isNativeChoice(option)) return option;
+    return option.closest("[role=radio], [role=checkbox], [role=switch]") || labelForId(option) || option.closest("label") || option;
+  };
+  const optionText = (option) => {
+    if (isNativeChoice(option)) {
+      return textOf(labelForId(option)) || textOf(option.closest("label")) || labelledByText(option)
+        || textOf(option.closest("[role=radio], [role=checkbox]"))
+        || String(option.getAttribute("aria-label") || option.value || "").trim();
+    }
+    return textOf(option) || labelledByText(option)
+      || String(option.getAttribute("aria-label") || option.getAttribute("data-value") || "").trim();
+  };
+  const optionChecked = (option) => isNativeChoice(option)
+    ? option.checked === true
+    : option.getAttribute("aria-checked") === "true" || option.getAttribute("aria-pressed") === "true";
+  const optionSelector = "input[type=radio], input[type=checkbox], [role=radio], [role=checkbox], [role=switch], button[aria-pressed]";
+  const commonAncestor = (elements) => {
+    let ancestor = elements[0];
+    while (ancestor && !elements.every((element) => ancestor.contains(element))) ancestor = ancestor.parentElement;
+    return ancestor || elements[0];
+  };
+  /**
+   * The caption of a choice group: what the group wrapper is labelled by, its
+   * legend, a label inside it bound to nothing (Ashby's question label sits in
+   * the fieldset with the options), else the field entry around it. Never an
+   * option's own label, which is what a group without a legend used to be
+   * called: "Yes".
+   */
+  const groupCaption = (container, members, optionTexts) => {
+    const named = labelledByElements(container);
+    if (named.length > 0 && labelledByText(container)) {
+      return { container: container.parentElement, element: named[0], text: labelledByText(container) };
+    }
+    const legend = container.querySelector("legend");
+    if (legend && textOf(legend)) return { container, element: legend, text: textOf(legend) };
+    const own = members.concat(members.map((member) => proxyFor(member)));
+    const inside = container !== members[0] ? captionElementIn(container, own) : undefined;
+    if (inside) return { container, element: inside, text: textOf(inside) };
+    return fieldCaption(container === members[0] ? members : [container], optionTexts);
+  };
+  /**
+   * The choice group a node belongs to, or undefined for a node that is not a
+   * choice control. One model for every way a page draws a single choice:
+   * native radios sharing a name (drawn, at opacity 0 under a styled span, or
+   * hidden behind a role=radio proxy), role=radio elements in a radiogroup or
+   * a fieldset, and Yes/No drawn as two aria-pressed buttons over a hidden
+   * checkbox (Ashby). Checkboxes sharing a name or a fieldset are one
+   * multiple-choice group; a lone checkbox is its own.
+   */
+  const choiceGroupOf = (node) => {
+    const tag = node.tagName.toLowerCase();
+    const role = String(node.getAttribute("role") || "").toLowerCase();
+    const type = String(node.getAttribute("type") || "").toLowerCase();
+    const native = tag === "input" && (type === "radio" || type === "checkbox");
+    const proxy = role === "radio" || role === "checkbox" || role === "switch"
+      || (tag === "button" && node.hasAttribute("aria-pressed"));
+    if (!native && !proxy) return undefined;
+    const name = native ? String(node.getAttribute("name") || "") : "";
+    let container = null;
+    let members = [];
+    if (native && name) {
+      members = [...rootOf(node).querySelectorAll("input[type=" + type + "][name=" + JSON.stringify(name) + "]")];
+      container = members.length > 1 ? commonAncestor(members) : null;
+      if (members.length === 1) {
+        // A lone named checkbox may still be one of a fieldset's options, as
+        // Ashby names each option by its own text.
+        const group = node.closest("fieldset, [role=group], [role=radiogroup]");
+        const siblings = group ? [...group.querySelectorAll("input[type=" + type + "]")] : [];
+        if (group && siblings.length > 1 && foreignControls(group, siblings).length === 0) {
+          container = group;
+          members = siblings;
+        }
+      }
+    } else if (!native) {
+      // Proxies name nothing: the group is the nearest ancestor holding two or
+      // more of them and no other field.
+      let ancestor = node.parentElement;
+      for (let depth = 0; ancestor && depth < 5; depth += 1, ancestor = ancestor.parentElement) {
+        const found = [...ancestor.querySelectorAll(optionSelector)];
+        // The drawn options are the group; a native control among them is
+        // the record behind them (Ashby's hidden checkbox under its Yes/No
+        // buttons, the radio inside a role=radio element), not an option.
+        const drawn = found.filter((option) => !isNativeChoice(option));
+        const candidates = drawn.length >= 2 ? drawn : found;
+        if (candidates.length < 2) continue;
+        if (foreignControls(ancestor, candidates).length > 0) break;
+        container = ancestor;
+        members = candidates;
+        break;
+      }
+    }
+    if (!container) {
+      container = node;
+      members = [node];
+    }
+    // Drawn somewhere: a group whose every option and proxy is hidden is not
+    // one a candidate can touch (react-select's decoy required input is one).
+    const shown = members.some((member) => visible(proxyFor(member)) || (visible(member) && !assistiveHidden(member)));
+    if (!shown) return undefined;
+    const kind = native ? type : (role === "radio" || tag === "button" ? "radio" : "checkbox");
+    const options = members.map((member) => ({ element: member, proxy: proxyFor(member), text: optionText(member) }));
+    const caption = members.length > 1 || container !== node
+      ? groupCaption(container, members, options.map((option) => option.text))
+      : captionFor(node);
+    const required = members.some((member) => member.required === true || member.getAttribute("aria-required") === "true")
+      || container.getAttribute("aria-required") === "true"
+      || captionRequired(caption, members.concat(members.map((member) => member.closest("label") || member)));
+    const selector = native && name && members.length > 1 && container !== node
+      ? "input[type=" + type + "][name=" + JSON.stringify(name) + "]"
+      : selectorFor(container, 0);
+    return { caption, container, kind, members, name, options, required, selector };
   };
   /**
    * The placeholder a select-like widget shows while it has no value, if the
@@ -140,9 +395,19 @@ const domHelpers = `
  * submission — work authorization above all — and a control this misses is
  * worse than an unmapped one, because nothing downstream can report it.
  */
+/**
+ * Every control the scans look at. Beyond native controls and the ARIA list
+ * roles: the elements a page draws a choice with (role=radio, role=checkbox,
+ * role=switch, a Yes/No pair of aria-pressed buttons), an input that
+ * autocompletes from a list without saying it is a combobox, and a button
+ * that pops a listbox.
+ */
+const scanSelector =
+  "input, textarea, select, [role=combobox], [role=radiogroup], [role=listbox], [role=radio], [role=checkbox], [role=switch], button[aria-pressed], button[aria-haspopup=listbox], input[aria-autocomplete=list], input[aria-haspopup=listbox]";
+
 export const collectVisibleFieldsCode = `
 const fields = await page.$$eval(
-  "input, textarea, select, [role=combobox], [role=radiogroup], [role=listbox]",
+  ${JSON.stringify(scanSelector)},
   (nodes) => {
 ${domHelpers}
     const optionsFor = (node) => {
@@ -151,7 +416,7 @@ ${domHelpers}
         return [...node.options].map((option) => (option.label || option.text || "").trim()).filter(Boolean);
       }
       const owned = node.getAttribute("aria-controls") || node.getAttribute("aria-owns");
-      const listbox = (owned && document.getElementById(owned))
+      const listbox = (owned && byId(node, owned))
         || node.parentElement?.querySelector("[role=listbox]");
       if (listbox) {
         return [...listbox.querySelectorAll("[role=option]")]
@@ -160,46 +425,47 @@ ${domHelpers}
       }
       return [];
     };
-    const seenRadioGroups = new Set();
+    const seenGroups = new Set();
     return nodes.flatMap((node, index) => {
+      if (inConsentBanner(node)) return [];
+      // One entry per choice group, not per option, whatever the options are
+      // drawn as; and read before the visibility test, because the native
+      // control behind a styled option is often hidden while its proxy shows.
+      const group = choiceGroupOf(node);
+      if (group) {
+        if (seenGroups.has(group.container)) return [];
+        seenGroups.add(group.container);
+        const grouped = group.members.length > 1;
+        return [{
+          label: group.caption.text.slice(0, 200),
+          ...(grouped && group.kind === "checkbox" ? { multiple: true } : {}),
+          name: group.name,
+          options: grouped ? group.options.map((option) => option.text).filter(Boolean) : [],
+          required: group.required,
+          section: sectionOf(group.container),
+          selector: group.selector,
+          tag: group.kind,
+          type: group.kind,
+        }];
+      }
       if (!candidateFacing(node)) return [];
       const tagName = node.tagName.toLowerCase();
       const role = (node.getAttribute("role") || "").toLowerCase();
       const type = (node.getAttribute("type") || tagName).toLowerCase();
-      if (type === "hidden" || type === "submit" || type === "button" || type === "image") return [];
+      // A radiogroup wrapper's options were collected through the options.
+      if (role === "radiogroup") return [];
+      if (type === "hidden" || type === "submit" || type === "image") return [];
+      if (type === "button" && !isListControl(node)) return [];
       // A widget's inner input is part of the combobox already collected, not
       // a field of its own. Counted separately it becomes a required control
       // with no label and nothing to ask about.
       if (isWidgetInterior(node)) return [];
 
-      // One entry per radio group, not per radio.
-      if (type === "radio") {
-        const name = node.getAttribute("name") || "";
-        if (name && seenRadioGroups.has(name)) return [];
-        if (name) seenRadioGroups.add(name);
-        const peers = name
-          ? [...document.querySelectorAll('input[type=radio][name=' + JSON.stringify(name) + ']')]
-          : [node];
-        const group = node.closest("fieldset, [role=radiogroup]");
-        const groupLabel = group && group.querySelector("legend, label");
-        return [{
-          label: ((groupLabel && groupLabel.innerText) || labelFor(node)).slice(0, 200).trim(),
-          name,
-          options: peers.map((peer) => labelFor(peer)).filter(Boolean),
-          required: peers.some((peer) => isRequired(peer)),
-          selector: name ? 'input[type=radio][name=' + JSON.stringify(name) + ']' : selectorFor(node, index),
-          tag: "radio",
-          type: "radio",
-        }];
-      }
-
-      const kind = role === "combobox" || role === "listbox"
+      const kind = isListControl(node)
         ? "combobox"
         : type === "file"
           ? "file"
-          : type === "checkbox"
-            ? "checkbox"
-            : tagName;
+          : tagName;
       return [{
         label: labelFor(node).slice(0, 200),
         name: node.getAttribute("name") || "",
@@ -269,34 +535,116 @@ for (const fill of fills) {
     }
     const role = String(await locator.getAttribute("role") || "").toLowerCase();
     const tag = String(await locator.evaluate((node) => node.tagName)).toLowerCase();
-
-    if (type === "radio") {
-      const group = page.locator(fill.selector);
-      const count = await group.count();
-      let checked = false;
-      for (let i = 0; i < count; i += 1) {
-        const option = group.nth(i);
-        const text = await option.evaluate((node) => {
-          const byFor = node.id && document.querySelector("label[for=" + JSON.stringify(node.id) + "]");
-          const own = node.closest("label");
-          return ((byFor && byFor.innerText) || (own && own.innerText) || node.value || "").trim();
-        });
-        const wanted = matchOption([String(text)], wantedList(fill));
-        if (wanted !== undefined) {
-          await option.check();
-          checked = true;
-          break;
-        }
+    const shape = await locator.evaluate((node) => {
+      const isChoice = (element) => element.tagName === "INPUT"
+        && /^(radio|checkbox)$/i.test(String(element.getAttribute("type") || ""));
+      // The options a group selector resolves to: the named radios or
+      // checkboxes themselves, or the drawn options inside a container (a
+      // role=radio element, a Yes/No button, a native control under a label).
+      // Drawn proxies win over the native controls they stand for.
+      if (isChoice(node)) {
+        const name = node.getAttribute("name");
+        const type = String(node.getAttribute("type")).toLowerCase();
+        const peers = name
+          ? [...node.getRootNode().querySelectorAll("input[type=" + type + "][name=" + JSON.stringify(name) + "]")]
+          : [node];
+        return { kind: type, options: peers.length };
       }
-      if (checked) filled.push(fill.selector);
-      else skipped.push({ reason: "no-option", selector: fill.selector });
+      const proxies = [...node.querySelectorAll("[role=radio], [role=checkbox], [role=switch], button[aria-pressed]")];
+      const natives = [...node.querySelectorAll("input[type=radio], input[type=checkbox]")];
+      const options = proxies.length > 0 ? proxies : natives;
+      const roleHere = String(node.getAttribute("role") || "").toLowerCase();
+      if (options.length === 0) {
+        return roleHere === "checkbox" || roleHere === "switch" ? { kind: "checkbox", options: 0 } : undefined;
+      }
+      const single = options.every((option) => (option.getAttribute("role") || "").toLowerCase() === "checkbox"
+        || (option.getAttribute("role") || "").toLowerCase() === "switch"
+        || String(option.getAttribute("type") || "").toLowerCase() === "checkbox");
+      return { kind: single ? "checkbox" : "radio", options: options.length };
+    });
+
+    if (shape && shape.options > 0 && !(shape.kind === "checkbox" && shape.options === 1)) {
+      // One choice group, however the page draws it. Each option is named by
+      // its label, its proxy's text or its value, and chosen by clicking what
+      // a person would click: the drawn proxy, the label, then the control
+      // itself, forced as a last resort. Nothing counts as chosen until the
+      // page says so; a check() that Playwright refused on a hidden control
+      // used to land in skipped under an error nobody re-asked about.
+      const optionLocator = type === "radio" || type === "checkbox"
+        ? page.locator(fill.selector)
+        : locator.locator("[role=radio], [role=checkbox], [role=switch], button[aria-pressed]").or(locator.locator("input[type=radio], input[type=checkbox]"));
+      const count = await optionLocator.count();
+      const texts = [];
+      for (let i = 0; i < count; i += 1) {
+        texts.push(String(await optionLocator.nth(i).evaluate((node) => {
+          const root = node.getRootNode();
+          const text = (element) => element ? String(element.innerText || element.textContent || "").replace(/\\s+/g, " ").trim() : "";
+          const named = String(node.getAttribute("aria-labelledby") || "").split(/\\s+/).filter(Boolean)
+            .map((id) => (root.getElementById ? root.getElementById(id) : null) || document.getElementById(id)).map(text).filter(Boolean).join(" ");
+          if (node.tagName === "INPUT") {
+            const byFor = node.id ? root.querySelector("label[for=" + JSON.stringify(node.id) + "]") : null;
+            return text(byFor) || text(node.closest("label")) || named || text(node.closest("[role=radio], [role=checkbox]")) || String(node.getAttribute("aria-label") || node.value || "").trim();
+          }
+          return text(node) || named || String(node.getAttribute("aria-label") || node.getAttribute("data-value") || "").trim();
+        })));
+      }
+      const isOn = (option) => option.evaluate((node) => node.tagName === "INPUT"
+        ? node.checked === true
+        : node.getAttribute("aria-checked") === "true" || node.getAttribute("aria-pressed") === "true");
+      const choose = async (option) => {
+        if (await isOn(option)) return true;
+        const attempts = [
+          () => option.evaluate((node) => {
+            const root = node.getRootNode();
+            const proxy = node.tagName === "INPUT"
+              ? node.closest("[role=radio], [role=checkbox], [role=switch]")
+                || (node.id ? root.querySelector("label[for=" + JSON.stringify(node.id) + "]") : null)
+                || node.closest("label")
+              : node;
+            (proxy || node).click();
+          }),
+          () => option.click({ timeout: 3000 }),
+          () => option.click({ force: true, timeout: 3000 }),
+        ];
+        for (const attempt of attempts) {
+          await attempt().catch(() => undefined);
+          await page.waitForTimeout(150);
+          if (await isOn(option)) return true;
+        }
+        return false;
+      };
+      // A multiple-choice group takes every listed answer; a single choice the
+      // first phrasing that matches.
+      const wanted = shape.kind === "checkbox" && count > 1
+        ? String(fill.value).split(/\\s*[;|]\\s*|,\\s+/).map((part) => part.trim()).filter(Boolean)
+        : [undefined];
+      let chosen = 0;
+      for (const part of wanted) {
+        const match = matchOption(texts, part === undefined ? wantedList(fill) : [part]);
+        if (match === undefined) continue;
+        const option = optionLocator.nth(texts.indexOf(match));
+        if (await choose(option)) chosen += 1;
+        if (part === undefined) break;
+      }
+      if (chosen > 0) {
+        filled.push(fill.selector);
+      } else {
+        offered.push({ options: texts, selector: fill.selector });
+        skipped.push({ reason: "no-option", selector: fill.selector });
+      }
       continue;
     }
 
-    if (type === "checkbox") {
+    if (type === "checkbox" || (shape && shape.kind === "checkbox")) {
       const on = /^(yes|true|1|on|checked)$/i.test(String(fill.value).trim());
-      if (on) await locator.check();
-      else await locator.uncheck();
+      if (type === "checkbox") {
+        if (on) await locator.check();
+        else await locator.uncheck();
+      } else {
+        // A role=checkbox or role=switch element: click when its state differs.
+        const state = await locator.getAttribute("aria-checked");
+        if ((state === "true") !== on) await locator.click({ timeout: 3000 });
+      }
       filled.push(fill.selector);
       continue;
     }
@@ -316,7 +664,9 @@ for (const fill of fills) {
       continue;
     }
 
-    if (role === "combobox" || role === "listbox") {
+    const autocompletes = String(await locator.getAttribute("aria-autocomplete") || "").toLowerCase() === "list";
+    const popsList = String(await locator.getAttribute("aria-haspopup") || "").toLowerCase() === "listbox";
+    if (role === "combobox" || role === "listbox" || autocompletes || popsList) {
       // A react-select renders no listbox until it is opened, so its choices
       // cannot be read when the page is first scanned. Open it, read what is
       // really there, then decide. The click can be intercepted by the
@@ -355,17 +705,30 @@ for (const fill of fills) {
       // choices is a closed set, where typing would only filter away the
       // options the caller needs to see.
       const box = tag === "input" ? locator : locator.locator("input").first();
-      const typeahead = shown.length === 0 && (await box.count()) > 0;
+      // A readonly combobox input (Workable) is a closed list opened by the
+      // click above; typing into it does nothing.
+      const readonly = (await box.count()) > 0 && (await box.getAttribute("readonly").catch(() => null)) !== null;
+      const typeahead = shown.length === 0 && (await box.count()) > 0 && !readonly;
       if (wanted === undefined && typeahead) {
         for (const value of wantedList(fill)) {
           await box.fill(value);
-          const deadline = Date.now() + 2500;
+          // A geocoding suggestion is a network round trip through the proxy;
+          // 2.5s cut Ashby's off and the city never landed.
+          const deadline = Date.now() + 4000;
           live = [];
           while (live.length === 0 && Date.now() < deadline) {
             await page.waitForTimeout(200);
             live = await liveOptions();
           }
           wanted = matchOption(live, [value]);
+          // The suggestion the widget itself put first is the page's own
+          // reading of what was typed ("San Francisco" → "San Francisco,
+          // California, United States"); take it when it begins that way.
+          if (wanted === undefined && live.length > 0) {
+            const first = await optionRoot.locator("[role=option][aria-selected=true]").first().innerText().catch(() => "");
+            const typed = value.trim().toLowerCase();
+            if (first && first.trim().toLowerCase().startsWith(typed)) wanted = first.trim();
+          }
           if (wanted !== undefined) break;
         }
         // Leave the page as it was found: typed text a widget did not accept
@@ -431,40 +794,54 @@ return { index: exact >= 0 ? exact : same };
 
 export const collectEmptyRequiredFieldsCode = `
 const empty = await page.$$eval(
-  "input, textarea, select, [role=combobox], [role=listbox]",
+  ${JSON.stringify(scanSelector)},
   (nodes) => {
 ${domHelpers}
-    const seenRadioGroups = new Set();
+    const seenGroups = new Set();
     return nodes.flatMap((node, index) => {
+      if (inConsentBanner(node)) return [];
+      // A choice group is blank when none of its options is on, whatever the
+      // options are drawn as. The same model the field scan uses, so a group
+      // the scan can see is one this check can report; a radiogroup of
+      // role=radio elements used to be visible to neither.
+      const group = choiceGroupOf(node);
+      if (group) {
+        if (seenGroups.has(group.container)) return [];
+        seenGroups.add(group.container);
+        if (!group.required) return [];
+        if (group.members.some((member) => optionChecked(member))) return [];
+        return [{
+          label: group.caption.text.slice(0, 200),
+          nearby: "",
+          options: group.members.length > 1 ? group.options.map((option) => option.text).filter(Boolean) : [],
+          selector: group.selector,
+          tag: group.kind,
+        }];
+      }
       if (!candidateFacing(node)) return [];
       const tagName = node.tagName.toLowerCase();
       const role = (node.getAttribute("role") || "").toLowerCase();
       const type = (node.getAttribute("type") || tagName).toLowerCase();
-      if (type === "hidden" || type === "submit" || type === "button" || type === "image") return [];
+      if (role === "radiogroup") return [];
+      if (type === "hidden" || type === "submit" || type === "image") return [];
+      if (type === "button" && !isListControl(node)) return [];
       // A widget's inner input is part of the combobox already collected, not
       // a field of its own. Counted separately it becomes a required control
       // with no label and nothing to ask about.
       if (isWidgetInterior(node)) return [];
       if (!isRequired(node)) return [];
       let blank;
-      if (type === "radio") {
-        const name = node.getAttribute("name") || "";
-        if (name && seenRadioGroups.has(name)) return [];
-        if (name) seenRadioGroups.add(name);
-        const peers = name
-          ? [...document.querySelectorAll('input[type=radio][name=' + JSON.stringify(name) + ']')]
-          : [node];
-        blank = !peers.some((peer) => peer.checked);
-      } else if (type === "checkbox") {
-        blank = node.checked !== true;
-      } else if (type === "file") {
+      if (type === "file") {
         blank = !(node.files && node.files.length > 0);
-      } else if (role === "combobox" || role === "listbox") {
+      } else if (isListControl(node)) {
         // Whatever the widget shows once a choice is made. A react-select keeps
         // its typeahead input empty and paints the chosen option in a sibling,
         // so the input alone reads blank forever and the run stalls on a
-        // question the candidate has already answered. Walk a few levels up
-        // and treat any text other than the label or a placeholder as a choice.
+        // question the candidate has already answered. Read the widget's own
+        // field entry and treat any text other than the label, a placeholder
+        // or the required mark as a choice. Only its own entry: the walk used
+        // to run three levels up regardless, and on Ashby read the neighbour's
+        // answer as this field's.
         const own = (node.value || node.innerText || node.textContent || "").trim();
         const label = labelFor(node).replace(/\\s+/g, " ").trim();
         const placeholderNode = describedPlaceholder(node);
@@ -474,14 +851,16 @@ ${domHelpers}
         ].map((text) => text.replace(/\\s+/g, " ").trim()).filter(Boolean);
         let shown = "";
         let ancestor = node.parentElement;
-        for (let depth = 0; ancestor && depth < 3 && shown === ""; depth += 1) {
-          shown = (ancestor.innerText || "").replace(/\\s+/g, " ").trim();
-          if (label && shown.startsWith(label)) shown = shown.slice(label.length).trim();
-          ancestor = ancestor.parentElement;
+        for (let depth = 0; ancestor && depth < 4 && shown === ""; depth += 1, ancestor = ancestor.parentElement) {
+          if (ancestor === document.body || foreignControls(ancestor, [node]).length > 0) break;
+          shown = textOf(ancestor);
+          if (label) shown = shown.split(label).join(" ");
+          for (const placeholder of placeholders) shown = shown.split(placeholder).join(" ");
+          shown = shown.replace(STAR, " ").replace(REQUIRED_WORD, " ").replace(/\\s+/g, " ").trim();
         }
         const chosen = shown !== ""
           && !placeholders.includes(shown)
-          && !/^(select|choose|please select)\\b[\\s.…]*(an? |one )?(option)?\\.{0,3}$/i.test(shown);
+          && !/^(select|choose|please select|start typing)\\b[\\s.…]*(an? |one )?(option)?\\.{0,3}$/i.test(shown);
         // The widget pointing at its own placeholder outranks any text found
         // nearby: that is the page saying nothing is chosen.
         blank = own === "" && (placeholderNode !== undefined || !chosen);
@@ -867,7 +1246,11 @@ const enough = (found) => found.count >= 2 || found.files > 0;
 const settle = async (budgetMs) => {
   const deadline = Date.now() + budgetMs;
   let found = await fillable();
-  while (!enough(found) && Date.now() < deadline) {
+  let previous = -1;
+  // Enough, and steady: a form that paints in stages is read once two polls
+  // in a row agree on its size, not at the first two controls.
+  while (Date.now() < deadline && (!enough(found) || found.count !== previous)) {
+    previous = found.count;
     await page.waitForTimeout(500);
     found = await fillable();
   }
@@ -886,11 +1269,15 @@ const controls = await page.evaluate((selector) => {
     return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
   };
   const applyWording = /^\\s*(?:apply(?:\\s+now|\\s+here|\\s+for\\s+this\\s+(?:job|position|role)|\\s+to\\s+this\\s+(?:job|position|role))?|start\\s+(?:your\\s+)?application|i'?m\\s+interested)\\s*$/i;
-  const tabWording = /^\\s*(?:application|apply)\\s*$/i;
+  const tabWording = /^\\s*(?:application|apply|apply\\s+manually|continue\\s+(?:to\\s+)?(?:the\\s+)?application)\\s*$/i;
   const applyPath = /\\/(?:apply|application)(?:\\/|$|[?#])/i;
+  // "Apply with Indeed" hands the candidate to another site's sign-in, not to
+  // the form. SmartRecruiters opens on a row of those above the manual path.
+  const thirdParty = /\\bwith\\s+(?:indeed|linkedin|seek|google|facebook|apple)\\b/i;
   return [...document.querySelectorAll(selector)].flatMap((node, index) => {
     if (!visible(node)) return [];
     const text = (node.innerText || node.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
+    if (thirdParty.test(text)) return [];
     const anchor = node.closest("a");
     const href = anchor ? String(anchor.href || "") : String(node.getAttribute("href") || "");
     // Apply wording first, then a link into the form, then a bare tab label.

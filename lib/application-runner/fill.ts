@@ -78,6 +78,7 @@ export type FillStepResult =
 
 const visibleFieldSchema = z.object({
   label: z.string(),
+  multiple: z.boolean().optional(),
   name: z.string(),
   options: z.array(z.string()).optional(),
   required: z.boolean(),
@@ -91,6 +92,7 @@ const emptyRequiredSchema = z.object({
     z.object({
       label: z.string(),
       nearby: z.string().default(""),
+      options: z.array(z.string()).optional(),
       selector: z.string(),
       tag: z.string().default(""),
     })
@@ -359,7 +361,10 @@ async function blankRequiredPause(
     const key = label.toLowerCase();
     if (labels.has(key)) continue;
     labels.add(key);
-    const options = input.knownOptions?.(field.selector) ?? [];
+    // The choices as the page drew them, when the blank check read them off
+    // the group itself; else whatever an earlier scan or refusal recorded.
+    const known = input.knownOptions?.(field.selector) ?? [];
+    const options = known.length > 0 ? known : (field.options ?? []);
     questions.push(options.length > 0 ? { label, options } : { label });
   }
   const unreadable = stillEmpty.filter(
@@ -638,14 +643,41 @@ export async function fillVisibleForm(
   });
   for (const field of grown) bySelector.set(field.selector, field);
 
+  // A conditional field appears once an earlier answer lands (Ashby shows
+  // the follow-up to a Yes), so the first scan never saw it. One more look,
+  // and one pass over whatever is new, before the page is asked what is blank.
+  const revealed = await parseResult(
+    input.browserSessionId,
+    collectVisibleFieldsCode,
+    z.object({ fields: z.array(visibleFieldSchema) }),
+    "collect_fields_revealed"
+  );
+  const newFields = (revealed?.fields ?? []).filter(
+    (field) => !bySelector.has(field.selector) && field.tag !== "file"
+  );
+  let refusedRows = report.refused;
+  let unmapped = mapped.unmapped;
+  if (newFields.length > 0) {
+    for (const field of newFields) bySelector.set(field.selector, field);
+    const extra = mapProfileToFormFields({
+      fields: newFields,
+      identity,
+      profile,
+      selfIdentification,
+    });
+    const more = await applyFills(input.browserSessionId, extra.fills);
+    refusedRows = [...refusedRows, ...more.refused];
+    unmapped = [...unmapped, ...extra.unmapped];
+  }
+
   // A control that refused every phrasing is a question again, now carrying
   // the choices the page really offers. Before, it vanished here: it was
   // neither unmapped nor filled, so nothing ever asked about it and the run
   // stalled on it round after round.
   const refusedOptions = new Map(
-    report.refused.map((row) => [row.selector, row.options] as const)
+    refusedRows.map((row) => [row.selector, row.options] as const)
   );
-  const refused = report.refused.flatMap((row) => {
+  const refused = refusedRows.flatMap((row) => {
     const field = bySelector.get(row.selector);
     if (!field) return [];
     return [
@@ -658,7 +690,7 @@ export async function fillVisibleForm(
   const seen = new Set<string>();
   // Only fields with wording worth showing a candidate. An unlabelled one has
   // no question for the helper to name, and its selector must never become one.
-  const askable = [...mapped.unmapped, ...refused].filter((field) => {
+  const askable = [...unmapped, ...refused].filter((field) => {
     if (field.tag === "file") return false;
     if (
       answeredSelectors.has(field.selector) &&

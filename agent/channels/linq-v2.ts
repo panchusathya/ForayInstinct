@@ -1726,9 +1726,17 @@ function rememberLinqService(
   if (fromThread) {
     state.lastLinqService = fromThread;
     // Also where a delivery made outside a turn can read it. Channel state
-    // travels with the turn; the thread store travels with the thread.
+    // travels with the turn; the thread store travels with the thread. The
+    // thread itself is passed: setState is a prototype method that reads its
+    // state adapter off `this`, and detached onto a bare object it threw
+    // "Cannot read properties of undefined (reading 'get')" on every turn.
     const { setState } = thread;
-    if (setState) void rememberLinqThreadService({ setState }, fromThread);
+    if (setState) {
+      void rememberLinqThreadService(
+        { setState: setState.bind(thread) },
+        fromThread
+      );
+    }
   }
   return (
     fromThread ||
