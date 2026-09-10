@@ -1,4 +1,5 @@
 import { decode as decodePng, type DecodedPng } from "fast-png";
+import { registrableDomain } from "@/lib/browser/domains";
 
 const GOOGLE_S2 = "https://www.google.com/s2/favicons?domain={domain}&sz=256";
 const FETCH_TIMEOUT_MS = 4000;
@@ -60,7 +61,26 @@ const AGGREGATOR_HOSTS = [
   "startup.jobs",
   "remoterocketship.com",
   "levels.fyi",
+  // Boards public search has actually sent a candidate at. Each keeps a copy
+  // of someone else's posting with no application on it, so a run against one
+  // opens a page with nothing to fill and nothing to click.
+  "designjobs.world",
+  "jobserve.com",
+  "localjobs.com",
+  "opentoworkremote.com",
+  "internexxus.com",
+  "simplify.jobs",
+  "jobs-in.us",
+  "jobtrail.web1337.net",
 ] as const;
+
+/**
+ * A word that names the hiring, not the employer. Tested against the
+ * registrable domain alone: a company announces its hiring area in a
+ * subdomain or a path ("careers.bankofamerica.com"), where a board announces
+ * it in the domain itself ("designjobs.world", "localjobs.com").
+ */
+const JOB_BOARD_WORDS = /jobs?|careers?|hiring|recruit|vacanc|employment/u;
 
 export function sanitizeHostname(raw: string) {
   let host = raw.trim().toLowerCase();
@@ -99,8 +119,23 @@ export function isAtsHost(host: string) {
   return matchesSuffix(host, ATS_HOSTS);
 }
 
+/**
+ * A host that carries other people's postings rather than an employer's own.
+ *
+ * The named list is what public search has been seen to return; the domain
+ * rule catches the rest, because these boards are all named for the thing
+ * they list. An ATS is never one of them however it is named — a posting on
+ * `myworkdayjobs.com` or `jobs.lever.co` is the employer's own application —
+ * so it is ruled out first.
+ */
 export function isAggregatorHost(host: string) {
-  return matchesSuffix(host, AGGREGATOR_HOSTS);
+  const clean = sanitizeHostname(host) || host.trim().toLowerCase();
+  if (!clean || isAtsHost(clean)) return false;
+  if (matchesSuffix(clean, AGGREGATOR_HOSTS)) return true;
+  const labels = registrableDomain(clean).split(".").filter(Boolean);
+  if (labels.length < 2) return false;
+  if (labels.at(-1) === "jobs") return true;
+  return JOB_BOARD_WORDS.test(labels.slice(0, -1).join("."));
 }
 
 /** Hosts whose favicon is the vendor, not the employer. */

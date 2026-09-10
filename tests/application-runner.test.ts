@@ -1477,7 +1477,7 @@ describe("reaching the application form", () => {
     const reach = scripts.slice(
       scripts.indexOf("export const reachApplicationFormCode")
     );
-    expect(reach).toContain("const before = await settle(8000)");
+    expect(reach).toContain("let before = await settle(20000)");
     expect(reach).toContain(
       '"a, button, [role=button], [role=tab], [role=link]"'
     );
@@ -1487,10 +1487,70 @@ describe("reaching the application form", () => {
     expect(reach.indexOf("if (samePage) {")).toBeLessThan(
       reach.indexOf("await page.goto(target.href")
     );
-    // Every wait inside the script fits under the 60s the runner grants it.
-    expect(reach).toContain("timeout: 15000");
+    // Every wait is drawn from one budget, so a page that never renders is
+    // reported by this script rather than killed by the gateway mid-wait.
+    expect(reach).toContain("const left = (want) =>");
     expect(reach).not.toContain("timeout: 30000");
-    expect(reach).toContain("const after = await settle(6000)");
+    expect(reach).toContain("const after = await settle(20000)");
+    expect(reach.match(/timeout: left\(/gu)?.length ?? 0).toBeGreaterThan(4);
+  });
+
+  it("waits for the page's own fetches, and reloads a shell that rendered nothing", () => {
+    // An open OpenAI posting on Ashby came back with zero fillable controls:
+    // its form is fetched after load, and a first load that lost those
+    // fetches keeps an empty shell for good.
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    const reach = scripts.slice(
+      scripts.indexOf("export const reachApplicationFormCode")
+    );
+    expect(reach).toContain('page.waitForLoadState("networkidle"');
+    expect(reach).toContain("if (controls.length === 0 && before.count === 0)");
+    expect(reach).toContain("await page.reload(");
+    // Only as a last resort: a description page with an Apply control is
+    // followed rather than reloaded.
+    expect(reach.indexOf("let controls = await findControls()")).toBeLessThan(
+      reach.indexOf("await page.reload(")
+    );
+    expect(reach.indexOf("await page.reload(")).toBeLessThan(
+      reach.indexOf("const chosen = controls.find(")
+    );
+  });
+
+  it("brings back the page's own words when it holds no form", () => {
+    // A deleted posting and a form that never rendered were one log line and
+    // one message, so neither could be told from a page the runner misread.
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    const reach = scripts.slice(
+      scripts.indexOf("export const reachApplicationFormCode")
+    );
+    expect(reach).toContain("const evidence = () => page.evaluate(");
+    expect(reach).toContain("page: await evidence()");
+    expect(reach).toContain("controls: 0, page: await evidence()");
+    const fill = readFileSync("lib/application-runner/fill.ts", "utf8");
+    expect(fill).toContain("page_heading: reach.page.heading");
+    expect(fill).toContain("isUnavailablePostingText(words)");
+  });
+
+  it("matches a typeahead's suggestions against every phrasing, at a comma", () => {
+    // Greenhouse answered "San Francisco" with five places that all begin
+    // with it, so the typed text alone read as ambiguous; the profile's own
+    // "San Francisco, California" names exactly one of them.
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    expect(scripts).toContain("wanted = matchOption(live, wantedList(fill))");
+    expect(scripts).not.toContain("wanted = matchOption(live, [value])");
+    expect(scripts).toContain('startsWith(wanted + ",")');
+    // The highlighted suggestion is trusted only where it continues the typed
+    // text at a comma: "San Francisco Del Yeso, Amazonas, Peru" is not it.
+    expect(scripts).toContain('shown.startsWith(typed + ",")');
   });
 
   it("compiles as the statement block the gateway wraps it in", () => {

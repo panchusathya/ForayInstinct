@@ -1,3 +1,4 @@
+import { isUnavailablePostingText } from "@/lib/posting-availability";
 import { isAggregatorHost, isAtsHost, sanitizeHostname } from "./card-logo";
 
 /**
@@ -227,17 +228,13 @@ function postingShape(url: string): "posting" | RoleRejection {
 }
 
 /**
- * Phrases an ATS leaves on a role it has closed. Greenhouse and Lever keep the
- * URL resolvable after a takedown, so the URL shape and the title still look
- * exactly like an open posting and every check below passes. The body is the
- * only signal that survives it, and the search response already carries one.
+ * True when the page says the role is closed or gone, whatever its URL looks
+ * like. The wording is shared with the runner, which pauses on the same fact
+ * once a browser is already open on the posting; the search response carries
+ * enough text to catch most of them before a card is ever made.
  */
-const CLOSED_POSTING_RE =
-  /\b(?:no longer (?:accepting|accepts|being accepted|available|open)|not (?:currently )?accepting applications|this (?:job|position|posting|role|opening|requisition) (?:is|has been) (?:closed|filled|expired|removed)|position has been filled|posting has (?:expired|been closed)|applications? (?:are|is) (?:now )?closed)\b/iu;
-
-/** True when the page says the role is closed, whatever its URL looks like. */
 export function isClosedPosting(text: string) {
-  return CLOSED_POSTING_RE.test(text);
+  return isUnavailablePostingText(text);
 }
 
 export function scoreRoleCandidate({
