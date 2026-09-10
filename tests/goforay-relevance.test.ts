@@ -194,6 +194,68 @@ describe("goforay role relevance", () => {
     ])("leaves an open posting alone: %s", (text) => {
       expect(isClosedPosting(text)).toBe(false);
     });
+
+    it.each([
+      "Job not found The job you requested was not found. View all open positions",
+      "Position not found",
+      "The posting you are looking for could not be found.",
+    ])("reads a deleted posting's page: %s", (text) => {
+      // Ashby keeps a deleted posting's URL resolvable and answers with this,
+      // which the runner reported as a page with no Apply control.
+      expect(isClosedPosting(text)).toBe(true);
+    });
+
+    it("leaves a description that merely says something was not found", () => {
+      expect(
+        isClosedPosting(
+          "You will own reconciliations where a variance was not found in the ledger."
+        )
+      ).toBe(false);
+    });
+  });
+
+  describe("a board that carries someone else's posting", () => {
+    it("is rejected however it is named, and an employer's careers site is not", () => {
+      // designjobs.world reached a candidate as a card. Its page has no form,
+      // no Apply control and one outbound link, to LinkedIn: there is nothing
+      // there to apply to, so the run opened a page it could never fill.
+      expect(
+        score(
+          "Product Design, Manager",
+          "https://designjobs.world/jobs/manager-designer-anthropic-north-america-73552"
+        )
+      ).toMatchObject({ reason: "aggregator-host", verdict: "reject" });
+      for (const url of [
+        "https://localjobs.com/job/san-francisco-ca-strategic-finance",
+        "https://simplify.jobs/p/62c634df/Strategic-Finance",
+        "https://mechanic.jobserve.com/job-in-San-Francisco/STRATEGIC-FINANCE-abc123/",
+      ]) {
+        expect(score("Senior Strategic Finance Analyst", url)).toMatchObject({
+          reason: "aggregator-host",
+        });
+      }
+    });
+
+    it("never mistakes an ATS or an employer's own hiring subdomain for one", () => {
+      // An ATS host is the employer's own application however it is named,
+      // and a company announces its hiring in a subdomain, not its domain.
+      for (const url of [
+        "https://jobs.ashbyhq.com/lambda/20738542-164f-45b6-a822-f54c11b5fc60",
+        "https://job-boards.greenhouse.io/example/jobs/4123456",
+        "https://acme.wd5.myworkdayjobs.com/careers/job/R-1234",
+        "https://jobs.lever.co/example/ac978161-6f46-4f6b-ad9e-a258e642751c",
+      ]) {
+        expect(score("Senior Strategic Finance Analyst", url).reason).not.toBe(
+          "aggregator-host"
+        );
+      }
+      expect(
+        score(
+          "Senior Strategic Finance Analyst",
+          "https://careers.bankofamerica.com/en-us/job-detail/24012345/strategic-finance"
+        ).reason
+      ).not.toBe("aggregator-host");
+    });
   });
 
   describe("relevanceTokens", () => {

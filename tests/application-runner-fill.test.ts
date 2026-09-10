@@ -1734,8 +1734,61 @@ describe("a posting that opens on its description", () => {
     const result = await fillVisibleForm(input);
     expect(result).toMatchObject({ pause: "user_input" });
     expect("message" in result ? result.message : "").toContain(
-      "no application form was found"
+      "showed no application form and no Apply control"
     );
+  });
+
+  it("says a taken-down posting is gone rather than a page it could not read", async () => {
+    // The Parasail run: Ashby keeps the URL resolvable and answers "Job not
+    // found", which the runner reported as a posting with no Apply control —
+    // a fault to work around instead of a role that no longer exists.
+    page(
+      {
+        clicked: "",
+        controls: 0,
+        fields: 0,
+        form: false,
+        page: {
+          heading: "Job not found",
+          text: "Job not found The job you requested was not found. View all open positions",
+          title: "Jobs",
+        },
+      },
+      []
+    );
+    const result = await fillVisibleForm(input);
+    expect(result).toMatchObject({ pause: "posting_unavailable" });
+    const message = "message" in result ? result.message : "";
+    expect(message).toContain("no longer live");
+    expect(message).toContain("Job not found");
+    expect(message).not.toContain("no Apply control");
+  });
+
+  it("names the page it read when a form neither rendered nor could be reached", async () => {
+    // The OpenAI run: an open posting whose form is fetched after load came
+    // back with nothing on it, and the message blamed the posting.
+    page(
+      {
+        clicked: "",
+        controls: 0,
+        fields: 0,
+        form: false,
+        page: {
+          heading: "Product Design, Manager",
+          text: "anthropic is hiring a Product Design Manager. Apply on the company site.",
+          title: "Product Design, Manager | DesignJobs.World",
+        },
+      },
+      []
+    );
+    const result = await fillVisibleForm(input);
+    expect(result).toMatchObject({ pause: "user_input" });
+    const message = "message" in result ? result.message : "";
+    expect(message).toContain(
+      "showed no application form and no Apply control"
+    );
+    expect(message).toContain("Product Design, Manager");
+    expect(message).toContain("employer's own application URL");
   });
 
   it("gives the reach script a budget longer than its own waits", async () => {
@@ -1746,7 +1799,7 @@ describe("a posting that opens on its description", () => {
     const reach = mocks.executePlaywright.mock.calls.find((call) =>
       call[1].code.includes("const enough = (found)")
     );
-    expect(reach?.[1]).toMatchObject({ timeoutSec: 60 });
+    expect(reach?.[1]).toMatchObject({ timeoutSec: 115 });
   });
 
   it("does not call a page it never read a posting with no Apply control", async () => {

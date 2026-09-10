@@ -509,6 +509,18 @@ const matchOption = (options, values) => {
     const exact = options.find((option) => option.trim().toLowerCase() === wanted);
     if (exact) return exact;
   }
+  // An option that continues the value at a comma is the same answer named
+  // more fully ("San Francisco" -> "San Francisco, California, United
+  // States"); one that continues it with more letters is a different answer
+  // ("San Francisco Del Yeso, Amazonas, Peru"). Tried before the loose prefix
+  // below, which cannot tell those apart.
+  for (const value of values) {
+    const wanted = value.trim().toLowerCase();
+    if (wanted === "") continue;
+    const continued = options.filter((option) =>
+      option.trim().toLowerCase().startsWith(wanted + ","));
+    if (continued.length === 1) return continued[0];
+  }
   // A prefix settles it only when it settles it: "MA" begins Maine, Maryland
   // and Massachusetts alike, and the first of those was taken.
   for (const value of values) {
@@ -720,14 +732,21 @@ for (const fill of fills) {
             await page.waitForTimeout(200);
             live = await liveOptions();
           }
-          wanted = matchOption(live, [value]);
-          // The suggestion the widget itself put first is the page's own
-          // reading of what was typed ("San Francisco" → "San Francisco,
-          // California, United States"); take it when it begins that way.
+          // Every phrasing, not only the one just typed. A city typed on its
+          // own comes back among five places that all begin with it, where
+          // the profile's own "San Francisco, California" names exactly one:
+          // matching the typed text alone read that list as ambiguous and
+          // asked the candidate which San Francisco they meant.
+          wanted = matchOption(live, wantedList(fill));
+          // Failing that, the suggestion the widget itself highlighted, but
+          // only where it continues the typed text at a comma: highlighted or
+          // not, "San Francisco Del Yeso, Amazonas, Peru" is not the place
+          // that was asked for.
           if (wanted === undefined && live.length > 0) {
-            const first = await optionRoot.locator("[role=option][aria-selected=true]").first().innerText().catch(() => "");
+            const first = String(await optionRoot.locator("[role=option][aria-selected=true]").first().innerText().catch(() => "")).trim();
             const typed = value.trim().toLowerCase();
-            if (first && first.trim().toLowerCase().startsWith(typed)) wanted = first.trim();
+            const shown = first.toLowerCase();
+            if (first && (shown === typed || shown.startsWith(typed + ","))) wanted = first;
           }
           if (wanted !== undefined) break;
         }
@@ -1239,12 +1258,24 @@ const fillable = () => page.evaluate(() => {
   return { count, files };
 });
 const enough = (found) => found.count >= 2 || found.files > 0;
+// Every wait below is drawn from one budget, so the script always answers
+// before the gateway's timeout kills it: a killed script came back as a
+// result the runner read as a posting with no Apply control.
+const until = Date.now() + 100000;
+const left = (want) => Math.max(0, Math.min(want, until - Date.now()));
+// A form fetched by the page's own scripts is not there when the load event
+// fires. Waiting for the network to go quiet is what tells an unrendered
+// shell apart from a description page, and through a proxy those fetches are
+// slower than any fixed pause worth taking.
+const idle = async () => {
+  await page.waitForLoadState("networkidle", { timeout: left(10000) }).catch(() => undefined);
+};
 // A board that paints its form from the client (Ashby fetches the posting
 // after domcontentloaded) has nothing to fill for a few seconds; the scan that
 // sent the runner here saw that empty shell. Give the form that long before
 // reading the page as a description.
 const settle = async (budgetMs) => {
-  const deadline = Date.now() + budgetMs;
+  const deadline = Date.now() + left(budgetMs);
   let found = await fillable();
   let previous = -1;
   // Enough, and steady: a form that paints in stages is read once two polls
@@ -1256,13 +1287,24 @@ const settle = async (budgetMs) => {
   }
   return found;
 };
-const before = await settle(8000);
-if (enough(before)) return { form: true, fields: before.count, clicked: "", href: page.url() };
+// What the page says it is, for a run that finds nothing on it. A deleted
+// posting answers "Job not found" where an unrendered shell says nothing at
+// all, and the two owe the candidate different words. The page's own text,
+// never anything a candidate typed.
+const evidence = () => page.evaluate(() => {
+  const heading = document.querySelector("h1, h2, [role=heading]");
+  const body = String(document.body ? document.body.innerText || "" : "").replace(/\\s+/g, " ").trim();
+  return {
+    heading: String((heading && (heading.innerText || heading.textContent)) || "").replace(/\\s+/g, " ").trim().slice(0, 160),
+    text: body.slice(0, 400),
+    title: String(document.title || "").replace(/\\s+/g, " ").trim().slice(0, 160),
+  };
+});
 // Tabs and role=link controls count: Ashby's description page switches to the
 // form through an "Application" tab, which is neither a button nor apply
 // wording. The same selector drives the click below, so indexes agree.
 const controlSelector = "a, button, [role=button], [role=tab], [role=link]";
-const controls = await page.evaluate((selector) => {
+const findControls = () => page.evaluate((selector) => {
   const visible = (node) => {
     const style = getComputedStyle(node);
     const box = node.getBoundingClientRect();
@@ -1286,7 +1328,22 @@ const controls = await page.evaluate((selector) => {
     return [{ href, index, rank, text: text.slice(0, 60) }];
   }).sort((a, b) => a.rank - b.rank).slice(0, 5);
 }, controlSelector);
-if (controls.length === 0) return { form: false, fields: before.count, clicked: "", href: page.url(), controls: 0 };
+await idle();
+let before = await settle(20000);
+if (enough(before)) return { form: true, fields: before.count, clicked: "", href: page.url() };
+let controls = await findControls();
+// Neither a field nor a control to reach one: the page may never have
+// rendered. An app whose first load lost its data fetches keeps that empty
+// shell for good — they do not run again — so one reload is the difference
+// between a form and a live posting reported as having nothing on it.
+if (controls.length === 0 && before.count === 0) {
+  await page.reload({ timeout: left(20000), waitUntil: "domcontentloaded" }).catch(() => undefined);
+  await idle();
+  before = await settle(20000);
+  if (enough(before)) return { form: true, fields: before.count, clicked: "", href: page.url(), reloaded: true };
+  controls = await findControls();
+}
+if (controls.length === 0) return { form: false, fields: before.count, clicked: "", href: page.url(), controls: 0, page: await evidence() };
 const chosen = controls.find((control) => control.href) || controls[0];
 // The same registrable-domain rule the gateway pins a browser to, so a hop
 // the browser would die on is always called external here first. Two labels
@@ -1311,18 +1368,26 @@ if (chosen.href) {
     // A link to the page already open is one of its own tabs. Reloading it
     // through the proxy is what outran the gateway's budget on Ashby; the tab
     // switches in place, so click it and let the form settle.
-    await page.locator(controlSelector).nth(chosen.index).click({ timeout: 5000 }).catch(() => undefined);
+    await page.locator(controlSelector).nth(chosen.index).click({ timeout: left(5000) }).catch(() => undefined);
   } else if (target) {
     // Shorter than the script's own budget on the gateway, so a slow hop is
     // reported by this script rather than by the gateway killing it.
-    await page.goto(target.href, { timeout: 15000, waitUntil: "domcontentloaded" }).catch(() => undefined);
+    await page.goto(target.href, { timeout: left(20000), waitUntil: "domcontentloaded" }).catch(() => undefined);
   }
 } else {
-  await page.locator(controlSelector).nth(chosen.index).click({ timeout: 5000 }).catch(() => undefined);
-  await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => undefined);
+  await page.locator(controlSelector).nth(chosen.index).click({ timeout: left(5000) }).catch(() => undefined);
+  await page.waitForLoadState("domcontentloaded", { timeout: left(10000) }).catch(() => undefined);
 }
-const after = await settle(6000);
-return { form: enough(after), fields: after.count, clicked: chosen.text, href: page.url() };
+await idle();
+const after = await settle(20000);
+const reached = enough(after);
+return {
+  form: reached,
+  fields: after.count,
+  clicked: chosen.text,
+  href: page.url(),
+  ...(reached ? {} : { page: await evidence() }),
+};
 `;
 
 /**

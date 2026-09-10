@@ -61,6 +61,7 @@ import {
   candidateProfileSummary,
   profilePatchOf,
 } from "@/lib/candidate-profile";
+import { isUnavailablePostingText } from "@/lib/posting-availability";
 import { applicationPauseMessage } from "@/lib/task-completion";
 import { z } from "zod";
 
@@ -483,10 +484,11 @@ export async function fillVisibleForm(
   // away. A page with nothing to fill is not a filled form: it used to go to
   // the candidate for approval as one, the job description as the review.
   if (!looksLikeApplicationForm(fields)) {
-    // The script waits for a client-rendered form and may follow one hop, so
-    // its budget on the gateway has to exceed its own waits. At the default
-    // 30s the gateway killed it mid-navigation on Ashby, and the run read the
-    // killed script as a posting with no Apply control.
+    // The script waits for a client-rendered form, reloads a page that never
+    // rendered one, and may follow one hop, so its budget on the gateway has
+    // to exceed its own waits. At the default 30s the gateway killed it
+    // mid-navigation on Ashby, and the run read the killed script as a
+    // posting with no Apply control.
     const reached = await runScript(
       input.browserSessionId,
       reachApplicationFormCode,
@@ -497,8 +499,17 @@ export async function fillVisibleForm(
         fields: z.number().default(0),
         form: z.boolean(),
         href: z.string().optional(),
+        /** The page's own words, when it turned out to hold no form. */
+        page: z
+          .object({
+            heading: z.string().default(""),
+            text: z.string().default(""),
+            title: z.string().default(""),
+          })
+          .optional(),
+        reloaded: z.boolean().optional(),
       }),
-      { label: "reach_form", timeoutSec: 60 }
+      { label: "reach_form", timeoutSec: 115 }
     );
     const reach = reached.data;
     applicationExecutionLog({
@@ -510,6 +521,18 @@ export async function fillVisibleForm(
       fields: reach?.fields ?? 0,
       form: reach?.form === true,
       ...(reached.error === undefined ? {} : { error: reached.error }),
+      // What the page showed, for a run that found nothing on it. Without it
+      // an open posting whose form never rendered and a posting that has been
+      // taken down were the same single line in the log, and neither could be
+      // told from a page the runner had simply misread.
+      ...(reach?.page === undefined
+        ? {}
+        : {
+            page_heading: reach.page.heading,
+            page_text: reach.page.text.slice(0, 200),
+            page_title: reach.page.title,
+          }),
+      ...(reach?.reloaded === true ? { reloaded: true } : {}),
     });
     if (reach?.external) {
       return { applyUrl: input.applyUrl, redirect: reach.external };
@@ -524,21 +547,47 @@ export async function fillVisibleForm(
       fields = again?.fields ?? [];
     }
     if (!looksLikeApplicationForm(fields)) {
+      // The page's own account of itself decides what the candidate is told.
+      // A posting that has been taken down is a role that is gone, not a
+      // fault to work around, and the runner used to report both as a page
+      // with no Apply control — so a deleted posting read as a broken tool.
+      const saidByPage = reach?.page;
+      const words = saidByPage
+        ? `${saidByPage.title} ${saidByPage.heading} ${saidByPage.text}`
+        : "";
+      const gone = words !== "" && isUnavailablePostingText(words);
+      const pause = gone ? "posting_unavailable" : "user_input";
       await updateApplicationRun({
         executionId: input.executionId,
-        pauseReason: "user_input",
+        pauseReason: pause,
         status: "waiting",
       });
+      // The page's heading, or its title where it has no heading: a page that
+      // renders nothing still has a title, and that is what says which page
+      // was read.
+      const quoted = tidyLabel(
+        [saidByPage?.heading, saidByPage?.title].find(
+          (text) => text !== undefined && text.trim() !== ""
+        ) ?? ""
+      ).slice(0, 120);
       // A script the browser never finished says nothing about the posting:
       // the page was not read, so do not tell the candidate it has no form.
-      const detail =
-        reach === undefined
+      const detail = gone
+        ? `${input.role} at ${input.applyUrl} is no longer live${quoted ? `: the page says "${quoted}"` : ""}.`
+        : reach === undefined
           ? `the application page at ${input.applyUrl} did not finish loading${reached.error === undefined ? "" : ` (${reached.error.slice(0, 120)})`}; start the application again.`
-          : `no application form was found at ${input.applyUrl}: the page has nothing to fill${reach.clicked ? ` even after opening "${reach.clicked}"` : " and no Apply control"}. If the posting links to an application elsewhere, that link is the URL to start with.`;
+          : reach.clicked
+            ? `no application form was found at ${input.applyUrl}: the page has nothing to fill even after opening "${reach.clicked}". If the posting links to an application elsewhere, that link is the URL to start with.`
+            : // No fields and no control to reach any, after a reload: either
+              // the posting is not an application at all (a job board's copy
+              // of one links out rather than hosting it) or its form never
+              // rendered for us. Say which page was read, so the candidate
+              // can hand over the employer's own posting URL instead.
+              `${input.applyUrl} showed no application form and no Apply control${quoted ? `; the page reads "${quoted}"` : ""}. If this is a job board's copy of the posting, the employer's own application URL is the one to start with.`;
       return {
         applyUrl: input.applyUrl,
-        message: applicationPauseMessage("user_input", detail),
-        pause: "user_input",
+        message: applicationPauseMessage(pause, detail),
+        pause,
       };
     }
   }
