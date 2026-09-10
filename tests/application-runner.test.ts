@@ -697,6 +697,144 @@ describe("a choice group, however the page draws it", () => {
     expect(fills[0]?.alternatives).toContain("San Francisco, California");
   });
 
+  it("ticks a confirmation worded as the candidate's own declaration", () => {
+    // OpenAI's form ends on a box labelled only "I confirm I have read the
+    // above." It matched none of the consent wording, so it was neither
+    // filled nor asked about, and the submit came back refused.
+    const identity = { email: "ada@example.com", name: "Ada", phone: "" };
+    for (const label of [
+      "I confirm I have read the above.",
+      "I hereby certify that I have not knowingly withheld any information",
+      "I acknowledge that I have opened, read, and understood the Arbitration Agreement",
+      "I have read and understood the privacy notice",
+    ]) {
+      const { fills } = mapProfileToFormFields({
+        fields: [
+          {
+            label,
+            name: label,
+            options: [],
+            required: false,
+            selector: '[data-foray-id="c1"]',
+            tag: "checkbox",
+            type: "checkbox",
+          },
+        ],
+        identity,
+        profile: emptyCandidateProfile,
+      });
+      expect(fills[0]?.value).toBe("Yes");
+    }
+  });
+
+  it("never answers a question about the candidate as though it were a consent", () => {
+    // The boundary the consent rule exists to hold: a permission may be given
+    // on their behalf, a claim about them never may.
+    const identity = { email: "ada@example.com", name: "Ada", phone: "" };
+    for (const label of [
+      "Have you read our engineering blog?",
+      "Have you worked at OpenAI before?",
+      "Were you referred by an employee?",
+    ]) {
+      const { fills } = mapProfileToFormFields({
+        fields: [
+          {
+            label,
+            name: "",
+            options: ["Yes", "No"],
+            required: true,
+            selector: '[data-foray-id="q1"]',
+            tag: "radio",
+            type: "radio",
+          },
+        ],
+        identity,
+        profile: emptyCandidateProfile,
+      });
+      expect(fills).toEqual([]);
+    }
+  });
+
+  it("reads a start date asked as a question, not only as a label", () => {
+    // "When can you start a new role?" is the same question as "Start date",
+    // and matched neither pattern, so a stored date went unoffered and the
+    // run stopped to ask for one it already had.
+    for (const label of [
+      "When can you start a new role?",
+      "How soon can you start?",
+      "Notice period",
+      "Start date",
+    ]) {
+      const { fills } = mapProfileToFormFields({
+        fields: [
+          {
+            label,
+            name: "",
+            options: [],
+            required: true,
+            selector: "#d",
+            tag: "input",
+            type: "text",
+          },
+        ],
+        identity: { email: "ada@example.com", name: "Ada", phone: "" },
+        profile: { ...emptyCandidateProfile, earliestStartDate: "10/01/2026" },
+      });
+      expect(fills[0]?.value).toBe("10/01/2026");
+    }
+  });
+
+  it("reports a value the control did not keep, rather than counting it filled", () => {
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    expect(scripts).toContain('reason: "not-accepted"');
+    expect(scripts).toContain("await locator.inputValue()");
+    const fill = readFileSync("lib/application-runner/fill.ts", "utf8");
+    expect(fill).toContain('row.reason === "not-accepted"');
+    expect(fill).toContain("runner.value_not_kept");
+  });
+
+  it("ticks one consent box by its label, and only calls it ticked once the page agrees", () => {
+    // A box drawn at opacity 0 under its own styled label is one check() can
+    // refuse for not receiving pointer events, and the branch used to report
+    // every checkbox filled whether the click landed or not: a consent left
+    // unticked came back as a submit the page refused.
+    const scripts = readFileSync(
+      "lib/application-runner/playwright-scripts.ts",
+      "utf8"
+    );
+    const opens = scripts.indexOf(
+      'if (type === "checkbox" || (shape && shape.kind ==='
+    );
+    const branch = scripts.slice(
+      opens,
+      scripts.indexOf('if (tag === "select")', opens)
+    );
+    expect(branch).toContain("proxy.click()");
+    expect(branch.indexOf("proxy.click()")).toBeLessThan(
+      branch.indexOf("locator.check({ timeout: 3000 })")
+    );
+    expect(branch.indexOf("locator.check({ timeout: 3000 })")).toBeLessThan(
+      branch.indexOf("force: true")
+    );
+    expect(branch).toContain("if (state === on) filled.push(fill.selector)");
+    expect(branch).toContain('reason: "not-accepted"');
+  });
+
+  it("never sends the candidate to the form to change something themselves", () => {
+    // The runner holds the only browser on that form, so a change made in
+    // the candidate's own browser reaches nothing.
+    const instructions = readFileSync("agent/instructions.md", "utf8");
+    expect(instructions).toContain(
+      "Never tell the candidate to open the posting and fill, fix, or finish anything"
+    );
+    expect(instructions).toContain(
+      "continue_application` with that `apply_url"
+    );
+  });
+
   it("never types the home city into a question about the office", () => {
     const { fills, unmapped } = mapProfileToFormFields({
       fields: [

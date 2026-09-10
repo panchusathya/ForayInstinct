@@ -162,7 +162,7 @@ async function applyFills(sessionId: string, fills: MappedFill[]) {
   }
   const skipped = applied?.skipped ?? [];
   for (const row of skipped) {
-    if (row.reason === "no-option") continue;
+    if (row.reason === "no-option" || row.reason === "not-accepted") continue;
     // A fill the page threw on was invisible: neither filled nor refused, it
     // left a control blank with nothing in the log to say so. The reason is
     // the browser's own error text, never the value that was being placed.
@@ -172,9 +172,18 @@ async function applyFills(sessionId: string, fills: MappedFill[]) {
       selector: row.selector,
     });
   }
+  for (const row of skipped) {
+    if (row.reason !== "not-accepted") continue;
+    applicationExecutionLog({
+      event: "runner.value_not_kept",
+      selector: row.selector,
+    });
+  }
   return {
     refused: skipped
-      .filter((row) => row.reason === "no-option")
+      .filter(
+        (row) => row.reason === "no-option" || row.reason === "not-accepted"
+      )
       .map((row) => ({
         options: offered.get(row.selector) ?? [],
         selector: row.selector,
@@ -326,9 +335,38 @@ function tidyLabel(label: string) {
  * before the click, because between the two the candidate answers questions
  * and a form can come back still short.
  */
+/**
+ * The answer already given for this question on this run, if there was one.
+ *
+ * Both sides are reduced the same way the pause's labels are, because the
+ * question travels to the candidate as text and comes back as a key.
+ */
+function answerAlreadyGiven(
+  answered: Record<string, string>,
+  label: string
+): string | undefined {
+  const key = (text: string) =>
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gu, " ")
+      .trim();
+  const wanted = key(label);
+  if (wanted === "") return undefined;
+  for (const [question, value] of Object.entries(answered)) {
+    const asked = key(question);
+    if (asked === "" || value.trim() === "") continue;
+    if (asked === wanted || asked.includes(wanted) || wanted.includes(asked)) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
 async function blankRequiredPause(
   input: ApplicationRunInput & {
     browserSessionId: string;
+    /** Answers given on this run, keyed by the question they answered. */
+    answered?: Record<string, string>;
     knownOptions?: (selector: string) => string[];
     /** File controls the workspace has nothing for, by label. */
     missingFiles?: string[];
@@ -345,6 +383,13 @@ async function blankRequiredPause(
   const stillEmpty = remaining?.empty ?? [];
   const missingFiles = input.missingFiles ?? [];
   if (stillEmpty.length === 0 && missingFiles.length === 0) return undefined;
+  // Everything the candidate has answered on this run, read here rather than
+  // taken from the caller so both gates say the same thing: this check runs
+  // once during the fill and again before the submit click.
+  const answered = {
+    ...(await readRunAnswers(input.scope, input.executionId).catch(() => ({}))),
+    ...input.answered,
+  };
   const questions: RunnerQuestion[] = [];
   const labels = new Set<string>();
   // The file slots first: a page rarely marks its upload control required in
@@ -356,6 +401,12 @@ async function blankRequiredPause(
     labels.add(key);
     questions.push({ label });
   }
+  // A question the candidate has already answered, still blank, is not a
+  // question to ask again. The form would not keep what they said: the runner
+  // asked one candidate the same start date four times, applying the same
+  // refused answer each round, because nothing here could tell a field nobody
+  // had answered from one whose answer the page threw away.
+  const refused: { label: string; options: string[]; value: string }[] = [];
   for (const field of stillEmpty) {
     if (!hasReadableLabel(field.label)) continue;
     const label = tidyLabel(field.label);
@@ -366,6 +417,11 @@ async function blankRequiredPause(
     // the group itself; else whatever an earlier scan or refusal recorded.
     const known = input.knownOptions?.(field.selector) ?? [];
     const options = known.length > 0 ? known : (field.options ?? []);
+    const given = answerAlreadyGiven(answered, label);
+    if (given !== undefined) {
+      refused.push({ label, options, value: given });
+      continue;
+    }
     questions.push(options.length > 0 ? { label, options } : { label });
   }
   const unreadable = stillEmpty.filter(
@@ -402,6 +458,16 @@ async function blankRequiredPause(
       [
         questions.length > 0
           ? `these required questions are still blank: ${questions.map(describeQuestion).join("; ")}`
+          : "",
+        refused.length > 0
+          ? `${refused
+              .map(
+                (row) =>
+                  `${row.label} would not keep "${row.value}"${row.options.length > 0 ? ` (it offers ${row.options.filter(Boolean).slice(0, 8).join(" / ")})` : ""}`
+              )
+              .join(
+                "; "
+              )}. Tell me another way to put that and I will retype it; the browser is still open on the form`
           : "",
         missingFiles.length > 0 && input.noResume
           ? `no resume is on file, so ${missingFiles.join("; ")} cannot be filled until a PDF or DOCX resume is attached`
@@ -773,6 +839,7 @@ export async function fillVisibleForm(
 
   const blank = await blankRequiredPause({
     ...input,
+    answered: { ...remembered, ...thisRound },
     knownOptions: (selector) =>
       refusedOptions.get(selector) ?? bySelector.get(selector)?.options ?? [],
     missingFiles,

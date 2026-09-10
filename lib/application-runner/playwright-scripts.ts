@@ -648,16 +648,40 @@ for (const fill of fills) {
     }
 
     if (type === "checkbox" || (shape && shape.kind === "checkbox")) {
-      const on = /^(yes|true|1|on|checked)$/i.test(String(fill.value).trim());
-      if (type === "checkbox") {
-        if (on) await locator.check();
-        else await locator.uncheck();
-      } else {
-        // A role=checkbox or role=switch element: click when its state differs.
-        const state = await locator.getAttribute("aria-checked");
-        if ((state === "true") !== on) await locator.click({ timeout: 3000 });
+      // One box, on or off. Every phrasing a consent is answered with counts
+      // as on, because the profile answers these in the page's own words.
+      const on = /^(yes|true|1|on|checked|agree|i agree|accept|i accept|acknowledge|i acknowledge|confirm|i confirm)$/i.test(String(fill.value).trim());
+      const held = () => locator.evaluate((node) => node.tagName === "INPUT"
+        ? node.checked === true
+        : node.getAttribute("aria-checked") === "true");
+      let state = await held().catch(() => undefined);
+      // Clicking what a person clicks comes first: a box drawn at opacity 0
+      // under its own styled label is one Playwright's own check() can refuse
+      // for not receiving pointer events. Nothing counts as ticked until the
+      // page says it is, so a consent that never took is reported instead of
+      // being called filled and refused later by the submit.
+      const attempts = [
+        () => locator.evaluate((node) => {
+          const root = node.getRootNode();
+          const proxy = node.tagName === "INPUT"
+            ? node.closest("[role=checkbox], [role=switch]")
+              || (node.id ? root.querySelector("label[for=" + JSON.stringify(node.id) + "]") : null)
+              || node.closest("label")
+              || node
+            : node;
+          proxy.click();
+        }),
+        () => (on ? locator.check({ timeout: 3000 }) : locator.uncheck({ timeout: 3000 })),
+        () => (on ? locator.check({ force: true, timeout: 3000 }) : locator.uncheck({ force: true, timeout: 3000 })),
+      ];
+      for (const attempt of attempts) {
+        if (state === on) break;
+        await attempt().catch(() => undefined);
+        await page.waitForTimeout(150);
+        state = await held().catch(() => state);
       }
-      filled.push(fill.selector);
+      if (state === on) filled.push(fill.selector);
+      else skipped.push({ reason: "not-accepted", selector: fill.selector });
       continue;
     }
 
@@ -780,6 +804,15 @@ for (const fill of fills) {
       continue;
     }
     await locator.fill(fill.value);
+    // A value the control did not keep was neither filled nor refused: a
+    // widget that clears what it will not parse left the field blank, the
+    // blank check asked the same question again, and the candidate answered
+    // it four times over. Read it back, and call it refused when it is gone.
+    const held = String(await locator.inputValue().catch(() => fill.value));
+    if (held.trim() === "" && String(fill.value).trim() !== "") {
+      skipped.push({ reason: "not-accepted", selector: fill.selector });
+      continue;
+    }
     filled.push(fill.selector);
   } catch (error) {
     skipped.push({ reason: String(error && error.message || error).slice(0, 200), selector: fill.selector });

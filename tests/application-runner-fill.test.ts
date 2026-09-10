@@ -379,6 +379,39 @@ describe("submitApplication", () => {
     expect(codes.some((code) => code.includes("getByRole"))).toBe(false);
   });
 
+  it("says the form refused an answer rather than asking for it again", async () => {
+    // One candidate answered the same start date four times: the page threw
+    // the value away, the blank check saw an empty required field, and the
+    // pause put the identical question again with no sign anything had
+    // happened. An answer already given is reported as refused instead.
+    mocks.readAnswers.mockResolvedValue({
+      "When can you start a new role?": "ASAP",
+    });
+    mocks.executePlaywright.mockImplementation(async (_sessionId, request) => {
+      if (request.code.includes("const empty = await")) {
+        return {
+          result: {
+            empty: [
+              { label: "When can you start a new role?", selector: "#start" },
+            ],
+          },
+          success: true,
+        };
+      }
+      return { result: { clicked: true, errors: [] }, success: true };
+    });
+
+    const result = await submit();
+
+    expect(result).toMatchObject({ pause: "user_input" });
+    const message = "message" in result ? result.message : "";
+    expect(message).toContain('would not keep "ASAP"');
+    expect(message).toContain("another way to put that");
+    expect(message).not.toContain("still blank");
+    // The same question is not put back as one nobody has answered.
+    expect(result).not.toHaveProperty("questions");
+  });
+
   it("carries the browser's own verdict when the page renders no message", async () => {
     // A form can refuse a submit with nothing drawn anywhere, which is how a
     // blocked submit came back reporting no errors at all.
