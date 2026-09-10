@@ -85,7 +85,20 @@ function consentQuestion(key: string) {
   if (/worked|employed|employee|relative|referr|intern(ship)?\b/u.test(key)) {
     return false;
   }
-  return /acknowledg|consent|privacy|terms|policy|i agree|opt.?in|receive (communications|texts|messages)|sms|whatsapp|text message|contact you|contacted/u.test(
+  if (
+    /acknowledg|consent|privacy|terms|policy|i agree|opt.?in|receive (communications|texts|messages)|sms|whatsapp|text message|contact you|contacted/u.test(
+      key
+    )
+  ) {
+    return true;
+  }
+  // The same boilerplate worded as the candidate's own declaration. OpenAI's
+  // form ends on a box labelled only "I confirm I have read the above.", which
+  // matched none of the wording above, so it was neither filled nor asked
+  // about and the submit came back refused. First person only: "I confirm",
+  // "I hereby certify", "I have read" — never "Have you read our blog?",
+  // which is a question about the candidate rather than a box to tick.
+  return /\bi (?:confirm|certify|declare|attest|understand|have read|have reviewed)\b|\bhereby (?:confirm|certify|declare|attest)\b|\bread (?:and (?:understood|understand|accepted)|the above)\b/u.test(
     key
   );
 }
@@ -132,7 +145,12 @@ function asksForStartDate(key: string) {
   ) {
     return false;
   }
-  return /start.?date|earliest.?start|\bavailab/u.test(key);
+  // "When can you start a new role?" is the same question as "Start date",
+  // and matched neither pattern, so a stored start date went unoffered and
+  // the run stopped to ask for one it already had.
+  return /start.?date|earliest.?start|\bavailab|when (?:can|could|would) you start|how soon can you start|start a new role|notice period/u.test(
+    key
+  );
 }
 
 function asksForRegion(key: string) {
