@@ -13,8 +13,8 @@ export default defineAgent({
   // so any lifetime cap eventually trips on healthy use and starves the
   // worker dispatched near the end (children inherit the parent's remaining
   // quota). The coordinator is bounded per call by wrapLanguageModel
-  // (1k maxOutputTokens) in lib/model-config.ts, by compaction below, and
-  // per turn by agent/hooks/turn-budget.ts.
+  // (COORDINATOR_MAX_OUTPUT_TOKENS in lib/model-config.ts), by compaction
+  // below, and per turn by agent/hooks/turn-budget.ts.
   limits: {
     maxInputTokensPerSession: false,
     maxOutputTokensPerSession: false,

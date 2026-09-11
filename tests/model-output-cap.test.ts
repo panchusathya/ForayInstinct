@@ -9,9 +9,14 @@ import {
 } from "@/lib/model-request";
 
 describe("per-call generation caps", () => {
-  it("forces a small output cap even when the provider default is 65536", async () => {
-    expect(COORDINATOR_MAX_OUTPUT_TOKENS).toBe(1_000);
-    expect(WORKER_MAX_OUTPUT_TOKENS).toBe(2_000);
+  it("forces a bounded output cap even when the provider default is 65536", async () => {
+    // Bounded, not small: at 1,000 a pause listing several questions with
+    // their choices, or a helper answering in JSON, hit the ceiling, and a
+    // generation stopped there is a truncated tool call. Small enough to keep
+    // the reservation off the window, large enough to finish a turn.
+    expect(COORDINATOR_MAX_OUTPUT_TOKENS).toBe(4_000);
+    expect(WORKER_MAX_OUTPUT_TOKENS).toBe(4_000);
+    expect(COORDINATOR_MAX_OUTPUT_TOKENS).toBeLessThan(65_536 / 4);
     expect(capMaxOutputTokens({}, 1_000).maxOutputTokens).toBe(1_000);
     expect(
       capMaxOutputTokens({ maxOutputTokens: 65_536 }, 2_000).maxOutputTokens
