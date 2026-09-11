@@ -4,9 +4,18 @@ import type { LanguageModelMiddleware } from "ai";
  * Per-call generation caps and prompt trimming. Eve's session token limits are
  * lifetime budgets and do not set maxOutputTokens, so Qwen VL otherwise
  * reserves its 65,536 default and blows the 131k window.
+ *
+ * The cap exists to stop that reservation, not to keep answers short, and at
+ * 1,000 it had become the second. A pause carrying several questions with the
+ * page's own choices beside each one, an unmapped-fill helper answering in
+ * JSON for a long form, and any turn that must both write to the candidate and
+ * call a tool all ran into it; a generation stopped at the ceiling is a
+ * truncated tool call, which is a turn that never lands. Against the 120k
+ * window the agent declares, 4,000 is three per cent reserved, which buys the
+ * room back for a rounding error.
  */
-export const COORDINATOR_MAX_OUTPUT_TOKENS = 1_000;
-export const WORKER_MAX_OUTPUT_TOKENS = 2_000;
+export const COORDINATOR_MAX_OUTPUT_TOKENS = 4_000;
+export const WORKER_MAX_OUTPUT_TOKENS = 4_000;
 
 export function capMaxOutputTokens<T extends { maxOutputTokens?: number }>(
   params: T,
