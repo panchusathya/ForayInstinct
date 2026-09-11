@@ -42,12 +42,24 @@ export interface WorkdayRouteResult {
 export const workdayApplyControlName = /^apply(?:\s+now|\s+for this job)?$/i;
 
 /**
- * The router script must finish inside its own budget and return a structured
- * state. Kernel killing the execution instead yields no trace at all, which is
- * why the in-script deadline is shorter than the request timeout.
+ * Three nested budgets, each strictly inside the one outside it.
+ *
+ * The outermost is not ours: every script runs as one HTTP request held open
+ * against the browser gateway, and the proxy in front of it answers a request
+ * held too long with a bare 502 that carries none of the gateway's own error
+ * envelope. A Workday route at 75s request / 55s in-script sat inside that
+ * window and every Workday application died on its first routing call, before
+ * the form was ever reached. Nothing below the proxy can see it happen, so the
+ * budget has to stay well under it rather than detect it.
+ *
+ * Inside that, the in-script deadline stays under the request timeout so a
+ * script that runs out of time returns its trace and a structured state; the
+ * gateway killing the execution instead yields nothing to diagnose. Every
+ * individual wait is then clamped to what the deadline has left (`cap`), so
+ * one slow navigation cannot starve the click loop that follows it.
  */
-const routeBudgetMs = 55_000;
-export const workdayRouteTimeoutSec = 75;
+const routeBudgetMs = 26_000;
+export const workdayRouteTimeoutSec = 35;
 const maxRouteClicks = 8;
 const maxRouteIterations = 24;
 
@@ -202,16 +214,16 @@ const currentState = async () => {
   return null;
 };
 
-const navigation = await page.goto(applicationUrl, { waitUntil: "domcontentloaded", timeout: cap(15000) }).catch(() => undefined);
+const navigation = await page.goto(applicationUrl, { waitUntil: "domcontentloaded", timeout: cap(8000) }).catch(() => undefined);
 trace.push(navigation ? "navigation:loaded" : "navigation:unconfirmed");
 if (strategy === "reload") {
-  const reloaded = await page.reload({ waitUntil: "domcontentloaded", timeout: cap(15000) }).catch(() => undefined);
+  const reloaded = await page.reload({ waitUntil: "domcontentloaded", timeout: cap(7000) }).catch(() => undefined);
   trace.push(reloaded ? "navigation:reloaded" : "navigation:reload_unconfirmed");
 }
 // Workday is a single-page app: domcontentloaded fires long before any control
 // exists, so routing against it finds an empty shell and gives up instantly.
 const hydrated = await page.locator("[data-automation-id]").first()
-  .waitFor({ state: "visible", timeout: cap(10000) }).then(() => true).catch(() => false);
+  .waitFor({ state: "visible", timeout: cap(5000) }).then(() => true).catch(() => false);
 trace.push(hydrated ? "hydration:ready" : "hydration:unconfirmed");
 today = await page.evaluate(() => {
   const now = new Date();
@@ -299,7 +311,7 @@ function workdayRouteUrl(
 }
 
 export function workdayRestoreCode(applicationUrl: string) {
-  return `await page.goto(${JSON.stringify(applicationUrl)}, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => undefined);`;
+  return `await page.goto(${JSON.stringify(applicationUrl)}, { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => undefined);`;
 }
 
 export function normalizeWorkdayRouteResult(
