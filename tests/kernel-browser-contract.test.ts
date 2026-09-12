@@ -150,6 +150,8 @@ interface StubScene {
   redirectTo?: string;
   revealAtTick?: number;
   roleNames?: string[];
+  /** Where the browser already is when the router runs, if not the posting. */
+  startAt?: string;
   tick?: number;
   url: string;
   visible?: string[];
@@ -160,7 +162,7 @@ function isDialogSelector(selector: string) {
 }
 
 function stubPage(scene: StubScene) {
-  let current = scene.url;
+  let current = scene.startAt ?? scene.url;
   const locator = (
     selector: string,
     options?: { name?: RegExp; scopedToDialog?: boolean }
@@ -602,8 +604,13 @@ describe("Kernel browser contract", () => {
   });
 
   it("treats an off-tenant maintenance redirect as an outage", async () => {
+    // Session create opens the browser at the posting, so a tenant in
+    // maintenance has already redirected it off the jobs host by the time the
+    // router runs; finding itself elsewhere, the router tries the posting
+    // once more and is sent to the same place.
     const state = await routeAgainst({
       redirectTo: "https://community.workday.com/maintenance-page",
+      startAt: "https://community.workday.com/maintenance-page",
       url: jobUrl,
     });
 

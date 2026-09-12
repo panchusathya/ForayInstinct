@@ -10,7 +10,12 @@ import {
   stageFileRequestSchema,
 } from "../../../lib/browser/contract.ts";
 import { GatewayHttpError, gatewayError } from "./errors.ts";
-import { readEventLoopDelay, readMemory } from "./metrics.ts";
+import { errorStack, errorSummary, log, logError } from "./log.ts";
+import {
+  peekEventLoopDelay,
+  readEventLoopDelay,
+  readMemory,
+} from "./metrics.ts";
 import type { GatewaySessions } from "./registry.ts";
 
 export interface AppDeps {
@@ -46,16 +51,56 @@ function bearerMatches(header: string | undefined, secret: string): boolean {
   return timingSafeEqual(digest(header.slice(prefix.length)), digest(secret));
 }
 
+/** Session ids are random and per-run; the route shape is what the log needs. */
+function redactPath(path: string): string {
+  return path.replace(/^\/sessions\/[^/]+/u, "/sessions/:id");
+}
+
 export function createApp({ authSecret, sessions }: AppDeps): Hono {
   const state = { draining: false };
   const app = new Hono();
 
   app.onError((error, c) => {
     if (error instanceof GatewayHttpError) {
+      logError("request.error", {
+        code: error.body.error.code,
+        method: c.req.method,
+        path: redactPath(c.req.path),
+        reason: errorSummary(error),
+        status: error.status,
+      });
       return c.json(error.body, error.status);
     }
     const message = error instanceof Error ? error.message : String(error);
+    logError("request.error", {
+      code: "gateway_error",
+      method: c.req.method,
+      path: redactPath(c.req.path),
+      reason: errorSummary(error),
+      stack: errorStack(error),
+      status: 500,
+    });
     return c.json({ error: { code: "gateway_error", message } }, 500);
+  });
+
+  // One line per request, with the process vitals at the moment it answered.
+  // A request that took 40s with loop_max_ms in the tens of thousands is a
+  // stalled process; the same request with a flat loop is a slow browser.
+  app.use("*", async (c, next) => {
+    if (c.req.path === "/health") return next();
+    const started = Date.now();
+    await next();
+    const loop = peekEventLoopDelay();
+    log("request", {
+      heap_used_mb: readMemory().heap_used_mb,
+      loop_max_ms: loop.max_ms,
+      loop_p99_ms: loop.p99_ms,
+      method: c.req.method,
+      ms: Date.now() - started,
+      path: redactPath(c.req.path),
+      sessions: sessions.size,
+      status: c.res.status,
+    });
   });
 
   app.notFound((c) =>

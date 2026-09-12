@@ -6,7 +6,7 @@ import { describeBrowserSessionFailure } from "@/agent/subagents/worker/lib/chal
 vi.stubEnv("BROWSER_GATEWAY_URL", "https://gateway.example.com");
 vi.stubEnv("BROWSER_GATEWAY_SECRET", "gateway-secret");
 vi.resetModules();
-const { GatewayRequestError, gatewayBrowserProvider } =
+const { GatewayRequestError, gatewayBrowserProvider, gatewayHealth } =
   await import("@/lib/browser/gateway-provider");
 
 const fetchMock = vi.fn<typeof fetch>();
@@ -162,5 +162,50 @@ describe("gateway browser provider", () => {
     await expect(gatewayBrowserProvider.getSession("gw-1")).rejects.toThrow(
       "unexpected GET /sessions/gw-1 response shape"
     );
+  });
+});
+
+describe("gatewayHealth", () => {
+  it("reads the gateway vitals into flat log fields", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        draining: false,
+        event_loop: { max_ms: 7200.5, mean_ms: 12, p99_ms: 6100 },
+        memory: { heap_total_mb: 300, heap_used_mb: 260.4, rss_mb: 410 },
+        ok: true,
+        sessions: 3,
+      })
+    );
+
+    const health = await gatewayHealth();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://gateway.example.com/health"
+    );
+    expect(health).toMatchObject({
+      health: "ok",
+      health_heap_used_mb: 260.4,
+      health_loop_max_ms: 7200.5,
+      health_loop_p99_ms: 6100,
+      health_sessions: 3,
+    });
+  });
+
+  it("reports a gateway that does not answer instead of throwing", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+
+    await expect(gatewayHealth()).resolves.toMatchObject({
+      health: "unreachable",
+      health_error: "fetch failed",
+    });
+  });
+
+  it("reports a body it cannot read", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("<html>502</html>", { status: 502 }));
+
+    await expect(gatewayHealth()).resolves.toMatchObject({
+      health: "unreadable",
+      health_status: 502,
+    });
   });
 });

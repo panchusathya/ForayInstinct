@@ -119,6 +119,38 @@ describe("application runner", () => {
     });
   }, 15_000);
 
+  it("releases the lease when the run throws, so the retry it asks for is not refused", async () => {
+    // A Workday run that died on its first gateway call kept its lease, and
+    // the "send the posting again" it answered with came back
+    // already_in_progress until the watchdog reached the lease.
+    const { startApplication } = await setupStart({
+      run: () =>
+        Promise.reject(
+          new Error(
+            "Browser gateway did not answer POST /sessions/x/playwright within 55s."
+          )
+        ),
+    });
+    const alice = { userId: "alice", workspaceId: "workspace:alice" };
+    const applyUrl = "https://jobs.example/role/3";
+    const start = () =>
+      startApplication({
+        applyUrl,
+        company: "Example",
+        role: "Analyst",
+        rootSessionId: "root-3",
+        scope: alice,
+      });
+
+    expect(await start()).toMatchObject({
+      pause: "user_input",
+      status: "failed",
+    });
+    const retry = await start();
+    expect(retry.status).not.toBe(alreadyInProgressStatus);
+    expect(retry).toMatchObject({ status: "failed" });
+  }, 15_000);
+
   it("leaves no lease behind when the profile gate refuses a start", async () => {
     // The deadlock this gate is most at risk of: refuse above the lease, or the
     // retry it asks for comes back already_in_progress for twenty minutes.
@@ -202,7 +234,7 @@ describe("application runner", () => {
   });
 });
 
-async function setupStart() {
+async function setupStart(options: { run?: () => Promise<unknown> } = {}) {
   vi.resetModules();
   const client = new PGlite();
   databases.push(client);
@@ -228,12 +260,14 @@ async function setupStart() {
   // An inline start drives the fill itself, so stub the browser-backed step and
   // leave this case to the lease contention it is actually about.
   vi.doMock("@/lib/application-runner/run", () => ({
-    runApplicationUntilPause: (input: { applyUrl: string }) =>
-      Promise.resolve({
-        applyUrl: input.applyUrl,
-        message: "Needs submission approval: Analyst",
-        pause: "approval",
-      }),
+    runApplicationUntilPause:
+      options.run ??
+      ((input: { applyUrl: string }) =>
+        Promise.resolve({
+          applyUrl: input.applyUrl,
+          message: "Needs submission approval: Analyst",
+          pause: "approval",
+        })),
   }));
 
   const [scope, profiles, runner] = await Promise.all([

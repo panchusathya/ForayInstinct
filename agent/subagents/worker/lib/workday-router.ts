@@ -52,6 +52,13 @@ export const workdayApplyControlName = /^apply(?:\s+now|\s+for this job)?$/i;
  * the form was ever reached. Nothing below the proxy can see it happen, so the
  * budget has to stay well under it rather than detect it.
  *
+ * The first navigation therefore does not happen here at all. Brightdata
+ * documents that unlocking a protected site can take a minute or two and
+ * warns against any navigation timeout under 60s; the 8s `goto` below could
+ * only ever abandon that unlock midway. The browser is opened at the posting
+ * by session create, which grants the navigation 60s, and the direct strategy
+ * routes the page it finds already loaded.
+ *
  * Inside that, the in-script deadline stays under the request timeout so a
  * script that runs out of time returns its trace and a structured state; the
  * gateway killing the execution instead yields nothing to diagnose. Every
@@ -214,8 +221,34 @@ const currentState = async () => {
   return null;
 };
 
-const navigation = await page.goto(applicationUrl, { waitUntil: "domcontentloaded", timeout: cap(8000) }).catch(() => undefined);
-trace.push(navigation ? "navigation:loaded" : "navigation:unconfirmed");
+// A promise that answers within ms or yields undefined; the timer is cleared
+// either way so a finished wait leaves nothing ticking behind it.
+const bounded = (promise, ms) => new Promise((resolve) => {
+  const timer = setTimeout(() => resolve(undefined), ms);
+  Promise.resolve(promise).then(
+    (value) => { clearTimeout(timer); resolve(value); },
+    () => { clearTimeout(timer); resolve(undefined); }
+  );
+});
+const samePage = (a, b) => {
+  try {
+    const left = new URL(a);
+    const right = new URL(b);
+    return left.origin === right.origin && left.pathname.replace(/\\/$/, "") === right.pathname.replace(/\\/$/, "");
+  } catch {
+    return false;
+  }
+};
+// The browser opens at the posting, so the direct strategy finds the page
+// already loaded (session create gave that navigation the minute Brightdata's
+// unlock can take). Navigating to it again would restart that unlock inside a
+// budget a quarter of its size, which is how every Workday run used to die.
+if (strategy === "direct" && samePage(page.url(), applicationUrl)) {
+  trace.push("navigation:already_open");
+} else {
+  const navigation = await page.goto(applicationUrl, { waitUntil: "domcontentloaded", timeout: cap(8000) }).catch(() => undefined);
+  trace.push(navigation ? "navigation:loaded" : "navigation:unconfirmed");
+}
 if (strategy === "reload") {
   const reloaded = await page.reload({ waitUntil: "domcontentloaded", timeout: cap(7000) }).catch(() => undefined);
   trace.push(reloaded ? "navigation:reloaded" : "navigation:reload_unconfirmed");
@@ -223,9 +256,12 @@ if (strategy === "reload") {
 // Workday is a single-page app: domcontentloaded fires long before any control
 // exists, so routing against it finds an empty shell and gives up instantly.
 const hydrated = await page.locator("[data-automation-id]").first()
-  .waitFor({ state: "visible", timeout: cap(5000) }).then(() => true).catch(() => false);
+  .waitFor({ state: "visible", timeout: cap(12000) }).then(() => true).catch(() => false);
 trace.push(hydrated ? "hydration:ready" : "hydration:unconfirmed");
-today = await page.evaluate(() => {
+// Bounded like every other wait here: an evaluate against a frame still
+// mid-navigation has no execution context to run in and would otherwise wait
+// for one indefinitely.
+today = await bounded(page.evaluate(() => {
   const now = new Date();
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -239,7 +275,7 @@ today = await page.evaluate(() => {
   const month = pick("month");
   const year = pick("year");
   return { day, isoDate: year + "-" + month + "-" + day, month, timeZone, year };
-}).catch(() => undefined);
+}), cap(3000));
 
 // Cookie banners are optional and never determine whether routing succeeded.
 await click("cookie:accepted", page.getByRole("button", { name: /accept cookies|accept all/i })).catch(() => undefined);

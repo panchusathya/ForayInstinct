@@ -29,9 +29,12 @@ import {
   captchaDisableAutoSubmitParams,
 } from "./captcha.ts";
 import { urlRegistrableDomain } from "./domains.ts";
+import { withDeadlineOr } from "./deadline.ts";
 import { gatewayError, sessionGone, sessionNotFound } from "./errors.ts";
 import { runPlaywrightCode } from "./eval.ts";
 import { InflightGuard } from "./inflight.ts";
+import { errorSummary, log, logError } from "./log.ts";
+import { pickCurrentPage } from "./pages.ts";
 import { captureScreenshots } from "./screenshot.ts";
 
 const defaultTtlSeconds = 900;
@@ -52,6 +55,17 @@ const keepaliveIntervalMs = 60_000;
 const deadEntryRetentionMs = 10 * 60_000;
 
 const defaultViewport = { height: 720, width: 1_280 };
+
+/**
+ * Exporting storage state on delete is a courtesy to the next run, not the
+ * point of the call. A browser that has stopped answering must not turn a
+ * delete into a held socket; past this, the state is dropped and the
+ * session is destroyed regardless.
+ */
+const storageStateExportMs = 10_000;
+
+/** The first navigation's ceiling inside session create (Brightdata's own advice is 60s+ for protected sites). */
+const startUrlNavigationMs = 60_000;
 
 /**
  * The parts of an opaque saved origin the init script can actually replay.
@@ -131,18 +145,39 @@ export class SessionRegistry implements GatewaySessions {
   }
 
   async create(request: CreateSessionRequest): Promise<SessionDescriptor> {
+    const started = Date.now();
     const browser = await chromium
       .connectOverCDP(this.endpoint)
       .catch((error: unknown) => {
+        logError("session.connect_failed", {
+          ms: Date.now() - started,
+          reason: errorSummary(error),
+        });
         throw gatewayError(
           502,
           "gateway_error",
           `Could not connect to the upstream browser: ${describe(error)}`
         );
       });
+    const connectedMs = Date.now() - started;
     try {
-      return this.describeEntry(await this.initializeSession(browser, request));
+      const entry = await this.initializeSession(browser, request);
+      log("session.created", {
+        connect_ms: connectedMs,
+        cookies: request.storage_state?.cookies.length ?? 0,
+        has_start_url: request.start_url !== undefined,
+        ms: Date.now() - started,
+        session: entry.sessionId,
+        sessions: this.entries.size,
+      });
+      return this.describeEntry(entry);
     } catch (error) {
+      logError("session.create_failed", {
+        connect_ms: connectedMs,
+        has_start_url: request.start_url !== undefined,
+        ms: Date.now() - started,
+        reason: errorSummary(error),
+      });
       await browser.close().catch(() => undefined);
       throw error;
     }
@@ -242,12 +277,22 @@ export class SessionRegistry implements GatewaySessions {
     for (const existing of context.pages()) this.wirePage(entry, existing);
     await this.attachSessionCdp(entry, page);
     if (request.start_url) {
+      const navigationStarted = Date.now();
       try {
         await page.goto(request.start_url, {
-          timeout: 60_000,
+          timeout: startUrlNavigationMs,
           waitUntil: "domcontentloaded",
         });
+        log("session.navigated", {
+          ms: Date.now() - navigationStarted,
+          session: entry.sessionId,
+        });
       } catch (error) {
+        logError("session.navigation_failed", {
+          ms: Date.now() - navigationStarted,
+          reason: errorSummary(error),
+          session: entry.sessionId,
+        });
         await this.destroy(entry);
         throw gatewayError(
           502,
@@ -338,7 +383,11 @@ export class SessionRegistry implements GatewaySessions {
           this.anyPage(entry)
         ));
       await cdp.send("Runtime.evaluate", { expression: "1" });
-    } catch {
+    } catch (error) {
+      logError("keepalive.failed", {
+        reason: errorSummary(error),
+        session: entry.sessionId,
+      });
       this.markDead(entry);
     }
   }
@@ -355,6 +404,12 @@ export class SessionRegistry implements GatewaySessions {
     entry.deathReason = entry.lastCrossDomain
       ? "cross_domain_navigation"
       : "session_gone";
+    log("session.dead", {
+      age_ms: Date.now() - entry.createdAt.getTime(),
+      reason: entry.deathReason,
+      session: entry.sessionId,
+      url: entry.currentUrl,
+    });
     if (entry.keepaliveTimer) clearInterval(entry.keepaliveTimer);
     entry.keepaliveTimer = undefined;
     entry.cdpRefs.reset();
@@ -374,6 +429,11 @@ export class SessionRegistry implements GatewaySessions {
     entry.dead = true;
     entry.cdpRefs.reset();
     this.entries.delete(entry.sessionId);
+    log("session.destroyed", {
+      age_ms: Date.now() - entry.createdAt.getTime(),
+      session: entry.sessionId,
+      sessions: this.entries.size,
+    });
     await this.unlinkStagedFiles(entry);
     await entry.browser.close().catch(() => undefined);
   }
@@ -395,17 +455,14 @@ export class SessionRegistry implements GatewaySessions {
     return entry;
   }
 
-  /** The page the user would see: the visible one, else the most recent. */
+  /**
+   * The page the user would see: the visible one, else the most recent. Each
+   * probe is bounded (see `pickCurrentPage`): this runs in front of every
+   * script, and an unbounded evaluate here once held the whole request past
+   * the client's deadline before the script's own timer had even started.
+   */
   private async currentPage(entry: SessionEntry): Promise<Page> {
-    const pages = entry.context.pages();
-    let visible: Page | undefined;
-    for (const candidate of pages) {
-      const isVisible = await candidate
-        .evaluate(() => document.visibilityState === "visible")
-        .catch(() => false);
-      if (isVisible) visible = candidate;
-    }
-    const page = visible ?? pages.at(-1);
+    const page = await pickCurrentPage(entry.context.pages());
     if (page) return page;
     return entry.context.newPage();
   }
@@ -443,11 +500,14 @@ export class SessionRegistry implements GatewaySessions {
       await this.destroy(entry);
       return {};
     }
-    let storageState: GatewayStorageState | undefined;
-    try {
-      storageState = await entry.context.storageState();
-    } catch {
-      storageState = undefined;
+    const storageState = await withDeadlineOr(
+      entry.context.storageState(),
+      storageStateExportMs,
+      "storage state export",
+      undefined
+    );
+    if (storageState === undefined) {
+      log("session.storage_state_skipped", { session: entry.sessionId });
     }
     await this.destroy(entry);
     return storageState ? { storage_state: storageState } : {};
@@ -471,15 +531,39 @@ export class SessionRegistry implements GatewaySessions {
     request: PlaywrightRequest
   ): Promise<PlaywrightResponse> {
     const entry = this.requireLive(id);
-    const page = await this.currentPage(entry);
-    return this.inflight.run(id, (track) =>
-      runPlaywrightCode(
+    const timeoutSec = request.timeout_sec ?? 30;
+    const started = Date.now();
+    return this.inflight.run(id, async (track) => {
+      // The page probe spends from the same budget the script was given, so
+      // the whole call answers inside it: a hung probe used to run to the
+      // client's deadline with the script's timer never started.
+      const page = await this.currentPage(entry);
+      const probeMs = Date.now() - started;
+      const remainingSec = Math.max(1, timeoutSec - probeMs / 1_000);
+      log("script.started", {
+        probe_ms: probeMs,
+        session: entry.sessionId,
+        timeout_sec: timeoutSec,
+      });
+      const response = await runPlaywrightCode(
         { browser: entry.browser, context: entry.context, page },
         request.code,
-        request.timeout_sec ?? 30,
+        remainingSec,
         track
-      )
-    );
+      );
+      const timedOut =
+        !response.success &&
+        (response.error ?? "").startsWith("Execution timed out");
+      log("script.finished", {
+        ms: Date.now() - started,
+        reason: response.success ? undefined : errorSummary(response.error),
+        session: entry.sessionId,
+        success: response.success,
+        timed_out: timedOut,
+        url: entry.currentUrl,
+      });
+      return response;
+    });
   }
 
   async runActions(

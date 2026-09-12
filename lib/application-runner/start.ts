@@ -3,12 +3,20 @@ import {
   findApplicationRun,
   updateApplicationRun,
 } from "@/db/services/application-executions";
-import { claimApplicationLease } from "@/db/services/application-leases";
+import {
+  claimApplicationLease,
+  releaseApplicationLease,
+} from "@/db/services/application-leases";
 import {
   applicationExecutionLog,
   executionId,
   safeApplyUrl,
 } from "@/lib/application-execution";
+import { browserProvider, isGatewayProvider } from "@/lib/browser";
+import {
+  GatewayRequestError,
+  gatewayHealth,
+} from "@/lib/browser/gateway-provider";
 import { alreadyInProgressStatus } from "@/lib/task-completion";
 import {
   alreadyInProgressMessage,
@@ -144,11 +152,19 @@ export async function startApplication(input: {
     const reason = (error instanceof Error ? error.message : String(error))
       .split("\n")[0]
       ?.slice(0, 200);
+    // A gateway that failed or never answered is asked how it is doing, on
+    // this same line, so the log that gets read carries the vitals of the
+    // process that did not answer.
+    const health =
+      isGatewayProvider(browserProvider) && isGatewayFault(error)
+        ? await gatewayHealth()
+        : {};
     applicationExecutionLog({
       apply_url: applyUrl,
       error: reason ?? "unknown",
       event: "runner.failed",
       execution_id: id,
+      ...health,
     });
     const run = await findApplicationRun({ applyUrl, scope: input.scope });
     if (run?.browserSessionId) {
@@ -163,6 +179,10 @@ export async function startApplication(input: {
       pauseReason: null,
       status: "failed",
     });
+    // The lease outlives nothing: held past a failure, it refused the retry
+    // this result asks for as already_in_progress until the watchdog reached
+    // it nineteen minutes later.
+    await releaseApplicationLease({ executionId: id }).catch(() => undefined);
     return {
       applyUrl,
       executionId: id,
@@ -202,4 +222,17 @@ export async function startApplication(input: {
     pause: "user_input",
     status: "waiting",
   };
+}
+
+/**
+ * A failure the gateway itself produced or failed to answer: its own error
+ * class (any status, including the 504 the app stamps on its own deadline)
+ * or undici's bare "fetch failed" for a socket that went away mid-request.
+ */
+function isGatewayFault(error: unknown) {
+  if (error instanceof GatewayRequestError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|UND_ERR/iu.test(
+    message
+  );
 }

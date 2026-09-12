@@ -25,6 +25,11 @@ COPY services/browser-gateway/src services/browser-gateway/src
 
 ENV NODE_ENV=production
 ENV PORT=8080
+# V8 sizes its heap from the memory it can see, which in a container is the
+# host's, not the service limit; a heap that grows past the limit is an OOM
+# kill with no line in the log. Provisional at 384MB until the Railway service
+# memory limit is confirmed (set to roughly 75% of that limit).
+ENV NODE_OPTIONS="--max-old-space-size=384"
 EXPOSE 8080
 
 # Run the TypeScript directly, matching the repo's node --experimental-strip-types convention.

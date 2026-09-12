@@ -25,7 +25,10 @@ them. The CDP endpoint is built as
 
 ## Routes
 
-- `GET /health` — unauthenticated; `{ok, sessions, draining}`.
+- `GET /health` — unauthenticated;
+  `{ok, sessions, draining, event_loop: {max_ms, mean_ms, p99_ms}, memory: {heap_used_mb, heap_total_mb, rss_mb}}`.
+  The event-loop window resets on each read, so one poller sees the lag
+  since its previous poll.
 - `POST /sessions` — create; `GET /sessions`, `GET /sessions/:id`,
   `DELETE /sessions/:id` (idempotent, returns the exported storage state).
 - `GET /sessions/:id/storage-state`
@@ -80,8 +83,8 @@ Steps, all in the browser:
    random string). Railway supplies `PORT` itself.
 3. It deploys on save. Open **Settings → Networking → Generate Domain** to get
    the public URL, e.g. `https://foray-browser-gateway.up.railway.app`.
-4. Verify: `https://<that-domain>/health` should return
-   `{"ok":true,"sessions":0,"draining":false}`.
+4. Verify: `https://<that-domain>/health` should return `"ok":true` with
+   `"sessions":0` and the event-loop and memory readings.
 5. On Vercel, set `BROWSER_GATEWAY_URL` to that domain and
    `BROWSER_GATEWAY_SECRET` to the same value as `GATEWAY_AUTH_SECRET`.
 
@@ -107,6 +110,29 @@ fly scale count 1 --config services/browser-gateway/fly.toml   # exactly one mac
 
 Keep it at a single always-on machine (`min_machines_running = 1`,
 `auto_stop_machines = false`) for the same single-registry reason.
+
+### Reading the Railway logs
+
+Every line is one JSON object with an `event` field. The ones that settle a
+"the run died after `browser.created`" report:
+
+- `gateway.listening` more than once without a deploy: the process
+  restarted. Look just above it for `gateway.unhandled_rejection` or
+  `gateway.uncaught_exception` (both carry the stack) or for the container
+  being OOM-killed (no line of ours at all; Railway shows exit code 137).
+- `request`: one per call with `ms`, `status`, `sessions`, and the process
+  vitals at the moment it answered. A slow request with `loop_max_ms` in the
+  thousands is a stalled process; the same request with a flat loop is a slow
+  browser.
+- `session.created` (`connect_ms`, `ms`, `has_start_url`),
+  `session.navigated` / `session.navigation_failed` (the first page load,
+  with its duration), `session.dead` (`reason`, `url`),
+  `session.destroyed`, `keepalive.failed`.
+- `script.started` / `script.finished` around every Playwright script:
+  `probe_ms` is the page-visibility probe in front of it, `timed_out` says
+  the gateway's own timer answered, `url` is where the page was.
+- `request.error` for every non-2xx the gateway itself produced. A 502 the
+  app saw that has no `request.error` here came from the edge, not from us.
 
 ### Drain-on-deploy discipline
 

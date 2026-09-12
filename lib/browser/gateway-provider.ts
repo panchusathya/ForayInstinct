@@ -142,6 +142,69 @@ async function gatewayRequest<T>(
   return parsed.data;
 }
 
+const gatewayHealthSchema = z.object({
+  draining: z.boolean().optional(),
+  event_loop: z
+    .object({ max_ms: z.number(), mean_ms: z.number(), p99_ms: z.number() })
+    .optional(),
+  memory: z
+    .object({
+      heap_total_mb: z.number(),
+      heap_used_mb: z.number(),
+      rss_mb: z.number(),
+    })
+    .optional(),
+  ok: z.boolean(),
+  sessions: z.number(),
+});
+
+/**
+ * The gateway's own vitals, read the moment a call to it failed, so the
+ * failure line in the app's log carries them. Vercel's log is the one that
+ * gets read; the gateway's stall or crash used to be visible only from the
+ * other side of the socket, as a bare 502 or a request that never returned.
+ * Never throws: on a gateway that does not answer, that is the finding.
+ */
+export async function gatewayHealth(
+  timeoutMs = 5_000
+): Promise<Record<string, unknown>> {
+  let url: string;
+  try {
+    url = gatewayConfig().url;
+  } catch {
+    return { health: "unconfigured" };
+  }
+  const started = Date.now();
+  try {
+    const response = await fetch(`${url}/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const parsed = gatewayHealthSchema.safeParse(
+      await response.json().catch(() => undefined)
+    );
+    if (!parsed.success) {
+      return { health: "unreadable", health_ms: Date.now() - started, health_status: response.status };
+    }
+    const { event_loop, memory, ok, sessions } = parsed.data;
+    return {
+      health: ok ? "ok" : "not_ok",
+      health_heap_used_mb: memory?.heap_used_mb,
+      health_loop_max_ms: event_loop?.max_ms,
+      health_loop_p99_ms: event_loop?.p99_ms,
+      health_ms: Date.now() - started,
+      health_sessions: sessions,
+    };
+  } catch (error) {
+    return {
+      health: "unreachable",
+      health_error: (error instanceof Error ? error.message : String(error))
+        .split("\n")[0]
+        ?.slice(0, 120),
+      health_ms: Date.now() - started,
+    };
+  }
+}
+
 function descriptor(
   session: z.infer<typeof sessionDescriptorSchema>
 ): BrowserSessionDescriptor {

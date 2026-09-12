@@ -48,7 +48,10 @@ export async function openApplicationBrowser(input: {
       };
   const session = {
     // Boards whose posting URL is a description page open at their form.
-    startUrl: isWorkday ? undefined : applicationEntryUrl(input.applyUrl),
+    // Workday opens at the posting too: session create is the one call that
+    // gives the first navigation the minute Brightdata's unlock can take, and
+    // a browser opened blank left that navigation to an 8s router script.
+    startUrl: applicationEntryUrl(input.applyUrl),
     timeoutSeconds: browserTimeoutFloorSeconds,
   };
   let browser;
@@ -121,7 +124,12 @@ export async function openApplicationBrowser(input: {
     state: "created",
   }).catch(() => undefined);
   if (isWorkday) {
-    await routeWorkday(browser.session_id, input.applyUrl, input.signal);
+    await routeWorkday(
+      browser.session_id,
+      input.applyUrl,
+      input.executionId,
+      input.signal
+    );
   }
   return browser;
 }
@@ -178,19 +186,48 @@ export async function closeApplicationBrowser(input: {
 async function routeWorkday(
   sessionId: string,
   applyUrl: string,
+  executionId: string,
   signal?: AbortSignal
 ) {
   let best: ReturnType<typeof normalizeWorkdayRouteResult> | undefined;
   for (const strategy of workdayRouteStrategies) {
-    const response = await browserProvider.executePlaywright(
-      sessionId,
-      {
-        code: workdayRouterCode(applyUrl, strategy),
-        timeoutSec: workdayRouteTimeoutSec,
-      },
-      signal
-    );
+    const started = Date.now();
+    let response;
+    try {
+      response = await browserProvider.executePlaywright(
+        sessionId,
+        {
+          code: workdayRouterCode(applyUrl, strategy),
+          timeoutSec: workdayRouteTimeoutSec,
+        },
+        signal
+      );
+    } catch (error) {
+      // Named before it is rethrown: a run that died here used to show only
+      // `browser.created` then `runner.failed`, with no word on which of the
+      // three strategies the gateway never answered.
+      applicationExecutionLog({
+        error: (error instanceof Error ? error.message : "unknown").slice(
+          0,
+          300
+        ),
+        event: "runner.route_workday_failed",
+        execution_id: executionId,
+        ms: Date.now() - started,
+        strategy,
+      });
+      throw error;
+    }
     const candidate = normalizeWorkdayRouteResult(response);
+    applicationExecutionLog({
+      event: "runner.route_workday",
+      execution_id: executionId,
+      ms: Date.now() - started,
+      state: candidate.state,
+      strategy,
+      trace: candidate.trace?.join(" > "),
+      url: candidate.url,
+    });
     if (
       best === undefined ||
       workdayRouteRank(candidate.state) >= workdayRouteRank(best.state)

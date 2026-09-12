@@ -56,3 +56,15 @@ export function readMemory() {
     rss_mb: toMb(memory.rss),
   };
 }
+
+/**
+ * The same reading without the reset, for a per-request log line. The
+ * request log samples often; letting it reset the histogram would leave
+ * `/health` describing only the gap since the last request.
+ */
+export function peekEventLoopDelay() {
+  return {
+    max_ms: toMs(histogram.max),
+    p99_ms: toMs(histogram.percentile(99)),
+  };
+}
