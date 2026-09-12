@@ -54,17 +54,42 @@ function gatewayConfig() {
   return { secret, url: url.replace(/\/+$/u, "") };
 }
 
+/**
+ * How long the app waits past the gateway's own budget before it stops
+ * waiting. `timeout_sec` bounds the script inside the gateway and says
+ * nothing about whether the gateway answers: a stalled event loop there used
+ * to leave `fetch` waiting with no deadline at all, and an application run
+ * would sit on a call that never returned until its lease expired twenty
+ * minutes later. The grace covers the network and the gateway's own overhead
+ * on top of the budget it was given, so a script that uses all of its time
+ * still returns its own structured result rather than being cut off here.
+ */
+const gatewayGraceMs = 20_000;
+
+/**
+ * Assumed budget for routes that carry no script: session create/delete,
+ * screenshots, actions, CDP. Generous because connecting a fresh Brightdata
+ * browser is the slowest of them, and a ceiling that never fires is still
+ * better than the none that was here before.
+ */
+const gatewayDefaultBudgetSec = 60;
+
 async function gatewayRequest<T>(
   path: string,
   options: {
     body?: unknown;
+    /** The server-side budget this call was given, when it carries one. */
+    budgetSec?: number;
     method: "DELETE" | "GET" | "POST";
     schema: z.ZodType<T>;
     signal?: AbortSignal;
   }
 ): Promise<T> {
   const { secret, url } = gatewayConfig();
-  const response = await fetch(`${url}${path}`, {
+  const budgetMs =
+    (options.budgetSec ?? gatewayDefaultBudgetSec) * 1_000 + gatewayGraceMs;
+  const deadline = AbortSignal.timeout(budgetMs);
+  const request = {
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     headers: {
       Authorization: `Bearer ${secret}`,
@@ -73,8 +98,28 @@ async function gatewayRequest<T>(
         : { "Content-Type": "application/json" }),
     },
     method: options.method,
-    signal: options.signal ?? null,
-  });
+    signal: options.signal
+      ? AbortSignal.any([options.signal, deadline])
+      : deadline,
+  };
+  let response: Response;
+  try {
+    response = await fetch(`${url}${path}`, request);
+  } catch (error) {
+    // A caller that cancelled is not a gateway fault, so its own abort
+    // reaches it unchanged. Only our deadline becomes a gateway error, and
+    // it is given the status a timeout deserves so the existing taxonomy
+    // reads it as one rather than as an unknown transport failure.
+    if (options.signal?.aborted === true) throw error;
+    if (deadline.aborted) {
+      throw new GatewayRequestError(
+        504,
+        "gateway_error",
+        `Browser gateway did not answer ${options.method} ${path} within ${String(Math.round(budgetMs / 1_000))}s.`
+      );
+    }
+    throw error;
+  }
   const payload: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
     const parsed = gatewayErrorSchema.safeParse(payload);
@@ -152,10 +197,15 @@ export const gatewayBrowserProvider: GatewayCapableProvider = {
   },
 
   async executePlaywright(sessionId, request, signal) {
+    // The gateway's budget and the app's deadline come from one number, so a
+    // script granted more time is waited for longer instead of being cut off
+    // by a ceiling that did not move with it.
+    const timeoutSec = request.timeoutSec ?? 30;
     return gatewayRequest(
       `/sessions/${encodeURIComponent(sessionId)}/playwright`,
       {
-        body: { code: request.code, timeout_sec: request.timeoutSec ?? 30 },
+        body: { code: request.code, timeout_sec: timeoutSec },
+        budgetSec: timeoutSec,
         method: "POST",
         schema: playwrightResponseSchema,
         signal,
