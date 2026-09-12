@@ -10,6 +10,7 @@ import {
   stageFileRequestSchema,
 } from "../../../lib/browser/contract.ts";
 import { GatewayHttpError, gatewayError } from "./errors.ts";
+import { readEventLoopDelay, readMemory } from "./metrics.ts";
 import type { GatewaySessions } from "./registry.ts";
 
 export interface AppDeps {
@@ -85,8 +86,16 @@ export function createApp({ authSecret, sessions }: AppDeps): Hono {
     return next();
   });
 
+  // Unauthenticated, like the rest of this route: the numbers say how busy
+  // this process is, never what it is doing or for whom.
   app.get("/health", (c) =>
-    c.json({ draining: state.draining, ok: true, sessions: sessions.size })
+    c.json({
+      draining: state.draining,
+      event_loop: readEventLoopDelay(),
+      memory: readMemory(),
+      ok: true,
+      sessions: sessions.size,
+    })
   );
 
   app.post("/sessions", async (c) => {

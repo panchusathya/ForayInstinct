@@ -43,6 +43,18 @@ describe("auth middleware", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       draining: false,
+      // Live readings: asserted as numbers, since pinning them would only pin
+      // the machine the suite happens to run on.
+      event_loop: {
+        max_ms: expect.any(Number),
+        mean_ms: expect.any(Number),
+        p99_ms: expect.any(Number),
+      },
+      memory: {
+        heap_total_mb: expect.any(Number),
+        heap_used_mb: expect.any(Number),
+        rss_mb: expect.any(Number),
+      },
       ok: true,
       sessions: 0,
     });
